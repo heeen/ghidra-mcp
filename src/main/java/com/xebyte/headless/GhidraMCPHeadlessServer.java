@@ -19,6 +19,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.ThreadingStrategy;
+import com.xebyte.core.services.CommentService;
+import com.xebyte.core.services.FunctionService;
+import com.xebyte.core.services.ListingService;
+import com.xebyte.core.services.AnalysisService;
+import com.xebyte.core.services.ComparisonService;
+import com.xebyte.core.services.DataTypeService;
+import com.xebyte.core.services.MutationService;
+import com.xebyte.core.services.SymbolService;
 import ghidra.GhidraApplicationLayout;
 import ghidra.GhidraLaunchable;
 import ghidra.framework.Application;
@@ -60,6 +68,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
     // Endpoint handler registry
     private HeadlessEndpointHandler endpointHandler;
+    private ListingService listingService;
+    private CommentService commentService;
+    private SymbolService symbolService;
+    private FunctionService functionService;
+    private MutationService mutationService;
+    private DataTypeService dataTypeService;
+    private AnalysisService analysisService;
+    private ComparisonService comparisonService;
 
     public static void main(String[] args) {
         GhidraMCPHeadlessServer server = new GhidraMCPHeadlessServer();
@@ -84,8 +100,16 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         programProvider = new HeadlessProgramProvider();
         threadingStrategy = new DirectThreadingStrategy();
 
-        // Create endpoint handler
+        // Create endpoint handler and shared services
         endpointHandler = new HeadlessEndpointHandler(programProvider, threadingStrategy);
+        listingService = new ListingService(programProvider, threadingStrategy);
+        commentService = new CommentService(programProvider, threadingStrategy);
+        symbolService = new SymbolService(programProvider, threadingStrategy);
+        functionService = new FunctionService(programProvider, threadingStrategy);
+        mutationService = new MutationService(programProvider, threadingStrategy);
+        dataTypeService = new DataTypeService(programProvider, threadingStrategy);
+        analysisService = new AnalysisService(programProvider, threadingStrategy);
+        comparisonService = new ComparisonService(programProvider, threadingStrategy);
 
         // Load initial programs if specified
         loadInitialPrograms(args);
@@ -266,13 +290,13 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listMethods(offset, limit, programName));
+            sendResponse(exchange, listingService.listMethods(offset, limit, programName));
         });
 
         server.createContext("/list_functions", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listFunctions(programName));
+            sendResponse(exchange, listingService.listFunctions(programName));
         });
 
         server.createContext("/list_classes", exchange -> {
@@ -280,7 +304,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listClasses(offset, limit, programName));
+            sendResponse(exchange, listingService.listClasses(offset, limit, programName));
         });
 
         server.createContext("/list_segments", exchange -> {
@@ -288,7 +312,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listSegments(offset, limit, programName));
+            sendResponse(exchange, listingService.listSegments(offset, limit, programName));
         });
 
         server.createContext("/list_imports", exchange -> {
@@ -296,7 +320,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listImports(offset, limit, programName));
+            sendResponse(exchange, listingService.listImports(offset, limit, programName));
         });
 
         server.createContext("/list_exports", exchange -> {
@@ -304,7 +328,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listExports(offset, limit, programName));
+            sendResponse(exchange, listingService.listExports(offset, limit, programName));
         });
 
         server.createContext("/list_namespaces", exchange -> {
@@ -312,7 +336,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listNamespaces(offset, limit, programName));
+            sendResponse(exchange, listingService.listNamespaces(offset, limit, programName));
         });
 
         server.createContext("/list_data_items", exchange -> {
@@ -320,7 +344,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listDataItems(offset, limit, programName));
+            sendResponse(exchange, listingService.listDataItems(offset, limit, programName));
         });
 
         server.createContext("/list_strings", exchange -> {
@@ -329,7 +353,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String filter = params.get("filter");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listStrings(offset, limit, filter, programName));
+            sendResponse(exchange, listingService.listStrings(offset, limit, filter, programName));
         });
 
         server.createContext("/list_data_types", exchange -> {
@@ -338,7 +362,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String category = params.get("category");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listDataTypes(offset, limit, category, programName));
+            sendResponse(exchange, listingService.listDataTypes(offset, limit, category, programName));
         });
 
         // ==========================================================================
@@ -349,7 +373,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parseQueryParams(exchange);
             String address = params.get("address");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionByAddress(address, programName));
+            sendResponse(exchange, functionService.getFunctionByAddress(address, programName));
         });
 
         server.createContext("/get_current_address", exchange -> {
@@ -371,14 +395,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String address = params.get("address");
             String name = params.get("name");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.decompileFunction(address, name, programName));
+            sendResponse(exchange, functionService.decompileFunction(address, name, programName));
         });
 
         server.createContext("/disassemble_function", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String address = params.get("address");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.disassembleFunction(address, programName));
+            sendResponse(exchange, functionService.disassembleFunction(address, programName));
         });
 
         // ==========================================================================
@@ -391,7 +415,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getXrefsTo(address, offset, limit, programName));
+            sendResponse(exchange, symbolService.getXrefsTo(address, offset, limit, programName));
         });
 
         server.createContext("/get_xrefs_from", exchange -> {
@@ -400,7 +424,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getXrefsFrom(address, offset, limit, programName));
+            sendResponse(exchange, symbolService.getXrefsFrom(address, offset, limit, programName));
         });
 
         server.createContext("/get_function_xrefs", exchange -> {
@@ -409,7 +433,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionXrefs(name, offset, limit, programName));
+            sendResponse(exchange, symbolService.getFunctionXrefs(name, offset, limit, programName));
         });
 
         // ==========================================================================
@@ -422,7 +446,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.searchFunctions(query, offset, limit, programName));
+            sendResponse(exchange, symbolService.searchFunctions(query, offset, limit, programName));
         });
 
         // ==========================================================================
@@ -435,7 +459,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionCallees(name, offset, limit, programName));
+            sendResponse(exchange, functionService.getFunctionCallees(name, offset, limit, programName));
         });
 
         server.createContext("/get_function_callers", exchange -> {
@@ -444,14 +468,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionCallers(name, offset, limit, programName));
+            sendResponse(exchange, functionService.getFunctionCallers(name, offset, limit, programName));
         });
 
         server.createContext("/get_function_variables", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String functionName = params.get("function_name");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionVariables(functionName, programName));
+            sendResponse(exchange, functionService.getFunctionVariables(functionName, programName));
         });
 
         server.createContext("/set_function_prototype", exchange -> {
@@ -459,7 +483,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String functionAddress = params.get("function_address");
             String prototype = params.get("prototype");
             String callingConvention = params.get("calling_convention");
-            sendResponse(exchange, endpointHandler.setFunctionPrototype(functionAddress, prototype, callingConvention));
+            sendResponse(exchange, mutationService.setFunctionPrototype(functionAddress, prototype, callingConvention));
         });
 
         server.createContext("/set_local_variable_type", exchange -> {
@@ -467,14 +491,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String functionAddress = params.get("function_address");
             String variableName = params.get("variable_name");
             String newType = params.get("new_type");
-            sendResponse(exchange, endpointHandler.setLocalVariableType(functionAddress, variableName, newType));
+            sendResponse(exchange, mutationService.setLocalVariableType(functionAddress, variableName, newType));
         });
 
         server.createContext("/create_struct", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String name = params.get("name");
             String fields = params.get("fields");
-            sendResponse(exchange, endpointHandler.createStruct(name, fields));
+            sendResponse(exchange, dataTypeService.createStruct(name, fields));
         });
 
         server.createContext("/apply_data_type", exchange -> {
@@ -482,21 +506,21 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String address = params.get("address");
             String typeName = params.get("type_name");
             boolean clearExisting = !"false".equalsIgnoreCase(params.get("clear_existing"));
-            sendResponse(exchange, endpointHandler.applyDataType(address, typeName, clearExisting));
+            sendResponse(exchange, dataTypeService.applyDataType(address, typeName, clearExisting));
         });
 
         server.createContext("/batch_rename_variables", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String functionAddress = params.get("function_address");
-            String variableRenames = params.get("variable_renames");
-            sendResponse(exchange, endpointHandler.batchRenameVariables(functionAddress, variableRenames));
+            Map<String, String> renames = parseJsonObject(params.get("variable_renames"));
+            sendResponse(exchange, mutationService.batchRenameVariables(functionAddress, renames));
         });
 
         server.createContext("/set_plate_comment", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String comment = params.get("comment");
-            sendResponse(exchange, endpointHandler.setPlateComment(functionAddress, comment));
+            sendResponse(exchange, commentService.setPlateComment(functionAddress, comment));
         });
 
         // ==========================================================================
@@ -506,16 +530,16 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         server.createContext("/batch_set_comments", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String functionAddress = params.get("function_address");
-            String decompilerComments = params.get("decompiler_comments");
-            String disassemblyComments = params.get("disassembly_comments");
+            List<Map<String, String>> decompilerComments = parseJsonMapList(params.get("decompiler_comments"));
+            List<Map<String, String>> disassemblyComments = parseJsonMapList(params.get("disassembly_comments"));
             String plateComment = params.get("plate_comment");
-            sendResponse(exchange, endpointHandler.batchSetComments(functionAddress, decompilerComments, disassemblyComments, plateComment));
+            sendResponse(exchange, commentService.batchSetComments(functionAddress, decompilerComments, disassemblyComments, plateComment));
         });
 
         server.createContext("/batch_create_labels", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            String labels = params.get("labels");
-            sendResponse(exchange, endpointHandler.batchCreateLabels(labels));
+            List<Map<String, String>> labels = parseJsonMapList(params.get("labels"));
+            sendResponse(exchange, symbolService.batchCreateLabels(labels));
         });
 
         server.createContext("/search_functions_enhanced", exchange -> {
@@ -523,13 +547,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String namePattern = params.get("name_pattern");
             Integer minXrefs = params.get("min_xrefs") != null ? Integer.parseInt(params.get("min_xrefs")) : null;
             Integer maxXrefs = params.get("max_xrefs") != null ? Integer.parseInt(params.get("max_xrefs")) : null;
+            String callingConvention = params.get("calling_convention");
             Boolean hasCustomName = params.get("has_custom_name") != null ? Boolean.parseBoolean(params.get("has_custom_name")) : null;
             boolean regex = "true".equalsIgnoreCase(params.get("regex"));
             String sortBy = params.get("sort_by");
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.searchFunctionsEnhanced(namePattern, minXrefs, maxXrefs, hasCustomName, regex, sortBy, offset, limit, programName));
+            sendResponse(exchange, symbolService.searchFunctionsEnhanced(namePattern, minXrefs, maxXrefs, callingConvention, hasCustomName, regex, sortBy, offset, limit, programName));
         });
 
         server.createContext("/analyze_function_complete", exchange -> {
@@ -541,13 +566,13 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             boolean includeDisasm = !"false".equalsIgnoreCase(params.get("include_disasm"));
             boolean includeVariables = !"false".equalsIgnoreCase(params.get("include_variables"));
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables, programName));
+            sendResponse(exchange, functionService.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables, programName));
         });
 
         server.createContext("/get_bulk_xrefs", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            String addresses = params.get("addresses");
-            sendResponse(exchange, endpointHandler.getBulkXrefs(addresses));
+            List<String> addresses = parseJsonStringArray(params.get("addresses"));
+            sendResponse(exchange, symbolService.getBulkXrefs(addresses, null));
         });
 
         server.createContext("/list_globals", exchange -> {
@@ -556,14 +581,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String filter = params.get("filter");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listGlobals(offset, limit, filter, programName));
+            sendResponse(exchange, symbolService.listGlobals(offset, limit, filter, programName));
         });
 
         server.createContext("/rename_global_variable", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String oldName = params.get("old_name");
             String newName = params.get("new_name");
-            sendResponse(exchange, endpointHandler.renameGlobalVariable(oldName, newName));
+            sendResponse(exchange, symbolService.renameGlobalVariable(oldName, newName));
         });
 
         server.createContext("/force_decompile", exchange -> {
@@ -571,19 +596,19 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String address = params.get("address");
             String name = params.get("name");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.forceDecompile(address, name, programName));
+            sendResponse(exchange, functionService.forceDecompile(address, name, programName));
         });
 
         server.createContext("/get_entry_points", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getEntryPoints(programName));
+            sendResponse(exchange, symbolService.getEntryPoints(programName));
         });
 
         server.createContext("/list_calling_conventions", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.listCallingConventions(programName));
+            sendResponse(exchange, symbolService.listCallingConventions(programName));
         });
 
         server.createContext("/find_next_undefined_function", exchange -> {
@@ -593,7 +618,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String pattern = params.get("pattern");
             String direction = params.get("direction");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.findNextUndefinedFunction(startAddress, criteria, pattern, direction, programName));
+            sendResponse(exchange, functionService.findNextUndefinedFunction(startAddress, criteria, pattern, direction, programName));
         });
 
         // ==========================================================================
@@ -604,24 +629,24 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parsePostParams(exchange);
             String oldName = params.get("oldName");
             String newName = params.get("newName");
-            sendResponse(exchange, endpointHandler.renameFunction(oldName, newName));
+            sendResponse(exchange, mutationService.renameFunction(oldName, newName));
         });
 
         server.createContext("/rename_function_by_address", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("function_address");
             String newName = params.get("new_name");
-            sendResponse(exchange, endpointHandler.renameFunctionByAddress(address, newName));
+            sendResponse(exchange, mutationService.renameFunctionByAddress(address, newName));
         });
 
         server.createContext("/save_program", exchange -> {
-            sendResponse(exchange, endpointHandler.saveCurrentProgram());
+            sendResponse(exchange, mutationService.saveCurrentProgram());
         });
 
         server.createContext("/delete_function", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
-            sendResponse(exchange, endpointHandler.deleteFunctionAtAddress(address));
+            sendResponse(exchange, mutationService.deleteFunctionAtAddress(address));
         });
 
         server.createContext("/create_function", exchange -> {
@@ -629,7 +654,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String address = params.get("address");
             String name = params.get("name");
             boolean disassembleFirst = !"false".equalsIgnoreCase(params.get("disassemble_first"));
-            sendResponse(exchange, endpointHandler.createFunctionAtAddress(address, name, disassembleFirst));
+            sendResponse(exchange, mutationService.createFunctionAtAddress(address, name, disassembleFirst));
         });
 
         server.createContext("/create_memory_block", exchange -> {
@@ -642,7 +667,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             boolean mbExecute = "true".equalsIgnoreCase(params.get("execute"));
             boolean mbVolatile = "true".equalsIgnoreCase(params.get("volatile"));
             String mbComment = params.get("comment");
-            sendResponse(exchange, endpointHandler.createMemoryBlock(
+            sendResponse(exchange, mutationService.createMemoryBlock(
                 mbName, mbAddress, mbSize, mbRead, mbWrite, mbExecute, mbVolatile, mbComment));
         });
 
@@ -650,7 +675,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String newName = params.get("newName");
-            sendResponse(exchange, endpointHandler.renameData(address, newName));
+            sendResponse(exchange, mutationService.renameData(address, newName));
         });
 
         server.createContext("/rename_variable", exchange -> {
@@ -658,7 +683,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String functionName = params.get("functionName");
             String oldName = params.get("oldName");
             String newName = params.get("newName");
-            sendResponse(exchange, endpointHandler.renameVariable(functionName, oldName, newName));
+            sendResponse(exchange, mutationService.renameVariable(functionName, oldName, newName));
         });
 
         // ==========================================================================
@@ -669,14 +694,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
-            sendResponse(exchange, endpointHandler.setDecompilerComment(address, comment));
+            sendResponse(exchange, commentService.setDecompilerComment(address, comment));
         });
 
         server.createContext("/set_disassembly_comment", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
-            sendResponse(exchange, endpointHandler.setDisassemblyComment(address, comment));
+            sendResponse(exchange, commentService.setDisassemblyComment(address, comment));
         });
 
         // ==========================================================================
@@ -750,21 +775,21 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String name = params.get("name");
             String values = params.get("values");
             int size = parseIntOrDefault(params.get("size"), 4);
-            sendResponse(exchange, endpointHandler.createEnum(name, values, size));
+            sendResponse(exchange, dataTypeService.createEnum(name, values, size));
         });
 
         server.createContext("/create_union", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String name = params.get("name");
             String fields = params.get("fields");
-            sendResponse(exchange, endpointHandler.createUnion(name, fields));
+            sendResponse(exchange, dataTypeService.createUnion(name, fields));
         });
 
         server.createContext("/create_typedef", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String name = params.get("name");
             String baseType = params.get("base_type");
-            sendResponse(exchange, endpointHandler.createTypedef(name, baseType));
+            sendResponse(exchange, dataTypeService.createTypedef(name, baseType));
         });
 
         server.createContext("/create_array_type", exchange -> {
@@ -772,14 +797,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String baseType = params.get("base_type");
             int length = parseIntOrDefault(params.get("length"), 1);
             String name = params.get("name");
-            sendResponse(exchange, endpointHandler.createArrayType(baseType, length, name));
+            sendResponse(exchange, dataTypeService.createArrayType(baseType, length, name));
         });
 
         server.createContext("/create_pointer_type", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String baseType = params.get("base_type");
             String name = params.get("name");
-            sendResponse(exchange, endpointHandler.createPointerType(baseType, name));
+            sendResponse(exchange, dataTypeService.createPointerType(baseType, name));
         });
 
         server.createContext("/add_struct_field", exchange -> {
@@ -788,7 +813,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String fieldName = params.get("field_name");
             String fieldType = params.get("field_type");
             int offset = parseIntOrDefault(params.get("offset"), -1);
-            sendResponse(exchange, endpointHandler.addStructField(structName, fieldName, fieldType, offset));
+            sendResponse(exchange, dataTypeService.addStructField(structName, fieldName, fieldType, offset));
         });
 
         server.createContext("/modify_struct_field", exchange -> {
@@ -797,20 +822,20 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String fieldName = params.get("field_name");
             String newType = params.get("new_type");
             String newName = params.get("new_name");
-            sendResponse(exchange, endpointHandler.modifyStructField(structName, fieldName, newType, newName));
+            sendResponse(exchange, dataTypeService.modifyStructField(structName, fieldName, newType, newName));
         });
 
         server.createContext("/remove_struct_field", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String structName = params.get("struct_name");
             String fieldName = params.get("field_name");
-            sendResponse(exchange, endpointHandler.removeStructField(structName, fieldName));
+            sendResponse(exchange, dataTypeService.removeStructField(structName, fieldName));
         });
 
         server.createContext("/delete_data_type", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String typeName = params.get("type_name");
-            sendResponse(exchange, endpointHandler.deleteDataType(typeName));
+            sendResponse(exchange, dataTypeService.deleteDataType(typeName));
         });
 
         server.createContext("/search_data_types", exchange -> {
@@ -818,38 +843,38 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String pattern = params.get("pattern");
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 100);
-            sendResponse(exchange, endpointHandler.searchDataTypes(pattern, offset, limit));
+            sendResponse(exchange, dataTypeService.searchDataTypes(pattern, offset, limit));
         });
 
         server.createContext("/validate_data_type_exists", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String typeName = params.get("type_name");
-            sendResponse(exchange, endpointHandler.validateDataTypeExists(typeName));
+            sendResponse(exchange, dataTypeService.validateDataTypeExists(typeName));
         });
 
         server.createContext("/get_data_type_size", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String typeName = params.get("type_name");
-            sendResponse(exchange, endpointHandler.getDataTypeSize(typeName));
+            sendResponse(exchange, dataTypeService.getDataTypeSize(typeName));
         });
 
         server.createContext("/get_struct_layout", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String structName = params.get("struct_name");
-            sendResponse(exchange, endpointHandler.getStructLayout(structName));
+            sendResponse(exchange, dataTypeService.getStructLayout(structName));
         });
 
         server.createContext("/get_enum_values", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String enumName = params.get("enum_name");
-            sendResponse(exchange, endpointHandler.getEnumValues(enumName));
+            sendResponse(exchange, dataTypeService.getEnumValues(enumName));
         });
 
         server.createContext("/clone_data_type", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String sourceType = params.get("source_type");
             String newName = params.get("new_name");
-            sendResponse(exchange, endpointHandler.cloneDataType(sourceType, newName));
+            sendResponse(exchange, dataTypeService.cloneDataType(sourceType, newName));
         });
 
         // ==========================================================================
@@ -873,7 +898,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parseQueryParams(exchange);
             String pattern = params.get("pattern");
             String mask = params.get("mask");
-            sendResponse(exchange, endpointHandler.searchBytePatterns(pattern, mask));
+            sendResponse(exchange, analysisService.searchBytePatterns(pattern, mask));
         });
 
         server.createContext("/analyze_data_region", exchange -> {
@@ -883,14 +908,14 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             boolean includeXrefMap = parseBooleanOrDefault(params.get("include_xref_map"), true);
             boolean includeAssemblyPatterns = parseBooleanOrDefault(params.get("include_assembly_patterns"), true);
             boolean includeBoundaryDetection = parseBooleanOrDefault(params.get("include_boundary_detection"), true);
-            sendResponse(exchange, endpointHandler.analyzeDataRegion(address, maxScanBytes, includeXrefMap, includeAssemblyPatterns, includeBoundaryDetection));
+            sendResponse(exchange, analysisService.analyzeDataRegion(address, maxScanBytes, includeXrefMap, includeAssemblyPatterns, includeBoundaryDetection));
         });
 
         server.createContext("/get_function_hash", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String address = params.get("address");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionHash(address, programName));
+            sendResponse(exchange, comparisonService.getFunctionHash(address, programName));
         });
 
         server.createContext("/get_bulk_function_hashes", exchange -> {
@@ -899,7 +924,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int limit = parseIntOrDefault(params.get("limit"), 100);
             String filter = params.get("filter");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getBulkFunctionHashes(offset, limit, filter, programName));
+            sendResponse(exchange, comparisonService.getBulkFunctionHashes(offset, limit, filter, programName));
         });
 
         server.createContext("/detect_array_bounds", exchange -> {
@@ -908,7 +933,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             boolean analyzeLoopBounds = parseBooleanOrDefault(params.get("analyze_loop_bounds"), true);
             boolean analyzeIndexing = parseBooleanOrDefault(params.get("analyze_indexing"), true);
             int maxScanRange = parseIntOrDefault(params.get("max_scan_range"), 2048);
-            sendResponse(exchange, endpointHandler.detectArrayBounds(address, analyzeLoopBounds, analyzeIndexing, maxScanRange));
+            sendResponse(exchange, analysisService.detectArrayBounds(address, analyzeLoopBounds, analyzeIndexing, maxScanRange));
         });
 
         server.createContext("/get_assembly_context", exchange -> {
@@ -917,7 +942,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int contextInstructions = parseIntOrDefault(params.get("context_instructions"), 5);
             String includePatterns = params.get("include_patterns");
             if (includePatterns == null) includePatterns = "LEA,MOV,CMP,IMUL,ADD,SUB";
-            sendResponse(exchange, endpointHandler.getAssemblyContext(xrefSources, contextInstructions, includePatterns));
+            sendResponse(exchange, analysisService.getAssemblyContext(xrefSources, contextInstructions, includePatterns));
         });
 
         server.createContext("/analyze_struct_field_usage", exchange -> {
@@ -925,7 +950,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String address = params.get("address");
             String structName = params.get("struct_name");
             int maxFunctions = parseIntOrDefault(params.get("max_functions"), 10);
-            sendResponse(exchange, endpointHandler.analyzeStructFieldUsage(address, structName, maxFunctions));
+            sendResponse(exchange, analysisService.analyzeStructFieldUsage(address, structName, maxFunctions));
         });
 
         server.createContext("/get_field_access_context", exchange -> {
@@ -933,20 +958,20 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String structAddress = params.get("struct_address");
             int fieldOffset = parseIntOrDefault(params.get("field_offset"), 0);
             int numExamples = parseIntOrDefault(params.get("num_examples"), 5);
-            sendResponse(exchange, endpointHandler.getFieldAccessContext(structAddress, fieldOffset, numExamples));
+            sendResponse(exchange, analysisService.getFieldAccessContext(structAddress, fieldOffset, numExamples));
         });
 
         server.createContext("/rename_or_label", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String name = params.get("name");
-            sendResponse(exchange, endpointHandler.renameOrLabel(address, name));
+            sendResponse(exchange, mutationService.renameOrLabel(address, name));
         });
 
         server.createContext("/can_rename_at_address", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String address = params.get("address");
-            sendResponse(exchange, endpointHandler.canRenameAtAddress(address));
+            sendResponse(exchange, mutationService.canRenameAtAddress(address));
         });
 
         // FUZZY MATCHING & DIFF
@@ -954,7 +979,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             Map<String, String> params = parseQueryParams(exchange);
             String address = params.get("address");
             String programName = params.get("program");
-            sendResponse(exchange, endpointHandler.getFunctionSignature(address, programName));
+            sendResponse(exchange, comparisonService.getFunctionSignature(address, programName));
         });
 
         server.createContext("/find_similar_functions_fuzzy", exchange -> {
@@ -964,7 +989,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String targetProgramName = params.get("target_program");
             double threshold = parseDoubleOrDefault(params.get("threshold"), 0.7);
             int limit = parseIntOrDefault(params.get("limit"), 20);
-            sendResponse(exchange, endpointHandler.findSimilarFunctionsFuzzy(
+            sendResponse(exchange, comparisonService.findSimilarFunctionsFuzzy(
                 address, sourceProgramName, targetProgramName, threshold, limit));
         });
 
@@ -976,7 +1001,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             int offset = parseIntOrDefault(params.get("offset"), 0);
             int limit = parseIntOrDefault(params.get("limit"), 50);
             String filter = params.get("filter");
-            sendResponse(exchange, endpointHandler.bulkFuzzyMatch(
+            sendResponse(exchange, comparisonService.bulkFuzzyMatch(
                 sourceProgramName, targetProgramName, threshold, offset, limit, filter));
         });
 
@@ -986,7 +1011,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             String addressB = params.get("address_b");
             String programA = params.get("program_a");
             String programB = params.get("program_b");
-            sendResponse(exchange, endpointHandler.diffFunctions(addressA, addressB, programA, programB));
+            sendResponse(exchange, comparisonService.diffFunctions(addressA, addressB, programA, programB));
         });
 
         System.out.println("Registered " + countEndpoints() + " REST API endpoints");
@@ -1137,6 +1162,70 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Parse a JSON array of objects into a list of string maps.
+     * Handles format: [{"key": "value", ...}, ...]
+     */
+    private List<Map<String, String>> parseJsonMapList(String json) {
+        List<Map<String, String>> result = new ArrayList<>();
+        if (json == null || json.isEmpty()) return result;
+        json = json.trim();
+        if (!json.startsWith("[")) return result;
+        json = json.substring(1, json.length() - 1).trim();
+        if (json.isEmpty()) return result;
+
+        String[] entries = json.split("\\}\\s*,\\s*\\{");
+        for (String entry : entries) {
+            entry = entry.replace("{", "").replace("}", "").trim();
+            Map<String, String> map = new HashMap<>();
+            for (String pair : entry.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")) {
+                String[] kv = pair.split(":", 2);
+                if (kv.length == 2) {
+                    String key = kv[0].trim().replace("\"", "");
+                    String value = kv[1].trim().replace("\"", "");
+                    map.put(key, value);
+                }
+            }
+            if (!map.isEmpty()) result.add(map);
+        }
+        return result;
+    }
+
+    /**
+     * Parse a JSON array of strings into a list.
+     * Handles format: ["value1", "value2", ...]
+     */
+    private List<String> parseJsonStringArray(String json) {
+        List<String> result = new ArrayList<>();
+        if (json == null || json.isEmpty()) return result;
+        json = json.trim();
+        if (!json.startsWith("[")) return result;
+        json = json.substring(1, json.length() - 1).trim();
+        if (json.isEmpty()) return result;
+        for (String item : json.split(",")) {
+            item = item.trim().replace("\"", "");
+            if (!item.isEmpty()) result.add(item);
+        }
+        return result;
+    }
+
+    private Map<String, String> parseJsonObject(String json) {
+        Map<String, String> result = new HashMap<>();
+        if (json == null || json.isEmpty()) return result;
+        json = json.trim();
+        if (!json.startsWith("{") || !json.endsWith("}")) return result;
+        json = json.substring(1, json.length() - 1).trim();
+        for (String pair : json.split(",")) {
+            String[] kv = pair.split(":", 2);
+            if (kv.length == 2) {
+                String key = kv[0].trim().replaceAll("^\"|\"$", "");
+                String value = kv[1].trim().replaceAll("^\"|\"$", "");
+                result.put(key, value);
+            }
+        }
+        return result;
     }
 
     // ==========================================================================
