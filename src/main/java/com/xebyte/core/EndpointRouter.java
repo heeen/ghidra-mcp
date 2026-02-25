@@ -110,14 +110,14 @@ public class EndpointRouter {
     // Functional interfaces for endpoint registration helpers
     // ==================================================================================
 
-    @FunctionalInterface interface PageFn   { String apply(int offset, int limit, String prog) throws Exception; }
-    @FunctionalInterface interface PageFn1  { String apply(String p, int offset, int limit, String prog) throws Exception; }
-    @FunctionalInterface interface PageFn1R { String apply(int offset, int limit, String p, String prog) throws Exception; }
-    @FunctionalInterface interface ProgFn   { String apply(String prog) throws Exception; }
-    @FunctionalInterface interface Fn0      { String apply() throws Exception; }
-    @FunctionalInterface interface Fn1      { String apply(String p1) throws Exception; }
-    @FunctionalInterface interface Fn2      { String apply(String p1, String p2) throws Exception; }
-    @FunctionalInterface interface Fn3      { String apply(String p1, String p2, String p3) throws Exception; }
+    @FunctionalInterface interface PageFn   { Object apply(int offset, int limit, String prog) throws Exception; }
+    @FunctionalInterface interface PageFn1  { Object apply(String p, int offset, int limit, String prog) throws Exception; }
+    @FunctionalInterface interface PageFn1R { Object apply(int offset, int limit, String p, String prog) throws Exception; }
+    @FunctionalInterface interface ProgFn   { Object apply(String prog) throws Exception; }
+    @FunctionalInterface interface Fn0      { Object apply() throws Exception; }
+    @FunctionalInterface interface Fn1      { Object apply(String p1) throws Exception; }
+    @FunctionalInterface interface Fn2      { Object apply(String p1, String p2) throws Exception; }
+    @FunctionalInterface interface Fn3      { Object apply(String p1, String p2, String p3) throws Exception; }
 
     // Wraps a checked-exception lambda into an IOException-only Handler for safeHandler.
     private UdsHttpServer.Handler checked(CheckedHandler h) {
@@ -210,9 +210,9 @@ public class EndpointRouter {
     }
 
     // Functional interfaces for additional patterns
-    @FunctionalInterface interface PageFn0  { String apply(int offset, int limit) throws Exception; }
-    @FunctionalInterface interface PageFn1NP { String apply(String p, int offset, int limit) throws Exception; }
-    @FunctionalInterface interface Fn4      { String apply(String p1, String p2, String p3, String p4) throws Exception; }
+    @FunctionalInterface interface PageFn0  { Object apply(int offset, int limit) throws Exception; }
+    @FunctionalInterface interface PageFn1NP { Object apply(String p, int offset, int limit) throws Exception; }
+    @FunctionalInterface interface Fn4      { Object apply(String p1, String p2, String p3, String p4) throws Exception; }
 
     // GET: paginated (offset, limit) — no program param
     private void getPageNP(UdsHttpServer s, String path, PageFn0 fn) {
@@ -245,25 +245,74 @@ public class EndpointRouter {
 
     /** POST JSON body → handler receives Map&lt;String,Object&gt; → response. Single place for param parsing. */
     @FunctionalInterface
-    private interface JsonHandler { String apply(Map<String, Object> params) throws Exception; }
+    private interface JsonHandler { Object apply(Map<String, Object> params) throws Exception; }
     private void jsonPost(UdsHttpServer s, String path, JsonHandler fn) {
         s.createContext(path, safeHandler(checked(ex -> sendResponse(ex, fn.apply(parseJsonParams(ex))))));
     }
 
     /** GET query params → handler receives Map&lt;String,String&gt; → response. */
     @FunctionalInterface
-    private interface QueryHandler { String apply(Map<String, String> params) throws Exception; }
+    private interface QueryHandler { Object apply(Map<String, String> params) throws Exception; }
     private void getWithQuery(UdsHttpServer s, String path, QueryHandler fn) {
         s.createContext(path, safeHandler(checked(ex -> sendResponse(ex, fn.apply(parseQueryParams(ex))))));
     }
 
-    /** Table-driven registration: add (path, handler) to the list to register new GET-query endpoints. */
-    private void registerQueryEndpointTable(UdsHttpServer server, List<QueryEndpointSpec> table) {
-        for (QueryEndpointSpec e : table) {
-            getWithQuery(server, e.path, e.handler);
+    // ==================================================================================
+    // Declarative endpoint table — sealed interface with one record per helper pattern
+    // ==================================================================================
+
+    sealed interface Ep {
+        String path();
+
+        // GET patterns
+        record Get0(String path, Fn0 fn) implements Ep {}
+        record Get1(String path, String p1, Fn1 fn) implements Ep {}
+        record Get2(String path, String p1, String p2, Fn2 fn) implements Ep {}
+        record Get3(String path, String p1, String p2, String p3, Fn3 fn) implements Ep {}
+        record Get4(String path, String p1, String p2, String p3, String p4, Fn4 fn) implements Ep {}
+        record GetProg(String path, ProgFn fn) implements Ep {}
+        record GetPage(String path, PageFn fn) implements Ep {}
+        record GetPage1(String path, String pName, PageFn1 fn) implements Ep {}
+        record GetPage1R(String path, String pName, PageFn1R fn) implements Ep {}
+        record GetPageNP(String path, PageFn0 fn) implements Ep {}
+        record GetPage1NP(String path, String pName, PageFn1NP fn) implements Ep {}
+        record GetQuery(String path, QueryHandler fn) implements Ep {}
+
+        // POST patterns
+        record Post1(String path, String p1, Fn1 fn) implements Ep {}
+        record Post2(String path, String p1, String p2, Fn2 fn) implements Ep {}
+        record Post3(String path, String p1, String p2, String p3, Fn3 fn) implements Ep {}
+        record Json1(String path, String p1, Fn1 fn) implements Ep {}
+        record Json2(String path, String p1, String p2, Fn2 fn) implements Ep {}
+        record Json3(String path, String p1, String p2, String p3, Fn3 fn) implements Ep {}
+        record Json4(String path, String p1, String p2, String p3, String p4, Fn4 fn) implements Ep {}
+        record JsonPost(String path, JsonHandler fn) implements Ep {}
+    }
+
+    private void register(UdsHttpServer s, Ep ep) {
+        switch (ep) {
+            case Ep.Get0(var path, var fn)                                     -> get0(s, path, fn);
+            case Ep.Get1(var path, var p1, var fn)                             -> get1(s, path, p1, fn);
+            case Ep.Get2(var path, var p1, var p2, var fn)                     -> get2(s, path, p1, p2, fn);
+            case Ep.Get3(var path, var p1, var p2, var p3, var fn)             -> get3(s, path, p1, p2, p3, fn);
+            case Ep.Get4(var path, var p1, var p2, var p3, var p4, var fn)     -> get4(s, path, p1, p2, p3, p4, fn);
+            case Ep.GetProg(var path, var fn)                                  -> getProg(s, path, fn);
+            case Ep.GetPage(var path, var fn)                                  -> getPage(s, path, fn);
+            case Ep.GetPage1(var path, var pn, var fn)                         -> getPage1(s, path, pn, fn);
+            case Ep.GetPage1R(var path, var pn, var fn)                        -> getPage1r(s, path, pn, fn);
+            case Ep.GetPageNP(var path, var fn)                                -> getPageNP(s, path, fn);
+            case Ep.GetPage1NP(var path, var pn, var fn)                       -> getPage1NP(s, path, pn, fn);
+            case Ep.GetQuery(var path, var fn)                                 -> getWithQuery(s, path, fn);
+            case Ep.Post1(var path, var p1, var fn)                            -> post1(s, path, p1, fn);
+            case Ep.Post2(var path, var p1, var p2, var fn)                    -> post2(s, path, p1, p2, fn);
+            case Ep.Post3(var path, var p1, var p2, var p3, var fn)            -> post3(s, path, p1, p2, p3, fn);
+            case Ep.Json1(var path, var p1, var fn)                            -> json1(s, path, p1, fn);
+            case Ep.Json2(var path, var p1, var p2, var fn)                    -> json2(s, path, p1, p2, fn);
+            case Ep.Json3(var path, var p1, var p2, var p3, var fn)            -> json3(s, path, p1, p2, p3, fn);
+            case Ep.Json4(var path, var p1, var p2, var p3, var p4, var fn)    -> json4(s, path, p1, p2, p3, p4, fn);
+            case Ep.JsonPost(var path, var fn)                                 -> jsonPost(s, path, fn);
         }
     }
-    private record QueryEndpointSpec(String path, QueryHandler handler) {}
 
     // ParamReader-style helpers for JSON/query maps (optional params with defaults)
     private static int getInt(Map<String, ?> map, String key, int defaultValue) {
@@ -297,60 +346,11 @@ public class EndpointRouter {
     }
 
     public void registerAll(UdsHttpServer server) {
-        getPage(server, "/list_methods",    listingService::listMethods);
-        getPage(server, "/list_classes",    listingService::listClasses);
-        getPage(server, "/list_segments",   listingService::listSegments);
-        getPage(server, "/list_imports",    listingService::listImports);
-        getPage(server, "/list_exports",    listingService::listExports);
-        getPage(server, "/list_namespaces", listingService::listNamespaces);
-        getPage(server, "/list_data_items", listingService::listDataItems);
+        for (Ep ep : endpointTable()) {
+            register(server, ep);
+        }
 
-        getPage1r(server, "/list_data_items_by_xrefs", "format", listingService::listDataItemsByXrefs);
-
-        getProg(server, "/list_functions", listingService::listFunctions);
-
-        // Table-driven GET-query endpoints (add new entries to the list to register)
-        registerQueryEndpointTable(server, List.of(
-            new QueryEndpointSpec("/list_functions_enhanced", q ->
-                listFunctionsEnhanced(getInt(q, "offset", 0), getInt(q, "limit", 10000), getStr(q, "program"))),
-            new QueryEndpointSpec("/get_function_call_graph", q ->
-                getFunctionCallGraph(getStr(q, "name"), getInt(q, "depth", 2), getStr(q, "direction") != null ? getStr(q, "direction") : "both", getStr(q, "program"))),
-            new QueryEndpointSpec("/get_full_call_graph", q ->
-                getFullCallGraph(getStr(q, "format") != null ? getStr(q, "format") : "edges", getInt(q, "limit", 1000), getStr(q, "program"))),
-            new QueryEndpointSpec("/analyze_call_graph", q ->
-                analyzeCallGraph(getStr(q, "start_function"), getStr(q, "end_function"), getStr(q, "analysis_type") != null ? getStr(q, "analysis_type") : "summary", getStr(q, "program")))
-        ));
-
-        // Rename endpoints
-        post2(server, "/rename_function", "oldName", "newName", mutationService::renameFunction);
-        post2(server, "/rename_data",     "address", "newName", mutationService::renameData);
-        post3(server, "/rename_variable", "functionName", "oldName", "newName", mutationService::renameVariable);
-
-        // Search / getter endpoints
-        getPage1(server, "/search_functions", "query", symbolService::searchFunctions);
-        get2(server, "/get_function_by_address", "address", "program", functionService::getFunctionByAddress);
-        get0(server, "/get_current_address",  this::getCurrentAddress);
-        get0(server, "/get_current_function", this::getCurrentFunction);
-
-        // Decompile / disassemble
-        get3(server, "/decompile_function", "address", "name", "program", functionService::decompileFunction);
-        get2(server, "/disassemble_function", "address", "program", functionService::disassembleFunction);
-
-        post2(server, "/set_decompiler_comment",    "address",          "comment",  commentService::setDecompilerComment);
-        post2(server, "/set_disassembly_comment",   "address",          "comment",  commentService::setDisassemblyComment);
-        post2(server, "/rename_function_by_address", "function_address", "new_name", mutationService::renameFunctionByAddress);
-
-        json3(server, "/set_function_prototype", "function_address", "prototype", "calling_convention", mutationService::setFunctionPrototype);
-
-        get0(server, "/list_calling_conventions", () -> symbolService.listCallingConventions(null));
-
-        post3(server, "/set_local_variable_type", "function_address", "variable_name", "new_type", mutationService::setLocalVariableType);
-
-        post2(server, "/set_function_no_return",        "function_address", "no_return", this::setFunctionNoReturn);
-        post1(server, "/clear_instruction_flow_override", "address",          this::clearInstructionFlowOverride);
-        post3(server, "/set_variable_storage",            "function_address", "variable_name", "storage", this::setVariableStorage);
-        post2(server, "/run_script",                      "script_path",      "args",          this::runGhidraScript);
-
+        // Complex handlers that don't fit any Ep pattern
         server.createContext("/run_script_inline", safeHandler(exchange -> {
             Map<String, Object> params = parseJsonParams(exchange);
             String code = (String) params.get("code");
@@ -361,8 +361,6 @@ public class EndpointRouter {
                 return;
             }
 
-            // Determine class name from code, prefix with _mcp_inline_ to avoid
-            // collisions with user scripts and make cleanup identifiable
             String userClass = "InlineScript_" + System.currentTimeMillis();
             java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("public\\s+class\\s+(\\w+)").matcher(code);
@@ -370,238 +368,25 @@ public class EndpointRouter {
                 userClass = m.group(1);
             }
             String className = "_mcp_inline_" + userClass;
-
-            // Rewrite the class name in the source so it compiles under the prefixed name
             String rewrittenCode = code.replace("class " + userClass, "class " + className);
 
-            // Write to ~/ghidra_scripts/ so Ghidra's OSGi class loader can find the source bundle
             File scriptDir = new File(System.getProperty("user.home"), "ghidra_scripts");
             scriptDir.mkdirs();
             File tempScript = new File(scriptDir, className + ".java");
             try {
                 java.nio.file.Files.writeString(tempScript.toPath(), rewrittenCode);
-                String result = runGhidraScript(tempScript.getAbsolutePath(), scriptArgs);
-                sendResponse(exchange, result);
+                sendResponse(exchange, runGhidraScript(tempScript.getAbsolutePath(), scriptArgs));
             } finally {
-                // Clean up .java source and any .class file left by OSGi compiler
-                if (!tempScript.delete()) {
-                    tempScript.deleteOnExit();
-                }
+                if (!tempScript.delete()) tempScript.deleteOnExit();
                 File classFile = new File(scriptDir, className + ".class");
-                if (classFile.exists() && !classFile.delete()) {
-                    classFile.deleteOnExit();
-                }
+                if (classFile.exists() && !classFile.delete()) classFile.deleteOnExit();
             }
         }));
-
-        get1(server, "/list_scripts", "filter", this::listGhidraScripts);
-
-        post3(server, "/force_decompile", "function_address", "name", "program", functionService::forceDecompile);
-
-        // Xref endpoints
-        getPage1(server, "/get_xrefs_to",       "address", symbolService::getXrefsTo);
-        getPage1(server, "/get_xrefs_from",     "address", symbolService::getXrefsFrom);
-        getPage1(server, "/get_function_xrefs", "name",    symbolService::getFunctionXrefs);
-
-        getPage1NP(server, "/get_function_labels",       "name", this::getFunctionLabels);
-        getPage1NP(server, "/get_function_jump_targets", "name", this::getFunctionJumpTargets);
-
-        post3(server, "/rename_label", "address", "old_name", "new_name", this::renameLabel);
-
-        getPage(server, "/list_external_locations", this::listExternalLocations);
-
-        get3(server, "/get_external_location", "address", "dll_name", "program", this::getExternalLocationDetails);
-
-        post2(server, "/rename_external_location", "address", "new_name", this::renameExternalLocation);
-        post2(server, "/create_label",            "address", "name",     this::createLabel);
-
-        jsonPost(server, "/batch_create_labels", p -> symbolService.batchCreateLabels(convertToMapList(p.get("labels"))));
-
-        post2(server, "/rename_or_label", "address", "name", mutationService::renameOrLabel);
-        post2(server, "/delete_label",   "address", "name", symbolService::deleteLabel);
-
-        jsonPost(server, "/batch_delete_labels", p -> symbolService.batchDeleteLabels(convertToMapList(p.get("labels"))));
-
-        // Call graph endpoints
-        getPage1(server, "/get_function_callees", "name", functionService::getFunctionCallees);
-        getPage1(server, "/get_function_callers", "name", functionService::getFunctionCallers);
-
-        // Data type endpoints
-        getPage1r(server, "/list_data_types", "category", listingService::listDataTypes);
-
-        jsonPost(server, "/create_struct", p ->
-            dataTypeService.createStruct(getStr(p, "name"), coerceToJsonString(p.get("fields"))));
-
-        jsonPost(server, "/create_enum", p ->
-            dataTypeService.createEnum(getStr(p, "name"), coerceToJsonString(p.get("values")), getInt(p, "size", 4)));
-
-        jsonPost(server, "/apply_data_type", p ->
-            dataTypeService.applyDataType(getStr(p, "address"), getStr(p, "type_name"), getBool(p, "clear_existing", true)));
-
-        getPage1r(server, "/list_strings", "filter", listingService::listStrings);
-
-        get0(server, "/check_connection", this::checkConnection);
-        get0(server, "/get_version",     this::getVersion);
-        get0(server, "/get_metadata",    this::getMetadata);
-
-        getWithQuery(server, "/convert_number", q -> convertNumber(getStr(q, "text"), getInt(q, "size", 4)));
-
-        getPage1r(server, "/list_globals", "filter", symbolService::listGlobals);
-
-        post2(server, "/rename_global_variable", "old_name", "new_name", symbolService::renameGlobalVariable);
-
-        get0(server, "/get_entry_points", () -> symbolService.getEntryPoints(null));
-
-        jsonPost(server, "/create_union", p ->
-            dataTypeService.createUnion(getStr(p, "name"), coerceToJsonString(p.get("fields"))));
-
-        get1(server, "/get_type_size", "type_name", this::getTypeSize);
-
-        get1(server, "/get_struct_layout", "struct_name", dataTypeService::getStructLayout);
-
-        getPage1NP(server, "/search_data_types", "pattern", dataTypeService::searchDataTypes);
-
-        get1(server, "/get_enum_values", "enum_name", dataTypeService::getEnumValues);
-
-        json2(server, "/create_typedef",   "name",        "base_type", dataTypeService::createTypedef);
-        json2(server, "/clone_data_type",  "source_type", "new_name",  dataTypeService::cloneDataType);
-
-        json2(server, "/import_data_types", "source", "format", this::importDataTypes);
-
-        json1(server, "/delete_data_type", "type_name", dataTypeService::deleteDataType);
-
-        json4(server, "/modify_struct_field", "struct_name", "field_name", "new_type", "new_name", dataTypeService::modifyStructField);
-
-        jsonPost(server, "/add_struct_field", p ->
-            dataTypeService.addStructField(getStr(p, "struct_name"), getStr(p, "field_name"),
-                getStr(p, "field_type"), getInt(p, "offset", -1)));
-
-        post2(server, "/remove_struct_field", "struct_name", "field_name", dataTypeService::removeStructField);
-
-        jsonPost(server, "/create_array_type", p ->
-            dataTypeService.createArrayType(getStr(p, "base_type"), getInt(p, "length", 1), getStr(p, "name")));
-
-        post2(server, "/create_pointer_type", "base_type", "name", dataTypeService::createPointerType);
-
-        post1(server, "/create_data_type_category", "category_path", this::createDataTypeCategory);
-
-        post2(server, "/move_data_type_to_category", "type_name", "category_path", this::moveDataTypeToCategory);
-
-        getPageNP(server, "/list_data_type_categories", this::listDataTypeCategories);
-
-        json1(server, "/delete_function", "address", mutationService::deleteFunctionAtAddress);
-
-        jsonPost(server, "/create_function", p ->
-            mutationService.createFunctionAtAddress(getStr(p, "address"), getStr(p, "name"),
-                getBool(p, "disassemble_first", true)));
-
-        jsonPost(server, "/create_function_signature", p ->
-            createFunctionSignature(getStr(p, "name"), getStr(p, "return_type"),
-                coerceToJsonString(p.get("parameters"))));
-
-        getWithQuery(server, "/read_memory", q ->
-            readMemory(getStr(q, "address"), getInt(q, "length", 16), getStr(q, "program")));
-
-        jsonPost(server, "/create_memory_block", p -> {
-            long size = p.get("size") != null ? ((Number) p.get("size")).longValue() : 0;
-            return mutationService.createMemoryBlock(getStr(p, "name"), getStr(p, "address"), size,
-                getBool(p, "read", true), getBool(p, "write", true), getBool(p, "execute", false),
-                getBool(p, "volatile", false), getStr(p, "comment"));
-        });
-
-        // Data analysis endpoints
-        jsonPost(server, "/get_bulk_xrefs", p -> {
-            Object addressesObj = p.get("addresses");
-            List<String> addresses = new ArrayList<>();
-            if (addressesObj instanceof List) {
-                for (Object addr : (List<?>) addressesObj) {
-                    if (addr != null) addresses.add(addr.toString());
-                }
-            } else if (addressesObj instanceof String) {
-                for (String part : ((String) addressesObj).split(",")) {
-                    addresses.add(part.trim());
-                }
-            }
-            return symbolService.getBulkXrefs(addresses, null);
-        });
-
-        jsonPost(server, "/analyze_data_region", p ->
-            analysisService.analyzeDataRegion(getStr(p, "address"), getInt(p, "max_scan_bytes", 1024),
-                getBool(p, "include_xref_map", true), getBool(p, "include_assembly_patterns", true),
-                getBool(p, "include_boundary_detection", true)));
-
-        jsonPost(server, "/detect_array_bounds", p ->
-            analysisService.detectArrayBounds(getStr(p, "address"), getBool(p, "analyze_loop_bounds", true),
-                getBool(p, "analyze_indexing", true), getInt(p, "max_scan_range", 2048)));
-
-        jsonPost(server, "/get_assembly_context", p ->
-            analysisService.getAssemblyContext(objectToCommaSeparated(p.get("xref_sources")),
-                getInt(p, "context_instructions", 5), objectToCommaSeparated(p.get("include_patterns"))));
-
-        jsonPost(server, "/apply_data_classification", p ->
-            applyDataClassification(getStr(p, "address"), getStr(p, "classification"), getStr(p, "name"),
-                getStr(p, "comment"), p.get("type_definition")));
-
-        // Field-level analysis endpoints
-        jsonPost(server, "/analyze_struct_field_usage", p ->
-            analysisService.analyzeStructFieldUsage(getStr(p, "address"), getStr(p, "struct_name"), getInt(p, "max_functions", 10)));
-
-        jsonPost(server, "/get_field_access_context", p ->
-            analysisService.getFieldAccessContext(getStr(p, "struct_address"), getInt(p, "field_offset", 0), getInt(p, "num_examples", 5)));
-
-        jsonPost(server, "/suggest_field_names", p -> suggestFieldNames(getStr(p, "struct_address"), getInt(p, "struct_size", 0)));
-
-        getWithQuery(server, "/inspect_memory_content", q ->
-            inspectMemoryContent(getStr(q, "address"), getInt(q, "length", 64), getBool(q, "detect_strings", true)));
-
-        // Malware analysis endpoints
-        get0(server, "/detect_crypto_constants", this::detectCryptoConstants);
-
-        get2(server, "/search_byte_patterns", "pattern", "mask", analysisService::searchBytePatterns);
-
-        getWithQuery(server, "/find_similar_functions", q ->
-            findSimilarFunctions(getStr(q, "target_function"), getDouble(q, "threshold", 0.8)));
-
-        get1(server, "/analyze_control_flow", "function_name", this::analyzeControlFlow);
-
-        get0(server, "/find_anti_analysis_techniques", this::findAntiAnalysisTechniques);
-
-        get1(server, "/batch_decompile", "functions", this::batchDecompileFunctions);
-        get1(server, "/find_dead_code", "function_name", this::findDeadCode);
-
-        get0(server, "/decrypt_strings_auto",       this::autoDecryptStrings);
-        get0(server, "/analyze_api_call_chains",    this::analyzeAPICallChains);
-        get0(server, "/extract_iocs_with_context",  this::extractIOCsWithContext);
-        get0(server, "/detect_malware_behaviors",   this::detectMalwareBehaviors);
-
-        // Batch operation endpoints
-        jsonPost(server, "/batch_set_comments", p -> commentService.batchSetComments(getStr(p, "function_address"),
-            convertToMapList(p.get("decompiler_comments")), convertToMapList(p.get("disassembly_comments")), getStr(p, "plate_comment")));
-
-        post2(server, "/set_plate_comment", "function_address", "comment", commentService::setPlateComment);
-
-        get2(server, "/get_function_variables", "function_name", "program", functionService::getFunctionVariables);
-
-        jsonPost(server, "/batch_rename_function_components", p -> {
-            @SuppressWarnings("unchecked")
-            Map<String, String> paramRenames = (Map<String, String>) p.get("parameter_renames");
-            @SuppressWarnings("unchecked")
-            Map<String, String> localRenames = (Map<String, String>) p.get("local_renames");
-            return batchRenameFunctionComponents(getStr(p, "function_address"), getStr(p, "function_name"),
-                paramRenames, localRenames, getStr(p, "return_type"));
-        });
-
-        get1(server, "/get_valid_data_types", "category", this::getValidDataTypes);
-
-        get2(server, "/validate_data_type", "address", "type_name", this::validateDataType);
-
-        get1(server, "/get_data_type_size", "type_name", dataTypeService::getDataTypeSize);
 
         server.createContext("/analyze_function_completeness", safeHandler(exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String functionAddress = qparams.get("function_address");
 
-            // FIX #4: Force decompiler cache refresh before analysis to ensure fresh data
             Program program = getCurrentProgram();
             if (program != null && functionAddress != null && !functionAddress.isEmpty()) {
                 try {
@@ -609,7 +394,6 @@ public class EndpointRouter {
                     if (addr != null) {
                         Function func = program.getFunctionManager().getFunctionAt(addr);
                         if (func != null) {
-                            // Force fresh decompilation to get current variable states
                             DecompInterface tempDecomp = new DecompInterface();
                             tempDecomp.openProgram(program);
                             tempDecomp.flushCache();
@@ -620,83 +404,14 @@ public class EndpointRouter {
                     }
                 } catch (Exception e) {
                     Msg.warn(this, "Failed to refresh cache before completeness analysis: " + e.getMessage());
-                    // Continue with analysis anyway
                 }
             }
-
-            String result = analyzeFunctionCompleteness(functionAddress);
-            sendResponse(exchange, result);
+            sendResponse(exchange, analyzeFunctionCompleteness(functionAddress));
         }));
 
-        getWithQuery(server, "/find_next_undefined_function", q ->
-            functionService.findNextUndefinedFunction(getStr(q, "start_address"), getStr(q, "criteria"),
-                getStr(q, "pattern"), getStr(q, "direction"), getStr(q, "program")));
-
-        jsonPost(server, "/batch_set_variable_types", p -> {
-            @SuppressWarnings("unchecked")
-            Map<String, String> variableTypes = p.get("variable_types") instanceof Map
-                ? (Map<String, String>) p.get("variable_types") : new HashMap<>();
-            return batchSetVariableTypesOptimized(getStr(p, "function_address"), variableTypes);
-        });
-
-        jsonPost(server, "/batch_rename_variables", p -> {
-            @SuppressWarnings("unchecked")
-            Map<String, String> variableRenames = p.get("variable_renames") instanceof Map
-                ? (Map<String, String>) p.get("variable_renames") : new HashMap<>();
-            return mutationService.batchRenameVariables(getStr(p, "function_address"), variableRenames);
-        });
-
-        get3(server, "/validate_function_prototype", "function_address", "prototype", "calling_convention", this::validateFunctionPrototype);
-
-        get1(server, "/validate_data_type_exists", "type_name", this::validateDataTypeExists);
-
-        get1(server, "/can_rename_at_address", "address", mutationService::canRenameAtAddress);
-
-        getWithQuery(server, "/analyze_function_complete", q ->
-            functionService.analyzeFunctionComplete(getStr(q, "name"),
-                !"false".equalsIgnoreCase(getStr(q, "include_xrefs")),
-                !"false".equalsIgnoreCase(getStr(q, "include_callees")),
-                !"false".equalsIgnoreCase(getStr(q, "include_callers")),
-                !"false".equalsIgnoreCase(getStr(q, "include_disasm")),
-                !"false".equalsIgnoreCase(getStr(q, "include_variables")),
-                getStr(q, "program")));
-
-        getWithQuery(server, "/search_functions_enhanced", q -> {
-            String minX = getStr(q, "min_xrefs");
-            String maxX = getStr(q, "max_xrefs");
-            String hcn = getStr(q, "has_custom_name");
-            Integer minXrefs = minX != null ? Integer.parseInt(minX) : null;
-            Integer maxXrefs = maxX != null ? Integer.parseInt(maxX) : null;
-            Boolean hasCustomName = hcn != null ? Boolean.parseBoolean(hcn) : null;
-            return symbolService.searchFunctionsEnhanced(getStr(q, "name_pattern"), minXrefs, maxXrefs,
-                getStr(q, "calling_convention"), hasCustomName, getBool(q, "regex", false),
-                getStr(q, "sort_by") != null ? getStr(q, "sort_by") : "address",
-                getInt(q, "offset", 0), getInt(q, "limit", 100), getStr(q, "program"));
-        });
-
-        jsonPost(server, "/disassemble_bytes", p -> {
-            Integer length = p.get("length") != null ? ((Number) p.get("length")).intValue() : null;
-            return disassembleBytes(getStr(p, "start_address"), getStr(p, "end_address"), length, getBool(p, "restrict_to_execute_memory", true));
-        });
-
-        jsonPost(server, "/run_ghidra_script", p ->
-            runGhidraScriptWithCapture(getStr(p, "script_name"), getStr(p, "args"),
-                getInt(p, "timeout_seconds", 300), getBool(p, "capture_output", true)));
-
-        json3(server, "/set_bookmark", "address", "category", "comment", this::setBookmark);
-
-        get2(server, "/list_bookmarks", "category", "address", this::listBookmarks);
-
-        json2(server, "/delete_bookmark", "address", "category", this::deleteBookmark);
-
-        // Program management endpoints
-        get0(server, "/save_program", mutationService::saveCurrentProgram);
-
         server.createContext("/exit_ghidra", safeHandler(exchange -> {
-            // Save first, then exit
-            String saveResult = saveCurrentProgram();
+            String saveResult = (String) saveCurrentProgram();
             sendResponse(exchange, "{\"success\": true, \"message\": \"Saving and exiting Ghidra\", \"save\": " + saveResult + "}");
-            // Schedule exit after response is sent
             new Thread(() -> {
                 try { Thread.sleep(500); } catch (InterruptedException ignored) {}
                 SwingUtilities.invokeLater(() -> {
@@ -706,44 +421,262 @@ public class EndpointRouter {
             }).start();
         }));
 
-        get0(server, "/list_open_programs",     this::listOpenPrograms);
-        get0(server, "/get_current_program_info", this::getCurrentProgramInfo);
-
-        get1(server, "/switch_program", "name", this::switchProgram);
-
-        get1(server, "/list_project_files", "folder", this::listProjectFiles);
-        get1(server, "/open_program",      "path",   this::openProgramFromProject);
-
-        // Function hash / documentation propagation
-        get2(server, "/get_function_hash", "address", "program", comparisonService::getFunctionHash);
-        getPage1r(server, "/get_bulk_function_hashes", "filter", comparisonService::getBulkFunctionHashes);
-        get1(server, "/get_function_documentation", "address", this::getFunctionDocumentation);
         server.createContext("/apply_function_documentation", safeHandler(checked(exchange -> {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             sendResponse(exchange, applyFunctionDocumentation(body));
         })));
-
-        // Cross-binary comparison endpoints
-        get0(server, "/compare_programs_documentation", this::compareProgramsDocumentation);
-        get2(server, "/find_undocumented_by_string", "address", "program", this::findUndocumentedByString);
-        get2(server, "/batch_string_anchor_report", "pattern", "program", this::batchStringAnchorReport);
-        get2(server, "/get_function_signature", "address", "program", comparisonService::getFunctionSignature);
-
-        getWithQuery(server, "/find_similar_functions_fuzzy", q ->
-            comparisonService.findSimilarFunctionsFuzzy(getStr(q, "address"), getStr(q, "source_program"),
-                getStr(q, "target_program"), getDouble(q, "threshold", 0.7), getInt(q, "limit", 20)));
-
-        getWithQuery(server, "/bulk_fuzzy_match", q ->
-            comparisonService.bulkFuzzyMatch(getStr(q, "source_program"), getStr(q, "target_program"),
-                getDouble(q, "threshold", 0.7), getInt(q, "offset", 0), getInt(q, "limit", 50), getStr(q, "filter")));
-
-        get4(server, "/diff_functions", "address_a", "address_b", "program_a", "program_b", comparisonService::diffFunctions);
     }
+
+    private List<Ep> endpointTable() {
+        return List.of(
+            new Ep.GetPage("/list_methods", listingService::listMethods),
+            new Ep.GetPage("/list_classes", listingService::listClasses),
+            new Ep.GetPage("/list_segments", listingService::listSegments),
+            new Ep.GetPage("/list_imports", listingService::listImports),
+            new Ep.GetPage("/list_exports", listingService::listExports),
+            new Ep.GetPage("/list_namespaces", listingService::listNamespaces),
+            new Ep.GetPage("/list_data_items", listingService::listDataItems),
+            new Ep.GetPage1R("/list_data_items_by_xrefs", "format", listingService::listDataItemsByXrefs),
+            new Ep.GetProg("/list_functions", listingService::listFunctions),
+            new Ep.GetQuery("/list_functions_enhanced", q ->
+                listFunctionsEnhanced(getInt(q, "offset", 0), getInt(q, "limit", 10000), getStr(q, "program"))),
+            new Ep.GetQuery("/get_function_call_graph", q ->
+                getFunctionCallGraph(getStr(q, "name"), getInt(q, "depth", 2),
+                    getStr(q, "direction") != null ? getStr(q, "direction") : "both", getStr(q, "program"))),
+            new Ep.GetQuery("/get_full_call_graph", q ->
+                getFullCallGraph(getStr(q, "format") != null ? getStr(q, "format") : "edges",
+                    getInt(q, "limit", 1000), getStr(q, "program"))),
+            new Ep.GetQuery("/analyze_call_graph", q ->
+                analyzeCallGraph(getStr(q, "start_function"), getStr(q, "end_function"),
+                    getStr(q, "analysis_type") != null ? getStr(q, "analysis_type") : "summary", getStr(q, "program"))),
+            new Ep.Post2("/rename_function", "oldName", "newName", mutationService::renameFunction),
+            new Ep.Post2("/rename_data", "address", "newName", mutationService::renameData),
+            new Ep.Post3("/rename_variable", "functionName", "oldName", "newName", mutationService::renameVariable),
+            new Ep.GetPage1("/search_functions", "query", symbolService::searchFunctions),
+            new Ep.Get2("/get_function_by_address", "address", "program", functionService::getFunctionByAddress),
+            new Ep.Get0("/get_current_address", this::getCurrentAddress),
+            new Ep.Get0("/get_current_function", this::getCurrentFunction),
+            new Ep.Get3("/decompile_function", "address", "name", "program", functionService::decompileFunction),
+            new Ep.Get2("/disassemble_function", "address", "program", functionService::disassembleFunction),
+            new Ep.Post2("/set_decompiler_comment", "address", "comment", commentService::setDecompilerComment),
+            new Ep.Post2("/set_disassembly_comment", "address", "comment", commentService::setDisassemblyComment),
+            new Ep.Post2("/rename_function_by_address", "function_address", "new_name", mutationService::renameFunctionByAddress),
+            new Ep.Json3("/set_function_prototype", "function_address", "prototype", "calling_convention", mutationService::setFunctionPrototype),
+            new Ep.Get0("/list_calling_conventions", () -> symbolService.listCallingConventions(null)),
+            new Ep.Post3("/set_local_variable_type", "function_address", "variable_name", "new_type", mutationService::setLocalVariableType),
+            new Ep.Post2("/set_function_no_return", "function_address", "no_return", this::setFunctionNoReturn),
+            new Ep.Post1("/clear_instruction_flow_override", "address", this::clearInstructionFlowOverride),
+            new Ep.Post3("/set_variable_storage", "function_address", "variable_name", "storage", this::setVariableStorage),
+            new Ep.Post2("/run_script", "script_path", "args", this::runGhidraScript),
+            new Ep.Get1("/list_scripts", "filter", this::listGhidraScripts),
+            new Ep.Post3("/force_decompile", "function_address", "name", "program", functionService::forceDecompile),
+            new Ep.GetPage1("/get_xrefs_to", "address", symbolService::getXrefsTo),
+            new Ep.GetPage1("/get_xrefs_from", "address", symbolService::getXrefsFrom),
+            new Ep.GetPage1("/get_function_xrefs", "name", symbolService::getFunctionXrefs),
+            new Ep.GetPage1NP("/get_function_labels", "name", this::getFunctionLabels),
+            new Ep.GetPage1NP("/get_function_jump_targets", "name", this::getFunctionJumpTargets),
+            new Ep.Post3("/rename_label", "address", "old_name", "new_name", this::renameLabel),
+            new Ep.GetPage("/list_external_locations", this::listExternalLocations),
+            new Ep.Get3("/get_external_location", "address", "dll_name", "program", this::getExternalLocationDetails),
+            new Ep.Post2("/rename_external_location", "address", "new_name", this::renameExternalLocation),
+            new Ep.Post2("/create_label", "address", "name", this::createLabel),
+            new Ep.JsonPost("/batch_create_labels", p -> symbolService.batchCreateLabels(convertToMapList(p.get("labels")))),
+            new Ep.Post2("/rename_or_label", "address", "name", mutationService::renameOrLabel),
+            new Ep.Post2("/delete_label", "address", "name", symbolService::deleteLabel),
+            new Ep.JsonPost("/batch_delete_labels", p -> symbolService.batchDeleteLabels(convertToMapList(p.get("labels")))),
+            new Ep.GetPage1("/get_function_callees", "name", functionService::getFunctionCallees),
+            new Ep.GetPage1("/get_function_callers", "name", functionService::getFunctionCallers),
+            new Ep.GetPage1R("/list_data_types", "category", listingService::listDataTypes),
+            new Ep.JsonPost("/create_struct", p ->
+                dataTypeService.createStruct(getStr(p, "name"), coerceToJsonString(p.get("fields")))),
+            new Ep.JsonPost("/create_enum", p ->
+                dataTypeService.createEnum(getStr(p, "name"), coerceToJsonString(p.get("values")), getInt(p, "size", 4))),
+            new Ep.JsonPost("/apply_data_type", p ->
+                dataTypeService.applyDataType(getStr(p, "address"), getStr(p, "type_name"), getBool(p, "clear_existing", true))),
+            new Ep.GetPage1R("/list_strings", "filter", listingService::listStrings),
+            new Ep.Get0("/check_connection", this::checkConnection),
+            new Ep.Get0("/get_version", this::getVersion),
+            new Ep.Get0("/get_metadata", this::getMetadata),
+            new Ep.GetQuery("/convert_number", q -> convertNumber(getStr(q, "text"), getInt(q, "size", 4))),
+            new Ep.GetPage1R("/list_globals", "filter", symbolService::listGlobals),
+            new Ep.Post2("/rename_global_variable", "old_name", "new_name", symbolService::renameGlobalVariable),
+            new Ep.Get0("/get_entry_points", () -> symbolService.getEntryPoints(null)),
+            new Ep.JsonPost("/create_union", p ->
+                dataTypeService.createUnion(getStr(p, "name"), coerceToJsonString(p.get("fields")))),
+            new Ep.Get1("/get_type_size", "type_name", this::getTypeSize),
+            new Ep.Get1("/get_struct_layout", "struct_name", dataTypeService::getStructLayout),
+            new Ep.GetPage1NP("/search_data_types", "pattern", dataTypeService::searchDataTypes),
+            new Ep.Get1("/get_enum_values", "enum_name", dataTypeService::getEnumValues),
+            new Ep.Json2("/create_typedef", "name", "base_type", dataTypeService::createTypedef),
+            new Ep.Json2("/clone_data_type", "source_type", "new_name", dataTypeService::cloneDataType),
+            new Ep.Json2("/import_data_types", "source", "format", this::importDataTypes),
+            new Ep.Json1("/delete_data_type", "type_name", dataTypeService::deleteDataType),
+            new Ep.Json4("/modify_struct_field", "struct_name", "field_name", "new_type", "new_name", dataTypeService::modifyStructField),
+            new Ep.JsonPost("/add_struct_field", p ->
+                dataTypeService.addStructField(getStr(p, "struct_name"), getStr(p, "field_name"),
+                    getStr(p, "field_type"), getInt(p, "offset", -1))),
+            new Ep.Post2("/remove_struct_field", "struct_name", "field_name", dataTypeService::removeStructField),
+            new Ep.JsonPost("/create_array_type", p ->
+                dataTypeService.createArrayType(getStr(p, "base_type"), getInt(p, "length", 1), getStr(p, "name"))),
+            new Ep.Post2("/create_pointer_type", "base_type", "name", dataTypeService::createPointerType),
+            new Ep.Post1("/create_data_type_category", "category_path", this::createDataTypeCategory),
+            new Ep.Post2("/move_data_type_to_category", "type_name", "category_path", this::moveDataTypeToCategory),
+            new Ep.GetPageNP("/list_data_type_categories", this::listDataTypeCategories),
+            new Ep.Json1("/delete_function", "address", mutationService::deleteFunctionAtAddress),
+            new Ep.JsonPost("/create_function", p ->
+                mutationService.createFunctionAtAddress(getStr(p, "address"), getStr(p, "name"),
+                    getBool(p, "disassemble_first", true))),
+            new Ep.JsonPost("/create_function_signature", p ->
+                createFunctionSignature(getStr(p, "name"), getStr(p, "return_type"),
+                    coerceToJsonString(p.get("parameters")))),
+            new Ep.GetQuery("/read_memory", q ->
+                readMemory(getStr(q, "address"), getInt(q, "length", 16), getStr(q, "program"))),
+            new Ep.JsonPost("/create_memory_block", p -> {
+                long size = p.get("size") != null ? ((Number) p.get("size")).longValue() : 0;
+                return mutationService.createMemoryBlock(getStr(p, "name"), getStr(p, "address"), size,
+                    getBool(p, "read", true), getBool(p, "write", true), getBool(p, "execute", false),
+                    getBool(p, "volatile", false), getStr(p, "comment"));
+            }),
+            new Ep.JsonPost("/get_bulk_xrefs", p -> {
+                Object addressesObj = p.get("addresses");
+                List<String> addresses = new ArrayList<>();
+                if (addressesObj instanceof List) {
+                    for (Object addr : (List<?>) addressesObj) {
+                        if (addr != null) addresses.add(addr.toString());
+                    }
+                } else if (addressesObj instanceof String) {
+                    for (String part : ((String) addressesObj).split(",")) {
+                        addresses.add(part.trim());
+                    }
+                }
+                return symbolService.getBulkXrefs(addresses, null);
+            }),
+            new Ep.JsonPost("/analyze_data_region", p ->
+                analysisService.analyzeDataRegion(getStr(p, "address"), getInt(p, "max_scan_bytes", 1024),
+                    getBool(p, "include_xref_map", true), getBool(p, "include_assembly_patterns", true),
+                    getBool(p, "include_boundary_detection", true))),
+            new Ep.JsonPost("/detect_array_bounds", p ->
+                analysisService.detectArrayBounds(getStr(p, "address"), getBool(p, "analyze_loop_bounds", true),
+                    getBool(p, "analyze_indexing", true), getInt(p, "max_scan_range", 2048))),
+            new Ep.JsonPost("/get_assembly_context", p ->
+                analysisService.getAssemblyContext(objectToCommaSeparated(p.get("xref_sources")),
+                    getInt(p, "context_instructions", 5), objectToCommaSeparated(p.get("include_patterns")))),
+            new Ep.JsonPost("/apply_data_classification", p ->
+                applyDataClassification(getStr(p, "address"), getStr(p, "classification"), getStr(p, "name"),
+                    getStr(p, "comment"), p.get("type_definition"))),
+            new Ep.JsonPost("/analyze_struct_field_usage", p ->
+                analysisService.analyzeStructFieldUsage(getStr(p, "address"), getStr(p, "struct_name"), getInt(p, "max_functions", 10))),
+            new Ep.JsonPost("/get_field_access_context", p ->
+                analysisService.getFieldAccessContext(getStr(p, "struct_address"), getInt(p, "field_offset", 0), getInt(p, "num_examples", 5))),
+            new Ep.JsonPost("/suggest_field_names", p ->
+                suggestFieldNames(getStr(p, "struct_address"), getInt(p, "struct_size", 0))),
+            new Ep.GetQuery("/inspect_memory_content", q ->
+                inspectMemoryContent(getStr(q, "address"), getInt(q, "length", 64), getBool(q, "detect_strings", true))),
+            new Ep.Get0("/detect_crypto_constants", this::detectCryptoConstants),
+            new Ep.Get2("/search_byte_patterns", "pattern", "mask", analysisService::searchBytePatterns),
+            new Ep.GetQuery("/find_similar_functions", q ->
+                findSimilarFunctions(getStr(q, "target_function"), getDouble(q, "threshold", 0.8))),
+            new Ep.Get1("/analyze_control_flow", "function_name", this::analyzeControlFlow),
+            new Ep.Get0("/find_anti_analysis_techniques", this::findAntiAnalysisTechniques),
+            new Ep.Get1("/batch_decompile", "functions", this::batchDecompileFunctions),
+            new Ep.Get1("/find_dead_code", "function_name", this::findDeadCode),
+            new Ep.Get0("/decrypt_strings_auto", this::autoDecryptStrings),
+            new Ep.Get0("/analyze_api_call_chains", this::analyzeAPICallChains),
+            new Ep.Get0("/extract_iocs_with_context", this::extractIOCsWithContext),
+            new Ep.Get0("/detect_malware_behaviors", this::detectMalwareBehaviors),
+            new Ep.JsonPost("/batch_set_comments", p ->
+                commentService.batchSetComments(getStr(p, "function_address"),
+                    convertToMapList(p.get("decompiler_comments")), convertToMapList(p.get("disassembly_comments")),
+                    getStr(p, "plate_comment"))),
+            new Ep.Post2("/set_plate_comment", "function_address", "comment", commentService::setPlateComment),
+            new Ep.Get2("/get_function_variables", "function_name", "program", functionService::getFunctionVariables),
+            new Ep.JsonPost("/batch_rename_function_components", p -> {
+                @SuppressWarnings("unchecked")
+                Map<String, String> paramRenames = (Map<String, String>) p.get("parameter_renames");
+                @SuppressWarnings("unchecked")
+                Map<String, String> localRenames = (Map<String, String>) p.get("local_renames");
+                return batchRenameFunctionComponents(getStr(p, "function_address"), getStr(p, "function_name"),
+                    paramRenames, localRenames, getStr(p, "return_type"));
+            }),
+            new Ep.Get1("/get_valid_data_types", "category", this::getValidDataTypes),
+            new Ep.Get2("/validate_data_type", "address", "type_name", this::validateDataType),
+            new Ep.Get1("/get_data_type_size", "type_name", dataTypeService::getDataTypeSize),
+            new Ep.GetQuery("/find_next_undefined_function", q ->
+                functionService.findNextUndefinedFunction(getStr(q, "start_address"), getStr(q, "criteria"),
+                    getStr(q, "pattern"), getStr(q, "direction"), getStr(q, "program"))),
+            new Ep.JsonPost("/batch_set_variable_types", p -> {
+                @SuppressWarnings("unchecked")
+                Map<String, String> variableTypes = p.get("variable_types") instanceof Map
+                    ? (Map<String, String>) p.get("variable_types") : new HashMap<>();
+                return batchSetVariableTypesOptimized(getStr(p, "function_address"), variableTypes);
+            }),
+            new Ep.JsonPost("/batch_rename_variables", p -> {
+                @SuppressWarnings("unchecked")
+                Map<String, String> variableRenames = p.get("variable_renames") instanceof Map
+                    ? (Map<String, String>) p.get("variable_renames") : new HashMap<>();
+                return mutationService.batchRenameVariables(getStr(p, "function_address"), variableRenames);
+            }),
+            new Ep.Get3("/validate_function_prototype", "function_address", "prototype", "calling_convention", this::validateFunctionPrototype),
+            new Ep.Get1("/validate_data_type_exists", "type_name", this::validateDataTypeExists),
+            new Ep.Get1("/can_rename_at_address", "address", mutationService::canRenameAtAddress),
+            new Ep.GetQuery("/analyze_function_complete", q ->
+                functionService.analyzeFunctionComplete(getStr(q, "name"),
+                    !"false".equalsIgnoreCase(getStr(q, "include_xrefs")),
+                    !"false".equalsIgnoreCase(getStr(q, "include_callees")),
+                    !"false".equalsIgnoreCase(getStr(q, "include_callers")),
+                    !"false".equalsIgnoreCase(getStr(q, "include_disasm")),
+                    !"false".equalsIgnoreCase(getStr(q, "include_variables")),
+                    getStr(q, "program"))),
+            new Ep.GetQuery("/search_functions_enhanced", q -> {
+                String minX = getStr(q, "min_xrefs");
+                String maxX = getStr(q, "max_xrefs");
+                String hcn = getStr(q, "has_custom_name");
+                Integer minXrefs = minX != null ? Integer.parseInt(minX) : null;
+                Integer maxXrefs = maxX != null ? Integer.parseInt(maxX) : null;
+                Boolean hasCustomName = hcn != null ? Boolean.parseBoolean(hcn) : null;
+                return symbolService.searchFunctionsEnhanced(getStr(q, "name_pattern"), minXrefs, maxXrefs,
+                    getStr(q, "calling_convention"), hasCustomName, getBool(q, "regex", false),
+                    getStr(q, "sort_by") != null ? getStr(q, "sort_by") : "address",
+                    getInt(q, "offset", 0), getInt(q, "limit", 100), getStr(q, "program"));
+            }),
+            new Ep.JsonPost("/disassemble_bytes", p -> {
+                Integer length = p.get("length") != null ? ((Number) p.get("length")).intValue() : null;
+                return disassembleBytes(getStr(p, "start_address"), getStr(p, "end_address"), length, getBool(p, "restrict_to_execute_memory", true));
+            }),
+            new Ep.JsonPost("/run_ghidra_script", p ->
+                runGhidraScriptWithCapture(getStr(p, "script_name"), getStr(p, "args"),
+                    getInt(p, "timeout_seconds", 300), getBool(p, "capture_output", true))),
+            new Ep.Json3("/set_bookmark", "address", "category", "comment", this::setBookmark),
+            new Ep.Get2("/list_bookmarks", "category", "address", this::listBookmarks),
+            new Ep.Json2("/delete_bookmark", "address", "category", this::deleteBookmark),
+            new Ep.Get0("/save_program", mutationService::saveCurrentProgram),
+            new Ep.Get0("/list_open_programs", this::listOpenPrograms),
+            new Ep.Get0("/get_current_program_info", this::getCurrentProgramInfo),
+            new Ep.Get1("/switch_program", "name", this::switchProgram),
+            new Ep.Get1("/list_project_files", "folder", this::listProjectFiles),
+            new Ep.Get1("/open_program", "path", this::openProgramFromProject),
+            new Ep.Get2("/get_function_hash", "address", "program", comparisonService::getFunctionHash),
+            new Ep.GetPage1R("/get_bulk_function_hashes", "filter", comparisonService::getBulkFunctionHashes),
+            new Ep.Get1("/get_function_documentation", "address", this::getFunctionDocumentation),
+            new Ep.Get0("/compare_programs_documentation", this::compareProgramsDocumentation),
+            new Ep.Get2("/find_undocumented_by_string", "address", "program", this::findUndocumentedByString),
+            new Ep.Get2("/batch_string_anchor_report", "pattern", "program", this::batchStringAnchorReport),
+            new Ep.Get2("/get_function_signature", "address", "program", comparisonService::getFunctionSignature),
+            new Ep.GetQuery("/find_similar_functions_fuzzy", q ->
+                comparisonService.findSimilarFunctionsFuzzy(getStr(q, "address"), getStr(q, "source_program"),
+                    getStr(q, "target_program"), getDouble(q, "threshold", 0.7), getInt(q, "limit", 20))),
+            new Ep.GetQuery("/bulk_fuzzy_match", q ->
+                comparisonService.bulkFuzzyMatch(getStr(q, "source_program"), getStr(q, "target_program"),
+                    getDouble(q, "threshold", 0.7), getInt(q, "offset", 0), getInt(q, "limit", 50), getStr(q, "filter"))),
+            new Ep.Get4("/diff_functions", "address_a", "address_b", "program_a", "program_b", comparisonService::diffFunctions)
+        );
+    }
+
 
     /**
      * Get current address selected in Ghidra GUI
      */
-    private String getCurrentAddress() {
+    private Object getCurrentAddress() {
         CodeViewerService service = getActiveTool().getService(CodeViewerService.class);
         if (service == null) return "Code viewer service not available";
 
@@ -754,7 +687,7 @@ public class EndpointRouter {
     /**
      * Get current function selected in Ghidra GUI
      */
-    private String getCurrentFunction() {
+    private Object getCurrentFunction() {
         CodeViewerService service = getActiveTool().getService(CodeViewerService.class);
         if (service == null) return "Code viewer service not available";
 
@@ -777,7 +710,7 @@ public class EndpointRouter {
      * List all functions with enhanced metadata including thunk/external flags.
      * Returns JSON array for easy parsing.
      */
-    private String listFunctionsEnhanced(int offset, int limit, String programName) {
+    private Object listFunctionsEnhanced(int offset, int limit, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) return "{\"error\": \"" + escapeJson((String) programResult[1]) + "\"}";
@@ -832,7 +765,7 @@ public class EndpointRouter {
     /**
      * Set a local variable's type using HighFunctionDBUtil.updateDBVariable
      */
-    private String setLocalVariableType(String functionAddrStr, String variableName, String newType) {
+    private Object setLocalVariableType(String functionAddrStr, String variableName, String newType) {
         // Input validation
         Program program = getCurrentProgram();
         if (program == null) {
@@ -1167,7 +1100,7 @@ public class EndpointRouter {
      * @param noReturn true to mark as non-returning, false to mark as returning
      * @return Success or error message
      */
-    private String setFunctionNoReturn(String functionAddrStr, String noReturnStr) {
+    private Object setFunctionNoReturn(String functionAddrStr, String noReturnStr) {
         // Input validation
         Program program = getCurrentProgram();
         if (program == null) {
@@ -1246,7 +1179,7 @@ public class EndpointRouter {
      * @param instructionAddrStr The instruction address in hex format (e.g., "0x6fb5c8b9")
      * @return Success or error message
      */
-    private String clearInstructionFlowOverride(String instructionAddrStr) {
+    private Object clearInstructionFlowOverride(String instructionAddrStr) {
         // Input validation
         Program program = getCurrentProgram();
         if (program == null) {
@@ -1320,7 +1253,7 @@ public class EndpointRouter {
      * @param storageSpec Storage specification (e.g., "Stack[-0x10]:4", "EBP:4", "EAX:4")
      * @return Success or error message
      */
-    private String setVariableStorage(String functionAddrStr, String variableName, String storageSpec) {
+    private Object setVariableStorage(String functionAddrStr, String variableName, String storageSpec) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -1418,7 +1351,7 @@ public class EndpointRouter {
      * @param scriptArgs Optional space-separated arguments for the script
      * @return Script output or error message
      */
-    private String runGhidraScript(String scriptPath, String scriptArgs) {
+    private Object runGhidraScript(String scriptPath, String scriptArgs) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -1597,7 +1530,7 @@ public class EndpointRouter {
      * @param filter Optional filter string to match script names
      * @return JSON list of available scripts
      */
-    private String listGhidraScripts(String filter) {
+    private Object listGhidraScripts(String filter) {
         final StringBuilder resultMsg = new StringBuilder();
 
         try {
@@ -2039,7 +1972,7 @@ public class EndpointRouter {
     /**
      * List all currently open programs in Ghidra
      */
-    private String saveCurrentProgram() {
+    private Object saveCurrentProgram() {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -2080,7 +2013,7 @@ public class EndpointRouter {
         return result.length() > 0 ? result.toString() : "{\"error\": \"Unknown failure\"}";
     }
 
-    private String listOpenPrograms() {
+    private Object listOpenPrograms() {
         ProgramManager pm = getActiveTool().getService(ProgramManager.class);
         if (pm == null) {
             return "{\"error\": \"ProgramManager service not available\"}";
@@ -2120,7 +2053,7 @@ public class EndpointRouter {
     /**
      * Get detailed information about the currently active program
      */
-    private String getCurrentProgramInfo() {
+    private Object getCurrentProgramInfo() {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program currently loaded\"}";
@@ -2156,7 +2089,7 @@ public class EndpointRouter {
     /**
      * Switch MCP context to a different open program by name
      */
-    private String switchProgram(String programName) {
+    private Object switchProgram(String programName) {
         if (programName == null || programName.trim().isEmpty()) {
             return "{\"error\": \"Program name is required\"}";
         }
@@ -2207,7 +2140,7 @@ public class EndpointRouter {
     /**
      * List all files in the current Ghidra project
      */
-    private String listProjectFiles(String folderPath) {
+    private Object listProjectFiles(String folderPath) {
         ghidra.framework.model.Project project = getActiveTool().getProject();
         if (project == null) {
             return "{\"error\": \"No project is currently open\"}";
@@ -2272,7 +2205,7 @@ public class EndpointRouter {
     /**
      * Open a program from the current project by path
      */
-    private String openProgramFromProject(String path) {
+    private Object openProgramFromProject(String path) {
         if (path == null || path.trim().isEmpty()) {
             return "{\"error\": \"Program path is required\"}";
         }
@@ -2430,7 +2363,7 @@ public class EndpointRouter {
     /**
      * Export all documentation for a function (for use in cross-binary propagation)
      */
-    private String getFunctionDocumentation(String functionAddress) throws Exception {
+    private Object getFunctionDocumentation(String functionAddress) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -2580,7 +2513,7 @@ public class EndpointRouter {
      * Apply documentation from a source function to a target function.
      * Expects JSON body with: target_address, source_documentation (from getFunctionDocumentation)
      */
-    private String applyFunctionDocumentation(String jsonBody) throws Exception {
+    private Object applyFunctionDocumentation(String jsonBody) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -2862,7 +2795,7 @@ public class EndpointRouter {
     }
 
     /** Builds a JSON error response body. Delegates to JsonHelper for consistent format. */
-    private static String errorJson(String message) {
+    private static Object errorJson(String message) {
         return JsonHelper.errorJson(message);
     }
 
@@ -2886,7 +2819,8 @@ public class EndpointRouter {
         };
     }
 
-    private void sendResponse(UdsHttpExchange exchange, String response) throws IOException {
+    private void sendResponse(UdsHttpExchange exchange, Object responseObj) throws IOException {
+        String response = responseObj instanceof String s ? s : JsonHelper.toJson(responseObj);
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         Headers headers = exchange.getResponseHeaders();
         headers.set("Content-Type", "text/plain; charset=utf-8");
@@ -4110,7 +4044,7 @@ public class EndpointRouter {
     }
 
     /** Escape special characters in JSON string values (for manual JSON building). Uses Gson. */
-    private String escapeJsonString(String str) {
+    private Object escapeJsonString(String str) {
         if (str == null) return "";
         String quoted = JsonHelper.toJson(str);
         return quoted.length() > 2 ? quoted.substring(1, quoted.length() - 1) : "";
@@ -4119,7 +4053,7 @@ public class EndpointRouter {
     /**
      * Check if the plugin is running and accessible
      */
-    private String checkConnection() {
+    private Object checkConnection() {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Connected: GhidraMCP plugin running, but no program loaded";
@@ -4130,7 +4064,7 @@ public class EndpointRouter {
     /**
      * Get version information about the plugin and Ghidra (v1.7.0)
      */
-    private String getVersion() {
+    private Object getVersion() {
         StringBuilder version = new StringBuilder();
         version.append("{\n");
         version.append("  \"plugin_version\": \"").append(VersionInfo.getVersion()).append("\",\n");
@@ -4148,7 +4082,7 @@ public class EndpointRouter {
     /**
      * Get metadata about the current program
      */
-    private String getMetadata() {
+    private Object getMetadata() {
         Program program = getCurrentProgram();
         if (program == null) {
             return "No program loaded";
@@ -4188,7 +4122,7 @@ public class EndpointRouter {
     /**
      * Convert a number to different representations
      */
-    private String convertNumber(String text, int size) {
+    private Object convertNumber(String text, int size) {
         if (text == null || text.isEmpty()) {
             return "Error: No number provided";
         }
@@ -4255,7 +4189,7 @@ public class EndpointRouter {
     /**
      * Get the size of a data type
      */
-    private String getTypeSize(String typeName) {
+    private Object getTypeSize(String typeName) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (typeName == null || typeName.isEmpty()) return "Type name is required";
@@ -4278,7 +4212,7 @@ public class EndpointRouter {
     /**
      * Validate if a data type fits at a given address
      */
-    private String validateDataType(String addressStr, String typeName) throws Exception {
+    private Object validateDataType(String addressStr, String typeName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
@@ -4331,7 +4265,7 @@ public class EndpointRouter {
     /**
      * Read memory at a specific address
      */
-    private String readMemory(String addressStr, int length, String programName) throws Exception {
+    private Object readMemory(String addressStr, int length, String programName) throws Exception {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) {
@@ -4374,7 +4308,7 @@ public class EndpointRouter {
     /**
      * Import data types from various sources
      */
-    private String importDataTypes(String source, String format) {
+    private Object importDataTypes(String source, String format) {
         if (format == null || format.isEmpty()) format = "c";
         // This is a placeholder for import functionality
         // In a real implementation, you would parse the source based on format
@@ -4385,7 +4319,7 @@ public class EndpointRouter {
     /**
      * Create a new data type category
      */
-    private String createDataTypeCategory(String categoryPath) throws Exception {
+    private Object createDataTypeCategory(String categoryPath) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (categoryPath == null || categoryPath.isEmpty()) return "Category path is required";
@@ -4400,7 +4334,7 @@ public class EndpointRouter {
     /**
      * Move a data type to a different category
      */
-    private String moveDataTypeToCategory(String typeName, String categoryPath) {
+    private Object moveDataTypeToCategory(String typeName, String categoryPath) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (typeName == null || typeName.isEmpty()) return "Type name is required";
@@ -4447,7 +4381,7 @@ public class EndpointRouter {
     /**
      * List all data type categories
      */
-    private String listDataTypeCategories(int offset, int limit) throws Exception {
+    private Object listDataTypeCategories(int offset, int limit) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
 
@@ -4476,7 +4410,7 @@ public class EndpointRouter {
     /**
      * Create a function signature data type
      */
-    private String createFunctionSignature(String name, String returnType, String parametersJson) {
+    private Object createFunctionSignature(String name, String returnType, String parametersJson) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (name == null || name.isEmpty()) return "Function name is required";
@@ -4556,7 +4490,7 @@ public class EndpointRouter {
     /**
      * Helper to escape strings for JSON
      */
-    private String escapeJson(String str) {
+    private Object escapeJson(String str) {
         if (str == null) return "";
         return str.replace("\\", "\\\\")
                   .replace("\"", "\\\"")
@@ -4568,7 +4502,7 @@ public class EndpointRouter {
     /**
      * 6. APPLY_DATA_CLASSIFICATION - Atomic type application
      */
-    private String applyDataClassification(String addressStr, String classification,
+    private Object applyDataClassification(String addressStr, String classification,
                                            String name, String comment,
                                            Object typeDefinitionObj) throws Exception {
         Program program = getCurrentProgram();
@@ -4813,7 +4747,7 @@ public class EndpointRouter {
      * @param structSize Size of the structure in bytes (0 for auto-detect)
      * @return JSON string with field name suggestions
      */
-    private String suggestFieldNames(String structAddressStr, int structSize) {
+    private Object suggestFieldNames(String structAddressStr, int structSize) {
         // Validate input parameters
         if (structSize < 0 || structSize > MAX_FIELD_OFFSET) {
             return "{\"error\": \"structSize must be between 0 and " + MAX_FIELD_OFFSET + "\"}";
@@ -4959,7 +4893,7 @@ public class EndpointRouter {
      * Reads raw memory bytes and provides hex/ASCII representation with string detection hints.
      * This helps prevent misidentification of strings as numeric data.
      */
-    private String inspectMemoryContent(String addressStr, int length, boolean detectStrings) throws Exception {
+    private Object inspectMemoryContent(String addressStr, int length, boolean detectStrings) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "{\"error\": \"No program loaded\"}";
 
@@ -5084,7 +5018,7 @@ public class EndpointRouter {
     /**
      * Detect cryptographic constants in the binary (AES S-boxes, SHA constants, etc.)
      */
-    private String detectCryptoConstants() throws Exception {
+    private Object detectCryptoConstants() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5110,7 +5044,7 @@ public class EndpointRouter {
      * Find functions structurally similar to the target function
      * Uses basic block count, instruction count, call count, and cyclomatic complexity
      */
-    private String findSimilarFunctions(String targetFunction, double threshold) throws Exception {
+    private Object findSimilarFunctions(String targetFunction, double threshold) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5304,7 +5238,7 @@ public class EndpointRouter {
      * Analyze function control flow complexity
      * Calculates cyclomatic complexity, basic blocks, edges, and detailed metrics
      */
-    private String analyzeControlFlow(String functionName) throws Exception {
+    private Object analyzeControlFlow(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -5485,7 +5419,7 @@ public class EndpointRouter {
      * Detect anti-analysis and anti-debugging techniques
      * Scans for known anti-debug APIs, timing checks, VM detection, and SEH tricks
      */
-    private String findAntiAnalysisTechniques() throws Exception {
+    private Object findAntiAnalysisTechniques() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -5682,7 +5616,7 @@ public class EndpointRouter {
     /**
      * Batch decompile multiple functions
      */
-    private String batchDecompileFunctions(String functionsParam) throws Exception {
+    private Object batchDecompileFunctions(String functionsParam) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5750,7 +5684,7 @@ public class EndpointRouter {
     /**
      * Find potentially unreachable code blocks
      */
-    private String findDeadCode(String functionName) throws Exception {
+    private Object findDeadCode(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5777,7 +5711,7 @@ public class EndpointRouter {
     /**
      * Automatically identify and decrypt obfuscated strings
      */
-    private String autoDecryptStrings() throws Exception {
+    private Object autoDecryptStrings() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5805,7 +5739,7 @@ public class EndpointRouter {
      * Identify and analyze suspicious API call chains
      * Detects threat patterns like process injection, persistence, credential theft
      */
-    private String analyzeAPICallChains() throws Exception {
+    private Object analyzeAPICallChains() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -6045,7 +5979,7 @@ public class EndpointRouter {
     /**
      * Enhanced IOC extraction with context and confidence scoring
      */
-    private String extractIOCsWithContext() throws Exception {
+    private Object extractIOCsWithContext() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -6229,7 +6163,7 @@ public class EndpointRouter {
     /**
      * Detect common malware behaviors and techniques
      */
-    private String detectMalwareBehaviors() throws Exception {
+    private Object detectMalwareBehaviors() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -6426,7 +6360,7 @@ public class EndpointRouter {
     /**
      * v1.5.0: Batch rename function and all its components atomically
      */
-    private String batchRenameFunctionComponents(String functionAddress, String functionName,
+    private Object batchRenameFunctionComponents(String functionAddress, String functionName,
                                                 Map<String, String> parameterRenames,
                                                 Map<String, String> localRenames,
                                                 String returnType) {
@@ -6521,7 +6455,7 @@ public class EndpointRouter {
     /**
      * v1.5.0: Get valid Ghidra data type strings
      */
-    private String getValidDataTypes(String category) {
+    private Object getValidDataTypes(String category) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -6586,7 +6520,7 @@ public class EndpointRouter {
     /**
      * v1.5.0: Analyze function completeness for documentation
      */
-    private String analyzeFunctionCompleteness(String functionAddress) {
+    private Object analyzeFunctionCompleteness(String functionAddress) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -7289,7 +7223,7 @@ public class EndpointRouter {
      * OPTIMIZED: Batch set variable types - simple wrapper that calls setLocalVariableType
      * sequentially with proper spacing to avoid thread issues
      */
-    private String batchSetVariableTypesOptimized(String functionAddress, Map<String, String> variableTypes) {
+    private Object batchSetVariableTypesOptimized(String functionAddress, Map<String, String> variableTypes) {
         if (variableTypes == null || variableTypes.isEmpty()) {
             return "{\"success\": true, \"method\": \"optimized\", \"variables_typed\": 0, \"variables_failed\": 0}";
         }
@@ -7305,7 +7239,7 @@ public class EndpointRouter {
 
             try {
                 // Call the working setLocalVariableType method
-                String result = setLocalVariableType(functionAddress, varName, newType);
+                String result = (String) setLocalVariableType(functionAddress, varName, newType);
 
                 if (result.toLowerCase().contains("success")) {
                     variablesTyped.incrementAndGet();
@@ -7351,7 +7285,7 @@ public class EndpointRouter {
     /**
      * NEW v1.6.0: Validate function prototype before applying
      */
-    private String validateFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
+    private Object validateFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -7435,7 +7369,7 @@ public class EndpointRouter {
     /**
      * NEW v1.6.0: Check if data type exists in type manager
      */
-    private String validateDataTypeExists(String typeName) {
+    private Object validateDataTypeExists(String typeName) {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -7488,7 +7422,7 @@ public class EndpointRouter {
      * @param restrictToExecuteMemory If true, restricts disassembly to executable memory (default: true)
      * @return JSON result with disassembly status
      */
-    private String disassembleBytes(String startAddress, String endAddress, Integer length,
+    private Object disassembleBytes(String startAddress, String endAddress, Integer length,
                                    boolean restrictToExecuteMemory) {
         Program program = getCurrentProgram();
         if (program == null) {
@@ -7654,7 +7588,7 @@ public class EndpointRouter {
      * this endpoint provides script discovery and validation. Full execution with output
      * capture should be done through Ghidra's Script Manager UI or headless mode.
      */
-    private String runGhidraScriptWithCapture(String scriptName, String scriptArgs, int timeoutSeconds, boolean captureOutput) throws Exception {
+    private Object runGhidraScriptWithCapture(String scriptName, String scriptArgs, int timeoutSeconds, boolean captureOutput) throws Exception {
         if (scriptName == null || scriptName.isEmpty()) {
             return "{\"success\": false, \"error\": \"Script name is required\"}";
         }
@@ -7709,7 +7643,7 @@ public class EndpointRouter {
 
         // Execute the script via the existing execution method
         long startTime = System.currentTimeMillis();
-        String output = runGhidraScript(scriptFile.getAbsolutePath(), scriptArgs);
+        String output = (String) runGhidraScript(scriptFile.getAbsolutePath(), scriptArgs);
         double executionTime = (System.currentTimeMillis() - startTime) / 1000.0;
 
         boolean succeeded = output.contains("SCRIPT COMPLETED SUCCESSFULLY");
@@ -7736,7 +7670,7 @@ public class EndpointRouter {
      * Set a bookmark at an address with category and comment.
      * Creates or updates the bookmark if one already exists at the address with the same category.
      */
-    private String setBookmark(String addressStr, String category, String comment) throws Exception {
+    private Object setBookmark(String addressStr, String category, String comment) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
@@ -7787,7 +7721,7 @@ public class EndpointRouter {
     /**
      * List bookmarks, optionally filtered by category and/or address.
      */
-    private String listBookmarks(String category, String addressStr) throws Exception {
+    private Object listBookmarks(String category, String addressStr) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
@@ -7855,7 +7789,7 @@ public class EndpointRouter {
     /**
      * Delete a bookmark at an address with optional category filter.
      */
-    private String deleteBookmark(String addressStr, String category) throws Exception {
+    private Object deleteBookmark(String addressStr, String category) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
@@ -7899,7 +7833,7 @@ public class EndpointRouter {
      * List all external locations (imports, ordinal imports, etc.)
      * Returns detailed information including library name and label
      */
-    private String listExternalLocations(int offset, int limit, String programName) {
+    private Object listExternalLocations(int offset, int limit, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) return (String) programResult[1];
@@ -7932,7 +7866,7 @@ public class EndpointRouter {
     /**
      * Get details of a specific external location
      */
-    private String getExternalLocationDetails(String address, String dllName, String programName) throws Exception {
+    private Object getExternalLocationDetails(String address, String dllName, String programName) throws Exception {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) return (String) programResult[1];
@@ -7983,7 +7917,7 @@ public class EndpointRouter {
     /**
      * Rename an external location (e.g., change Ordinal_123 to a real function name)
      */
-    private String renameExternalLocation(String address, String newName) {
+    private Object renameExternalLocation(String address, String newName) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
 
@@ -8052,7 +7986,7 @@ public class EndpointRouter {
      * Compare documentation status across all open programs.
      * Returns documented/undocumented function counts for each program.
      */
-    private String compareProgramsDocumentation() {
+    private Object compareProgramsDocumentation() {
         StringBuilder result = new StringBuilder();
         result.append("{\"programs\": [");
 
@@ -8115,7 +8049,7 @@ public class EndpointRouter {
      * Find undocumented (FUN_*) functions that reference a given string address.
      * This filters get_xrefs_to results to only return FUN_* functions.
      */
-    private String findUndocumentedByString(String stringAddress, String programName) {
+    private Object findUndocumentedByString(String stringAddress, String programName) {
         if (stringAddress == null || stringAddress.isEmpty()) {
             return "{\"error\": \"String address is required\"}";
         }
@@ -8195,7 +8129,7 @@ public class EndpointRouter {
      * Generate a report of all strings matching a pattern (e.g., ".cpp") and their referencing FUN_* functions.
      * This helps identify undocumented functions that can be matched using string anchors.
      */
-    private String batchStringAnchorReport(String pattern, String programName) {
+    private Object batchStringAnchorReport(String pattern, String programName) {
         if (pattern == null || pattern.isEmpty()) pattern = ".cpp";
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
