@@ -718,11 +718,10 @@ public class EndpointRouter {
         get2(server, "/get_function_hash", "address", "program", comparisonService::getFunctionHash);
         getPage1r(server, "/get_bulk_function_hashes", "filter", comparisonService::getBulkFunctionHashes);
         get1(server, "/get_function_documentation", "address", this::getFunctionDocumentation);
-        server.createContext("/apply_function_documentation", safeHandler(exchange -> {
+        server.createContext("/apply_function_documentation", safeHandler(checked(exchange -> {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            String result = applyFunctionDocumentation(body);
-            sendResponse(exchange, result);
-        }));
+            sendResponse(exchange, applyFunctionDocumentation(body));
+        })));
 
         // Cross-binary comparison endpoints
         get0(server, "/compare_programs_documentation", this::compareProgramsDocumentation);
@@ -2431,275 +2430,267 @@ public class EndpointRouter {
     /**
      * Export all documentation for a function (for use in cross-binary propagation)
      */
-    private String getFunctionDocumentation(String functionAddress) {
+    private String getFunctionDocumentation(String functionAddress) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            Address addr = program.getAddressFactory().getAddress(functionAddress);
-            if (addr == null) {
-                return "{\"error\": \"Invalid address: " + functionAddress + "\"}";
-            }
+        Address addr = program.getAddressFactory().getAddress(functionAddress);
+        if (addr == null) {
+            return "{\"error\": \"Invalid address: " + functionAddress + "\"}";
+        }
 
-            Function func = program.getFunctionManager().getFunctionAt(addr);
-            if (func == null) {
-                return "{\"error\": \"No function at address: " + functionAddress + "\"}";
-            }
+        Function func = program.getFunctionManager().getFunctionAt(addr);
+        if (func == null) {
+            return "{\"error\": \"No function at address: " + functionAddress + "\"}";
+        }
 
-            // Compute hash for matching
-            String hash = computeNormalizedFunctionHash(program, func);
-            
-            StringBuilder json = new StringBuilder();
+        // Compute hash for matching
+        String hash = computeNormalizedFunctionHash(program, func);
+        
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"hash\": \"").append(hash).append("\", ");
+        json.append("\"source_program\": \"").append(escapeJson(program.getName())).append("\", ");
+        json.append("\"source_address\": \"").append(addr.toString()).append("\", ");
+        json.append("\"function_name\": \"").append(escapeJson(func.getName())).append("\", ");
+        
+        // Return type and calling convention
+        json.append("\"return_type\": \"").append(escapeJson(func.getReturnType().getName())).append("\", ");
+        json.append("\"calling_convention\": \"").append(func.getCallingConventionName() != null ? escapeJson(func.getCallingConventionName()) : "").append("\", ");
+        
+        // Plate comment
+        String plateComment = func.getComment();
+        json.append("\"plate_comment\": ").append(plateComment != null ? "\"" + escapeJson(plateComment) + "\"" : "null").append(", ");
+        
+        // Parameters
+        json.append("\"parameters\": [");
+        Parameter[] params = func.getParameters();
+        for (int i = 0; i < params.length; i++) {
+            if (i > 0) json.append(", ");
+            Parameter p = params[i];
             json.append("{");
-            json.append("\"hash\": \"").append(hash).append("\", ");
-            json.append("\"source_program\": \"").append(escapeJson(program.getName())).append("\", ");
-            json.append("\"source_address\": \"").append(addr.toString()).append("\", ");
-            json.append("\"function_name\": \"").append(escapeJson(func.getName())).append("\", ");
-            
-            // Return type and calling convention
-            json.append("\"return_type\": \"").append(escapeJson(func.getReturnType().getName())).append("\", ");
-            json.append("\"calling_convention\": \"").append(func.getCallingConventionName() != null ? escapeJson(func.getCallingConventionName()) : "").append("\", ");
-            
-            // Plate comment
-            String plateComment = func.getComment();
-            json.append("\"plate_comment\": ").append(plateComment != null ? "\"" + escapeJson(plateComment) + "\"" : "null").append(", ");
-            
-            // Parameters
-            json.append("\"parameters\": [");
-            Parameter[] params = func.getParameters();
-            for (int i = 0; i < params.length; i++) {
-                if (i > 0) json.append(", ");
-                Parameter p = params[i];
-                json.append("{");
-                json.append("\"ordinal\": ").append(p.getOrdinal()).append(", ");
-                json.append("\"name\": \"").append(escapeJson(p.getName())).append("\", ");
-                json.append("\"type\": \"").append(escapeJson(p.getDataType().getName())).append("\", ");
-                json.append("\"comment\": ").append(p.getComment() != null ? "\"" + escapeJson(p.getComment()) + "\"" : "null");
-                json.append("}");
-            }
-            json.append("], ");
-            
-            // Local variables (from decompilation if available)
-            json.append("\"local_variables\": [");
-            DecompileResults decompResults = decompileFunction(func, program);
-            boolean first = true;
-            if (decompResults != null && decompResults.decompileCompleted()) {
-                ghidra.program.model.pcode.HighFunction highFunc = decompResults.getHighFunction();
-                if (highFunc != null) {
-                    Iterator<ghidra.program.model.pcode.HighSymbol> symbols = highFunc.getLocalSymbolMap().getSymbols();
-                    while (symbols.hasNext()) {
-                        ghidra.program.model.pcode.HighSymbol sym = symbols.next();
-                        if (sym.isParameter()) continue; // Skip parameters, handled above
-                        
-                        if (!first) json.append(", ");
-                        first = false;
-                        
-                        json.append("{");
-                        json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\", ");
-                        json.append("\"type\": \"").append(escapeJson(sym.getDataType().getName())).append("\", ");
-                        // Try to get storage info for matching
-                        ghidra.program.model.pcode.HighVariable highVar = sym.getHighVariable();
-                        if (highVar != null && highVar.getRepresentative() != null) {
-                            // Use Varnode's toString() which gives address/register info
-                            json.append("\"storage\": \"").append(escapeJson(highVar.getRepresentative().toString())).append("\"");
-                        } else {
-                            json.append("\"storage\": null");
-                        }
-                        json.append("}");
-                    }
-                }
-            }
-            json.append("], ");
-            
-            // Inline comments (EOL and PRE comments within function body)
-            json.append("\"comments\": [");
-            AddressSetView functionBody = func.getBody();
-            Listing listing = program.getListing();
-            first = true;
-            Address funcStart = func.getEntryPoint();
-            
-            for (Address cAddr : functionBody.getAddresses(true)) {
-                String eolComment = listing.getComment(ghidra.program.model.listing.CodeUnit.EOL_COMMENT, cAddr);
-                String preComment = listing.getComment(ghidra.program.model.listing.CodeUnit.PRE_COMMENT, cAddr);
-                
-                if (eolComment != null || preComment != null) {
+            json.append("\"ordinal\": ").append(p.getOrdinal()).append(", ");
+            json.append("\"name\": \"").append(escapeJson(p.getName())).append("\", ");
+            json.append("\"type\": \"").append(escapeJson(p.getDataType().getName())).append("\", ");
+            json.append("\"comment\": ").append(p.getComment() != null ? "\"" + escapeJson(p.getComment()) + "\"" : "null");
+            json.append("}");
+        }
+        json.append("], ");
+        
+        // Local variables (from decompilation if available)
+        json.append("\"local_variables\": [");
+        DecompileResults decompResults = decompileFunction(func, program);
+        boolean first = true;
+        if (decompResults != null && decompResults.decompileCompleted()) {
+            ghidra.program.model.pcode.HighFunction highFunc = decompResults.getHighFunction();
+            if (highFunc != null) {
+                Iterator<ghidra.program.model.pcode.HighSymbol> symbols = highFunc.getLocalSymbolMap().getSymbols();
+                while (symbols.hasNext()) {
+                    ghidra.program.model.pcode.HighSymbol sym = symbols.next();
+                    if (sym.isParameter()) continue; // Skip parameters, handled above
+                    
                     if (!first) json.append(", ");
                     first = false;
                     
-                    long relOffset = cAddr.subtract(funcStart);
                     json.append("{");
-                    json.append("\"relative_offset\": ").append(relOffset).append(", ");
-                    json.append("\"eol_comment\": ").append(eolComment != null ? "\"" + escapeJson(eolComment) + "\"" : "null").append(", ");
-                    json.append("\"pre_comment\": ").append(preComment != null ? "\"" + escapeJson(preComment) + "\"" : "null");
+                    json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\", ");
+                    json.append("\"type\": \"").append(escapeJson(sym.getDataType().getName())).append("\", ");
+                    // Try to get storage info for matching
+                    ghidra.program.model.pcode.HighVariable highVar = sym.getHighVariable();
+                    if (highVar != null && highVar.getRepresentative() != null) {
+                        // Use Varnode's toString() which gives address/register info
+                        json.append("\"storage\": \"").append(escapeJson(highVar.getRepresentative().toString())).append("\"");
+                    } else {
+                        json.append("\"storage\": null");
+                    }
                     json.append("}");
                 }
             }
-            json.append("], ");
-            
-            // Labels within function
-            json.append("\"labels\": [");
-            first = true;
-            SymbolTable symTable = program.getSymbolTable();
-            for (Address lAddr : functionBody.getAddresses(true)) {
-                Symbol[] symbols = symTable.getSymbols(lAddr);
-                for (Symbol sym : symbols) {
-                    if (sym.getSymbolType() == SymbolType.LABEL && !sym.getName().equals(func.getName())) {
-                        if (!first) json.append(", ");
-                        first = false;
-                        
-                        long relOffset = lAddr.subtract(funcStart);
-                        json.append("{");
-                        json.append("\"relative_offset\": ").append(relOffset).append(", ");
-                        json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\"");
-                        json.append("}");
-                    }
-                }
-            }
-            json.append("], ");
-            
-            // Completeness score
-            List<String> undefinedVars = new ArrayList<>();
-            for (Parameter param : func.getParameters()) {
-                if (param.getName().startsWith("param_")) {
-                    undefinedVars.add(param.getName());
-                }
-                if (param.getDataType().getName().startsWith("undefined")) {
-                    undefinedVars.add(param.getName());
-                }
-            }
-            
-            double completenessScore = calculateCompletenessScore(func, undefinedVars.size(), 0, 0, 0, 0, 0, 0);
-            json.append("\"completeness_score\": ").append(completenessScore);
-            
-            json.append("}");
-            return json.toString();
-            
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to export documentation: " + escapeJson(e.getMessage()) + "\"}";
         }
+        json.append("], ");
+        
+        // Inline comments (EOL and PRE comments within function body)
+        json.append("\"comments\": [");
+        AddressSetView functionBody = func.getBody();
+        Listing listing = program.getListing();
+        first = true;
+        Address funcStart = func.getEntryPoint();
+        
+        for (Address cAddr : functionBody.getAddresses(true)) {
+            String eolComment = listing.getComment(ghidra.program.model.listing.CodeUnit.EOL_COMMENT, cAddr);
+            String preComment = listing.getComment(ghidra.program.model.listing.CodeUnit.PRE_COMMENT, cAddr);
+            
+            if (eolComment != null || preComment != null) {
+                if (!first) json.append(", ");
+                first = false;
+                
+                long relOffset = cAddr.subtract(funcStart);
+                json.append("{");
+                json.append("\"relative_offset\": ").append(relOffset).append(", ");
+                json.append("\"eol_comment\": ").append(eolComment != null ? "\"" + escapeJson(eolComment) + "\"" : "null").append(", ");
+                json.append("\"pre_comment\": ").append(preComment != null ? "\"" + escapeJson(preComment) + "\"" : "null");
+                json.append("}");
+            }
+        }
+        json.append("], ");
+        
+        // Labels within function
+        json.append("\"labels\": [");
+        first = true;
+        SymbolTable symTable = program.getSymbolTable();
+        for (Address lAddr : functionBody.getAddresses(true)) {
+            Symbol[] symbols = symTable.getSymbols(lAddr);
+            for (Symbol sym : symbols) {
+                if (sym.getSymbolType() == SymbolType.LABEL && !sym.getName().equals(func.getName())) {
+                    if (!first) json.append(", ");
+                    first = false;
+                    
+                    long relOffset = lAddr.subtract(funcStart);
+                    json.append("{");
+                    json.append("\"relative_offset\": ").append(relOffset).append(", ");
+                    json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\"");
+                    json.append("}");
+                }
+            }
+        }
+        json.append("], ");
+        
+        // Completeness score
+        List<String> undefinedVars = new ArrayList<>();
+        for (Parameter param : func.getParameters()) {
+            if (param.getName().startsWith("param_")) {
+                undefinedVars.add(param.getName());
+            }
+            if (param.getDataType().getName().startsWith("undefined")) {
+                undefinedVars.add(param.getName());
+            }
+        }
+        
+        double completenessScore = calculateCompletenessScore(func, undefinedVars.size(), 0, 0, 0, 0, 0, 0);
+        json.append("\"completeness_score\": ").append(completenessScore);
+        
+        json.append("}");
+        return json.toString();
+        
     }
 
     /**
      * Apply documentation from a source function to a target function.
      * Expects JSON body with: target_address, source_documentation (from getFunctionDocumentation)
      */
-    private String applyFunctionDocumentation(String jsonBody) {
+    private String applyFunctionDocumentation(String jsonBody) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            // Parse JSON manually (simple parsing for this format)
-            String targetAddress = extractJsonString(jsonBody, "target_address");
-            String functionName = extractJsonString(jsonBody, "function_name");
-            String returnType = extractJsonString(jsonBody, "return_type");
-            String callingConvention = extractJsonString(jsonBody, "calling_convention");
-            String plateComment = extractJsonString(jsonBody, "plate_comment");
-            
-            if (targetAddress == null) {
-                return "{\"error\": \"target_address is required\"}";
-            }
-
-            Address addr = program.getAddressFactory().getAddress(targetAddress);
-            if (addr == null) {
-                return "{\"error\": \"Invalid target address: " + targetAddress + "\"}";
-            }
-
-            Function func = program.getFunctionManager().getFunctionAt(addr);
-            if (func == null) {
-                return "{\"error\": \"No function at target address: " + targetAddress + "\"}";
-            }
-
-            final AtomicBoolean success = new AtomicBoolean(false);
-            final AtomicReference<String> errorMsg = new AtomicReference<>(null);
-            final AtomicInteger changesApplied = new AtomicInteger(0);
-
-            try {
-                SwingUtilities.invokeAndWait(() -> {
-                    int tx = program.startTransaction("Apply Function Documentation");
-                    try {
-                        // Apply function name
-                        if (functionName != null && !functionName.isEmpty() && !functionName.equals(func.getName())) {
-                            try {
-                                func.setName(functionName, SourceType.USER_DEFINED);
-                                changesApplied.incrementAndGet();
-                            } catch (Exception e) {
-                                Msg.warn(this, "Could not set function name: " + e.getMessage());
-                            }
-                        }
-                        
-                        // Apply plate comment
-                        if (plateComment != null && !plateComment.isEmpty()) {
-                            func.setComment(plateComment);
-                            changesApplied.incrementAndGet();
-                        }
-                        
-                        // Apply calling convention
-                        if (callingConvention != null && !callingConvention.isEmpty()) {
-                            try {
-                                func.setCallingConvention(callingConvention);
-                                changesApplied.incrementAndGet();
-                            } catch (Exception e) {
-                                Msg.warn(this, "Could not set calling convention: " + e.getMessage());
-                            }
-                        }
-                        
-                        // Apply return type
-                        if (returnType != null && !returnType.isEmpty()) {
-                            DataType dt = findDataTypeByNameInAllCategories(program.getDataTypeManager(), returnType);
-                            if (dt != null) {
-                                try {
-                                    func.setReturnType(dt, SourceType.USER_DEFINED);
-                                    changesApplied.incrementAndGet();
-                                } catch (Exception e) {
-                                    Msg.warn(this, "Could not set return type: " + e.getMessage());
-                                }
-                            }
-                        }
-                        
-                        // Apply parameter names and types from JSON array
-                        String paramsJson = extractJsonArray(jsonBody, "parameters");
-                        if (paramsJson != null) {
-                            applyParameterDocumentation(func, program, paramsJson, changesApplied);
-                        }
-                        
-                        // Apply comments from JSON array
-                        String commentsJson = extractJsonArray(jsonBody, "comments");
-                        if (commentsJson != null) {
-                            applyCommentsDocumentation(func, program, commentsJson, changesApplied);
-                        }
-                        
-                        // Apply labels from JSON array
-                        String labelsJson = extractJsonArray(jsonBody, "labels");
-                        if (labelsJson != null) {
-                            applyLabelsDocumentation(func, program, labelsJson, changesApplied);
-                        }
-                        
-                        success.set(true);
-                    } catch (Exception e) {
-                        errorMsg.set(e.getMessage());
-                    } finally {
-                        program.endTransaction(tx, success.get());
-                    }
-                });
-            } catch (Exception e) {
-                return "{\"error\": \"Failed to apply documentation: " + escapeJson(e.getMessage()) + "\"}";
-            }
-
-            if (success.get()) {
-                return "{\"success\": true, \"changes_applied\": " + changesApplied.get() + 
-                       ", \"function\": \"" + escapeJson(func.getName()) + "\", " +
-                       "\"address\": \"" + addr.toString() + "\"}";
-            } else {
-                return "{\"error\": \"" + (errorMsg.get() != null ? escapeJson(errorMsg.get()) : "Unknown error") + "\"}";
-            }
-
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to parse documentation JSON: " + escapeJson(e.getMessage()) + "\"}";
+        // Parse JSON manually (simple parsing for this format)
+        String targetAddress = extractJsonString(jsonBody, "target_address");
+        String functionName = extractJsonString(jsonBody, "function_name");
+        String returnType = extractJsonString(jsonBody, "return_type");
+        String callingConvention = extractJsonString(jsonBody, "calling_convention");
+        String plateComment = extractJsonString(jsonBody, "plate_comment");
+        
+        if (targetAddress == null) {
+            return "{\"error\": \"target_address is required\"}";
         }
+
+        Address addr = program.getAddressFactory().getAddress(targetAddress);
+        if (addr == null) {
+            return "{\"error\": \"Invalid target address: " + targetAddress + "\"}";
+        }
+
+        Function func = program.getFunctionManager().getFunctionAt(addr);
+        if (func == null) {
+            return "{\"error\": \"No function at target address: " + targetAddress + "\"}";
+        }
+
+        final AtomicBoolean success = new AtomicBoolean(false);
+        final AtomicReference<String> errorMsg = new AtomicReference<>(null);
+        final AtomicInteger changesApplied = new AtomicInteger(0);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Apply Function Documentation");
+                try {
+                    // Apply function name
+                    if (functionName != null && !functionName.isEmpty() && !functionName.equals(func.getName())) {
+                        try {
+                            func.setName(functionName, SourceType.USER_DEFINED);
+                            changesApplied.incrementAndGet();
+                        } catch (Exception e) {
+                            Msg.warn(this, "Could not set function name: " + e.getMessage());
+                        }
+                    }
+                    
+                    // Apply plate comment
+                    if (plateComment != null && !plateComment.isEmpty()) {
+                        func.setComment(plateComment);
+                        changesApplied.incrementAndGet();
+                    }
+                    
+                    // Apply calling convention
+                    if (callingConvention != null && !callingConvention.isEmpty()) {
+                        try {
+                            func.setCallingConvention(callingConvention);
+                            changesApplied.incrementAndGet();
+                        } catch (Exception e) {
+                            Msg.warn(this, "Could not set calling convention: " + e.getMessage());
+                        }
+                    }
+                    
+                    // Apply return type
+                    if (returnType != null && !returnType.isEmpty()) {
+                        DataType dt = findDataTypeByNameInAllCategories(program.getDataTypeManager(), returnType);
+                        if (dt != null) {
+                            try {
+                                func.setReturnType(dt, SourceType.USER_DEFINED);
+                                changesApplied.incrementAndGet();
+                            } catch (Exception e) {
+                                Msg.warn(this, "Could not set return type: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // Apply parameter names and types from JSON array
+                    String paramsJson = extractJsonArray(jsonBody, "parameters");
+                    if (paramsJson != null) {
+                        applyParameterDocumentation(func, program, paramsJson, changesApplied);
+                    }
+                    
+                    // Apply comments from JSON array
+                    String commentsJson = extractJsonArray(jsonBody, "comments");
+                    if (commentsJson != null) {
+                        applyCommentsDocumentation(func, program, commentsJson, changesApplied);
+                    }
+                    
+                    // Apply labels from JSON array
+                    String labelsJson = extractJsonArray(jsonBody, "labels");
+                    if (labelsJson != null) {
+                        applyLabelsDocumentation(func, program, labelsJson, changesApplied);
+                    }
+                    
+                    success.set(true);
+                } catch (Exception e) {
+                    errorMsg.set(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (Exception e) {
+            return "{\"error\": \"Failed to apply documentation: " + escapeJson(e.getMessage()) + "\"}";
+        }
+
+        if (success.get()) {
+            return "{\"success\": true, \"changes_applied\": " + changesApplied.get() + 
+                   ", \"function\": \"" + escapeJson(func.getName()) + "\", " +
+                   "\"address\": \"" + addr.toString() + "\"}";
+        } else {
+            return "{\"error\": \"" + (errorMsg.get() != null ? escapeJson(errorMsg.get()) : "Unknown error") + "\"}";
+        }
+
     }
 
     /**
@@ -4287,105 +4278,97 @@ public class EndpointRouter {
     /**
      * Validate if a data type fits at a given address
      */
-    private String validateDataType(String addressStr, String typeName) {
+    private String validateDataType(String addressStr, String typeName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
         if (typeName == null || typeName.isEmpty()) return "Type name is required";
 
-        try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            DataTypeManager dtm = program.getDataTypeManager();
-            DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
 
-            if (dataType == null) {
-                return "Data type not found: " + typeName;
-            }
-
-            StringBuilder result = new StringBuilder();
-            result.append("Validation for type '").append(typeName).append("' at address ").append(addressStr).append(":\n\n");
-
-            // Check if memory is available
-            Memory memory = program.getMemory();
-            int typeSize = dataType.getLength();
-            Address endAddr = addr.add(typeSize - 1);
-
-            if (!memory.contains(addr) || !memory.contains(endAddr)) {
-                result.append("❌ Memory range not available\n");
-                result.append("   Required: ").append(addr).append(" - ").append(endAddr).append("\n");
-                return result.toString();
-            }
-
-            result.append("✅ Memory range available\n");
-            result.append("   Range: ").append(addr).append(" - ").append(endAddr).append(" (").append(typeSize).append(" bytes)\n");
-
-            // Check alignment
-            long alignment = dataType.getAlignment();
-            if (alignment > 1 && addr.getOffset() % alignment != 0) {
-                result.append("⚠️  Alignment warning: Address not aligned to ").append(alignment).append("-byte boundary\n");
-            } else {
-                result.append("✅ Proper alignment\n");
-            }
-
-            // Check if there's existing data
-            Data existingData = program.getListing().getDefinedDataAt(addr);
-            if (existingData != null) {
-                result.append("⚠️  Existing data: ").append(existingData.getDataType().getName()).append("\n");
-            } else {
-                result.append("✅ No conflicting data\n");
-            }
-
-            return result.toString();
-        } catch (Exception e) {
-            return "Error validating data type: " + e.getMessage();
+        if (dataType == null) {
+            return "Data type not found: " + typeName;
         }
+
+        StringBuilder result = new StringBuilder();
+        result.append("Validation for type '").append(typeName).append("' at address ").append(addressStr).append(":\n\n");
+
+        // Check if memory is available
+        Memory memory = program.getMemory();
+        int typeSize = dataType.getLength();
+        Address endAddr = addr.add(typeSize - 1);
+
+        if (!memory.contains(addr) || !memory.contains(endAddr)) {
+            result.append("❌ Memory range not available\n");
+            result.append("   Required: ").append(addr).append(" - ").append(endAddr).append("\n");
+            return result.toString();
+        }
+
+        result.append("✅ Memory range available\n");
+        result.append("   Range: ").append(addr).append(" - ").append(endAddr).append(" (").append(typeSize).append(" bytes)\n");
+
+        // Check alignment
+        long alignment = dataType.getAlignment();
+        if (alignment > 1 && addr.getOffset() % alignment != 0) {
+            result.append("⚠️  Alignment warning: Address not aligned to ").append(alignment).append("-byte boundary\n");
+        } else {
+            result.append("✅ Proper alignment\n");
+        }
+
+        // Check if there's existing data
+        Data existingData = program.getListing().getDefinedDataAt(addr);
+        if (existingData != null) {
+            result.append("⚠️  Existing data: ").append(existingData.getDataType().getName()).append("\n");
+        } else {
+            result.append("✅ No conflicting data\n");
+        }
+
+        return result.toString();
     }
 
     /**
      * Read memory at a specific address
      */
-    private String readMemory(String addressStr, int length, String programName) {
-        try {
-            Object[] programResult = getProgramOrError(programName);
-            Program program = (Program) programResult[0];
-            if (program == null) {
-                return "{\"error\":\"" + escapeJson((String) programResult[1]) + "\"}";
-            }
-
-            Address address = program.getAddressFactory().getAddress(addressStr);
-            if (address == null) {
-                return "{\"error\":\"Invalid address: " + addressStr + "\"}";
-            }
-
-            Memory memory = program.getMemory();
-            byte[] bytes = new byte[length];
-            
-            int bytesRead = memory.getBytes(address, bytes);
-            
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"address\":\"").append(address.toString()).append("\",");
-            json.append("\"length\":").append(bytesRead).append(",");
-            json.append("\"data\":[");
-            
-            for (int i = 0; i < bytesRead; i++) {
-                if (i > 0) json.append(",");
-                json.append(bytes[i] & 0xFF);
-            }
-            
-            json.append("],");
-            json.append("\"hex\":\"");
-            for (int i = 0; i < bytesRead; i++) {
-                json.append(String.format("%02x", bytes[i] & 0xFF));
-            }
-            json.append("\"");
-            json.append("}");
-            
-            return json.toString();
-            
-        } catch (Exception e) {
-            return "{\"error\":\"Failed to read memory: " + e.getMessage() + "\"}";
+    private String readMemory(String addressStr, int length, String programName) throws Exception {
+        Object[] programResult = getProgramOrError(programName);
+        Program program = (Program) programResult[0];
+        if (program == null) {
+            return "{\"error\":\"" + escapeJson((String) programResult[1]) + "\"}";
         }
+
+        Address address = program.getAddressFactory().getAddress(addressStr);
+        if (address == null) {
+            return "{\"error\":\"Invalid address: " + addressStr + "\"}";
+        }
+
+        Memory memory = program.getMemory();
+        byte[] bytes = new byte[length];
+        
+        int bytesRead = memory.getBytes(address, bytes);
+        
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"address\":\"").append(address.toString()).append("\",");
+        json.append("\"length\":").append(bytesRead).append(",");
+        json.append("\"data\":[");
+        
+        for (int i = 0; i < bytesRead; i++) {
+            if (i > 0) json.append(",");
+            json.append(bytes[i] & 0xFF);
+        }
+        
+        json.append("],");
+        json.append("\"hex\":\"");
+        for (int i = 0; i < bytesRead; i++) {
+            json.append(String.format("%02x", bytes[i] & 0xFF));
+        }
+        json.append("\"");
+        json.append("}");
+        
+        return json.toString();
+        
     }
     
     /**
@@ -4402,20 +4385,16 @@ public class EndpointRouter {
     /**
      * Create a new data type category
      */
-    private String createDataTypeCategory(String categoryPath) {
+    private String createDataTypeCategory(String categoryPath) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         if (categoryPath == null || categoryPath.isEmpty()) return "Category path is required";
 
-        try {
-            DataTypeManager dtm = program.getDataTypeManager();
-            CategoryPath catPath = new CategoryPath(categoryPath);
-            Category category = dtm.createCategory(catPath);
-            
-            return "Successfully created category: " + category.getCategoryPathName();
-        } catch (Exception e) {
-            return "Error creating category: " + e.getMessage();
-        }
+        DataTypeManager dtm = program.getDataTypeManager();
+        CategoryPath catPath = new CategoryPath(categoryPath);
+        Category category = dtm.createCategory(catPath);
+        
+        return "Successfully created category: " + category.getCategoryPathName();
     }
 
     /**
@@ -4468,21 +4447,17 @@ public class EndpointRouter {
     /**
      * List all data type categories
      */
-    private String listDataTypeCategories(int offset, int limit) {
+    private String listDataTypeCategories(int offset, int limit) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
 
-        try {
-            DataTypeManager dtm = program.getDataTypeManager();
-            List<String> categories = new ArrayList<>();
-            
-            // Get all categories recursively
-            addCategoriesRecursively(dtm.getRootCategory(), categories, "");
-            
-            return paginateList(categories, offset, limit);
-        } catch (Exception e) {
-            return "Error listing categories: " + e.getMessage();
-        }
+        DataTypeManager dtm = program.getDataTypeManager();
+        List<String> categories = new ArrayList<>();
+        
+        // Get all categories recursively
+        addCategoriesRecursively(dtm.getRootCategory(), categories, "");
+        
+        return paginateList(categories, offset, limit);
     }
 
     /**
@@ -4595,7 +4570,7 @@ public class EndpointRouter {
      */
     private String applyDataClassification(String addressStr, String classification,
                                            String name, String comment,
-                                           Object typeDefinitionObj) {
+                                           Object typeDefinitionObj) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "{\"error\": \"No program loaded\"}";
 
@@ -4603,236 +4578,232 @@ public class EndpointRouter {
         final AtomicReference<String> typeApplied = new AtomicReference<>("none");
         final List<String> operations = new ArrayList<>();
 
-        try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            if (addr == null) {
-                return "{\"error\": \"Invalid address: " + escapeJson(addressStr) + "\"}";
-            }
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) {
+            return "{\"error\": \"Invalid address: " + escapeJson(addressStr) + "\"}";
+        }
 
-            // Parse type_definition from the object
-            @SuppressWarnings("unchecked")
-            final Map<String, Object> typeDef;
-            if (typeDefinitionObj instanceof Map) {
-                typeDef = (Map<String, Object>) typeDefinitionObj;
-            } else if (typeDefinitionObj == null) {
-                typeDef = null;
-            } else {
-                // Received something unexpected - log it for debugging
-                return "{\"error\": \"type_definition must be a JSON object/dict, got: " +
-                       escapeJson(typeDefinitionObj.getClass().getSimpleName()) +
-                       " with value: " + escapeJson(String.valueOf(typeDefinitionObj)) + "\"}";
-            }
+        // Parse type_definition from the object
+        @SuppressWarnings("unchecked")
+        final Map<String, Object> typeDef;
+        if (typeDefinitionObj instanceof Map) {
+            typeDef = (Map<String, Object>) typeDefinitionObj;
+        } else if (typeDefinitionObj == null) {
+            typeDef = null;
+        } else {
+            // Received something unexpected - log it for debugging
+            return "{\"error\": \"type_definition must be a JSON object/dict, got: " +
+                   escapeJson(typeDefinitionObj.getClass().getSimpleName()) +
+                   " with value: " + escapeJson(String.valueOf(typeDefinitionObj)) + "\"}";
+        }
 
-            final String finalClassification = classification;
-            final String finalName = name;
-            final String finalComment = comment;
+        final String finalClassification = classification;
+        final String finalName = name;
+        final String finalComment = comment;
 
-            // Atomic transaction for all operations
-            SwingUtilities.invokeAndWait(() -> {
-                int txId = program.startTransaction("Apply Data Classification");
-                boolean success = false;
+        // Atomic transaction for all operations
+        SwingUtilities.invokeAndWait(() -> {
+            int txId = program.startTransaction("Apply Data Classification");
+            boolean success = false;
 
-                try {
-                    DataTypeManager dtm = program.getDataTypeManager();
-                    Listing listing = program.getListing();
-                    DataType dataTypeToApply = null;
+            try {
+                DataTypeManager dtm = program.getDataTypeManager();
+                Listing listing = program.getListing();
+                DataType dataTypeToApply = null;
 
-                    // 1. CREATE/RESOLVE DATA TYPE based on classification
-                    if ("PRIMITIVE".equals(finalClassification)) {
-                        // CRITICAL FIX: Require type_definition for PRIMITIVE classification
-                        if (typeDef == null) {
-                            throw new IllegalArgumentException(
-                                "PRIMITIVE classification requires type_definition parameter. " +
-                                "Example: type_definition='{\"type\": \"dword\"}' or type_definition={\"type\": \"dword\"}");
+                // 1. CREATE/RESOLVE DATA TYPE based on classification
+                if ("PRIMITIVE".equals(finalClassification)) {
+                    // CRITICAL FIX: Require type_definition for PRIMITIVE classification
+                    if (typeDef == null) {
+                        throw new IllegalArgumentException(
+                            "PRIMITIVE classification requires type_definition parameter. " +
+                            "Example: type_definition='{\"type\": \"dword\"}' or type_definition={\"type\": \"dword\"}");
+                    }
+                    if (!typeDef.containsKey("type")) {
+                        throw new IllegalArgumentException(
+                            "PRIMITIVE classification requires 'type' field in type_definition. " +
+                            "Received: " + typeDef.keySet() + ". " +
+                            "Example: {\"type\": \"dword\"}");
+                    }
+
+                    String typeStr = (String) typeDef.get("type");
+                    dataTypeToApply = resolveDataType(dtm, typeStr);
+                    if (dataTypeToApply != null) {
+                        typeApplied.set(typeStr);
+                        operations.add("resolved_primitive_type");
+                    } else {
+                        throw new IllegalArgumentException("Failed to resolve primitive type: " + typeStr);
+                    }
+                }
+                else if ("STRUCTURE".equals(finalClassification)) {
+                    // CRITICAL FIX: Require type_definition for STRUCTURE classification
+                    if (typeDef == null || !typeDef.containsKey("name") || !typeDef.containsKey("fields")) {
+                        throw new IllegalArgumentException(
+                            "STRUCTURE classification requires type_definition with 'name' and 'fields'. " +
+                            "Example: {\"name\": \"MyStruct\", \"fields\": [{\"name\": \"field1\", \"type\": \"dword\"}]}");
+                    }
+
+                    String structName = (String) typeDef.get("name");
+                    Object fieldsObj = typeDef.get("fields");
+
+                    // Check if structure already exists
+                    DataType existing = dtm.getDataType("/" + structName);
+                    if (existing != null) {
+                        dataTypeToApply = existing;
+                        typeApplied.set(structName);
+                        operations.add("found_existing_structure");
+                    } else {
+                        // Create new structure
+                        StructureDataType struct = new StructureDataType(structName, 0);
+
+                        // Parse fields
+                        if (fieldsObj instanceof List) {
+                            @SuppressWarnings("unchecked")
+                            List<Map<String, Object>> fieldsList = (List<Map<String, Object>>) fieldsObj;
+                            for (Map<String, Object> field : fieldsList) {
+                                String fieldName = (String) field.get("name");
+                                String fieldType = (String) field.get("type");
+
+                                DataType fieldDataType = resolveDataType(dtm, fieldType);
+                                if (fieldDataType != null) {
+                                    struct.add(fieldDataType, fieldDataType.getLength(), fieldName, "");
+                                }
+                            }
                         }
-                        if (!typeDef.containsKey("type")) {
-                            throw new IllegalArgumentException(
-                                "PRIMITIVE classification requires 'type' field in type_definition. " +
-                                "Received: " + typeDef.keySet() + ". " +
-                                "Example: {\"type\": \"dword\"}");
-                        }
 
+                        dataTypeToApply = dtm.addDataType(struct, null);
+                        typeApplied.set(structName);
+                        operations.add("created_structure");
+                    }
+                }
+                else if ("ARRAY".equals(finalClassification)) {
+                    // CRITICAL FIX: Require type_definition for ARRAY classification
+                    if (typeDef == null) {
+                        throw new IllegalArgumentException(
+                            "ARRAY classification requires type_definition with 'element_type' or 'element_struct', and 'count'. " +
+                            "Example: {\"element_type\": \"dword\", \"count\": 64}");
+                    }
+
+                    DataType elementType = null;
+                    int count = 1;
+
+                    // Support element_type or element_struct
+                    if (typeDef.containsKey("element_type")) {
+                        String elementTypeStr = (String) typeDef.get("element_type");
+                        elementType = resolveDataType(dtm, elementTypeStr);
+                        if (elementType == null) {
+                            throw new IllegalArgumentException("Failed to resolve array element type: " + elementTypeStr);
+                        }
+                    } else if (typeDef.containsKey("element_struct")) {
+                        String structName = (String) typeDef.get("element_struct");
+                        elementType = dtm.getDataType("/" + structName);
+                        if (elementType == null) {
+                            throw new IllegalArgumentException("Failed to find struct for array element: " + structName);
+                        }
+                    } else {
+                        throw new IllegalArgumentException(
+                            "ARRAY type_definition must contain 'element_type' or 'element_struct'");
+                    }
+
+                    if (typeDef.containsKey("count")) {
+                        Object countObj = typeDef.get("count");
+                        if (countObj instanceof Integer) {
+                            count = (Integer) countObj;
+                        } else if (countObj instanceof String) {
+                            count = Integer.parseInt((String) countObj);
+                        }
+                    } else {
+                        throw new IllegalArgumentException("ARRAY type_definition must contain 'count' field");
+                    }
+
+                    if (count <= 0) {
+                        throw new IllegalArgumentException("Array count must be positive, got: " + count);
+                    }
+
+                    ArrayDataType arrayType = new ArrayDataType(elementType, count, elementType.getLength());
+                    dataTypeToApply = arrayType;
+                    typeApplied.set(elementType.getName() + "[" + count + "]");
+                    operations.add("created_array");
+                }
+                else if ("STRING".equals(finalClassification)) {
+                    if (typeDef != null && typeDef.containsKey("type")) {
                         String typeStr = (String) typeDef.get("type");
                         dataTypeToApply = resolveDataType(dtm, typeStr);
                         if (dataTypeToApply != null) {
                             typeApplied.set(typeStr);
-                            operations.add("resolved_primitive_type");
-                        } else {
-                            throw new IllegalArgumentException("Failed to resolve primitive type: " + typeStr);
+                            operations.add("resolved_string_type");
                         }
                     }
-                    else if ("STRUCTURE".equals(finalClassification)) {
-                        // CRITICAL FIX: Require type_definition for STRUCTURE classification
-                        if (typeDef == null || !typeDef.containsKey("name") || !typeDef.containsKey("fields")) {
-                            throw new IllegalArgumentException(
-                                "STRUCTURE classification requires type_definition with 'name' and 'fields'. " +
-                                "Example: {\"name\": \"MyStruct\", \"fields\": [{\"name\": \"field1\", \"type\": \"dword\"}]}");
-                        }
-
-                        String structName = (String) typeDef.get("name");
-                        Object fieldsObj = typeDef.get("fields");
-
-                        // Check if structure already exists
-                        DataType existing = dtm.getDataType("/" + structName);
-                        if (existing != null) {
-                            dataTypeToApply = existing;
-                            typeApplied.set(structName);
-                            operations.add("found_existing_structure");
-                        } else {
-                            // Create new structure
-                            StructureDataType struct = new StructureDataType(structName, 0);
-
-                            // Parse fields
-                            if (fieldsObj instanceof List) {
-                                @SuppressWarnings("unchecked")
-                                List<Map<String, Object>> fieldsList = (List<Map<String, Object>>) fieldsObj;
-                                for (Map<String, Object> field : fieldsList) {
-                                    String fieldName = (String) field.get("name");
-                                    String fieldType = (String) field.get("type");
-
-                                    DataType fieldDataType = resolveDataType(dtm, fieldType);
-                                    if (fieldDataType != null) {
-                                        struct.add(fieldDataType, fieldDataType.getLength(), fieldName, "");
-                                    }
-                                }
-                            }
-
-                            dataTypeToApply = dtm.addDataType(struct, null);
-                            typeApplied.set(structName);
-                            operations.add("created_structure");
-                        }
-                    }
-                    else if ("ARRAY".equals(finalClassification)) {
-                        // CRITICAL FIX: Require type_definition for ARRAY classification
-                        if (typeDef == null) {
-                            throw new IllegalArgumentException(
-                                "ARRAY classification requires type_definition with 'element_type' or 'element_struct', and 'count'. " +
-                                "Example: {\"element_type\": \"dword\", \"count\": 64}");
-                        }
-
-                        DataType elementType = null;
-                        int count = 1;
-
-                        // Support element_type or element_struct
-                        if (typeDef.containsKey("element_type")) {
-                            String elementTypeStr = (String) typeDef.get("element_type");
-                            elementType = resolveDataType(dtm, elementTypeStr);
-                            if (elementType == null) {
-                                throw new IllegalArgumentException("Failed to resolve array element type: " + elementTypeStr);
-                            }
-                        } else if (typeDef.containsKey("element_struct")) {
-                            String structName = (String) typeDef.get("element_struct");
-                            elementType = dtm.getDataType("/" + structName);
-                            if (elementType == null) {
-                                throw new IllegalArgumentException("Failed to find struct for array element: " + structName);
-                            }
-                        } else {
-                            throw new IllegalArgumentException(
-                                "ARRAY type_definition must contain 'element_type' or 'element_struct'");
-                        }
-
-                        if (typeDef.containsKey("count")) {
-                            Object countObj = typeDef.get("count");
-                            if (countObj instanceof Integer) {
-                                count = (Integer) countObj;
-                            } else if (countObj instanceof String) {
-                                count = Integer.parseInt((String) countObj);
-                            }
-                        } else {
-                            throw new IllegalArgumentException("ARRAY type_definition must contain 'count' field");
-                        }
-
-                        if (count <= 0) {
-                            throw new IllegalArgumentException("Array count must be positive, got: " + count);
-                        }
-
-                        ArrayDataType arrayType = new ArrayDataType(elementType, count, elementType.getLength());
-                        dataTypeToApply = arrayType;
-                        typeApplied.set(elementType.getName() + "[" + count + "]");
-                        operations.add("created_array");
-                    }
-                    else if ("STRING".equals(finalClassification)) {
-                        if (typeDef != null && typeDef.containsKey("type")) {
-                            String typeStr = (String) typeDef.get("type");
-                            dataTypeToApply = resolveDataType(dtm, typeStr);
-                            if (dataTypeToApply != null) {
-                                typeApplied.set(typeStr);
-                                operations.add("resolved_string_type");
-                            }
-                        }
-                    }
-
-                    // 2. APPLY DATA TYPE
-                    if (dataTypeToApply != null) {
-                        // Clear existing code/data
-                        CodeUnit existingCU = listing.getCodeUnitAt(addr);
-                        if (existingCU != null) {
-                            listing.clearCodeUnits(addr,
-                                addr.add(Math.max(dataTypeToApply.getLength() - 1, 0)), false);
-                        }
-
-                        listing.createData(addr, dataTypeToApply);
-                        operations.add("applied_type");
-                    }
-
-                    // 3. RENAME (if name provided)
-                    if (finalName != null && !finalName.isEmpty()) {
-                        Data data = listing.getDefinedDataAt(addr);
-                        if (data != null) {
-                            SymbolTable symTable = program.getSymbolTable();
-                            Symbol symbol = symTable.getPrimarySymbol(addr);
-                            if (symbol != null) {
-                                symbol.setName(finalName, SourceType.USER_DEFINED);
-                            } else {
-                                symTable.createLabel(addr, finalName, SourceType.USER_DEFINED);
-                            }
-                            operations.add("renamed");
-                        }
-                    }
-
-                    // 4. SET COMMENT (if provided)
-                    if (finalComment != null && !finalComment.isEmpty()) {
-                        // CRITICAL FIX: Unescape newlines before setting comment
-                        String unescapedComment = finalComment.replace("\\n", "\n")
-                                                             .replace("\\t", "\t")
-                                                             .replace("\\r", "\r");
-                        listing.setComment(addr, CodeUnit.PRE_COMMENT, unescapedComment);
-                        operations.add("commented");
-                    }
-
-                    success = true;
-
-                } catch (Exception e) {
-                    resultJson.append("{\"error\": \"").append(escapeJson(e.getMessage())).append("\"}");
-                } finally {
-                    program.endTransaction(txId, success);
                 }
-            });
 
-            // Build result JSON if no error
-            if (resultJson.length() == 0) {
-                resultJson.append("{");
-                resultJson.append("\"success\": true,");
-                resultJson.append("\"address\": \"").append(escapeJson(addressStr)).append("\",");
-                resultJson.append("\"classification\": \"").append(escapeJson(classification)).append("\",");
-                if (name != null) {
-                    resultJson.append("\"name\": \"").append(escapeJson(name)).append("\",");
+                // 2. APPLY DATA TYPE
+                if (dataTypeToApply != null) {
+                    // Clear existing code/data
+                    CodeUnit existingCU = listing.getCodeUnitAt(addr);
+                    if (existingCU != null) {
+                        listing.clearCodeUnits(addr,
+                            addr.add(Math.max(dataTypeToApply.getLength() - 1, 0)), false);
+                    }
+
+                    listing.createData(addr, dataTypeToApply);
+                    operations.add("applied_type");
                 }
-                resultJson.append("\"type_applied\": \"").append(escapeJson(typeApplied.get())).append("\",");
-                resultJson.append("\"operations_performed\": [");
-                for (int i = 0; i < operations.size(); i++) {
-                    resultJson.append("\"").append(escapeJson(operations.get(i))).append("\"");
-                    if (i < operations.size() - 1) resultJson.append(",");
+
+                // 3. RENAME (if name provided)
+                if (finalName != null && !finalName.isEmpty()) {
+                    Data data = listing.getDefinedDataAt(addr);
+                    if (data != null) {
+                        SymbolTable symTable = program.getSymbolTable();
+                        Symbol symbol = symTable.getPrimarySymbol(addr);
+                        if (symbol != null) {
+                            symbol.setName(finalName, SourceType.USER_DEFINED);
+                        } else {
+                            symTable.createLabel(addr, finalName, SourceType.USER_DEFINED);
+                        }
+                        operations.add("renamed");
+                    }
                 }
-                resultJson.append("]");
-                resultJson.append("}");
+
+                // 4. SET COMMENT (if provided)
+                if (finalComment != null && !finalComment.isEmpty()) {
+                    // CRITICAL FIX: Unescape newlines before setting comment
+                    String unescapedComment = finalComment.replace("\\n", "\n")
+                                                         .replace("\\t", "\t")
+                                                         .replace("\\r", "\r");
+                    listing.setComment(addr, CodeUnit.PRE_COMMENT, unescapedComment);
+                    operations.add("commented");
+                }
+
+                success = true;
+
+            } catch (Exception e) {
+                resultJson.append("{\"error\": \"").append(escapeJson(e.getMessage())).append("\"}");
+            } finally {
+                program.endTransaction(txId, success);
             }
+        });
 
-            return resultJson.toString();
-
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+        // Build result JSON if no error
+        if (resultJson.length() == 0) {
+            resultJson.append("{");
+            resultJson.append("\"success\": true,");
+            resultJson.append("\"address\": \"").append(escapeJson(addressStr)).append("\",");
+            resultJson.append("\"classification\": \"").append(escapeJson(classification)).append("\",");
+            if (name != null) {
+                resultJson.append("\"name\": \"").append(escapeJson(name)).append("\",");
+            }
+            resultJson.append("\"type_applied\": \"").append(escapeJson(typeApplied.get())).append("\",");
+            resultJson.append("\"operations_performed\": [");
+            for (int i = 0; i < operations.size(); i++) {
+                resultJson.append("\"").append(escapeJson(operations.get(i))).append("\"");
+                if (i < operations.size() - 1) resultJson.append(",");
+            }
+            resultJson.append("]");
+            resultJson.append("}");
         }
+
+        return resultJson.toString();
+
     }
 
     /**
@@ -4988,126 +4959,122 @@ public class EndpointRouter {
      * Reads raw memory bytes and provides hex/ASCII representation with string detection hints.
      * This helps prevent misidentification of strings as numeric data.
      */
-    private String inspectMemoryContent(String addressStr, int length, boolean detectStrings) {
+    private String inspectMemoryContent(String addressStr, int length, boolean detectStrings) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) return "{\"error\": \"No program loaded\"}";
 
-        try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            if (addr == null) {
-                return "{\"error\": \"Invalid address: " + addressStr + "\"}";
-            }
-
-            Memory memory = program.getMemory();
-            byte[] bytes = new byte[length];
-            int bytesRead = memory.getBytes(addr, bytes);
-
-            // Build hex dump
-            StringBuilder hexDump = new StringBuilder();
-            StringBuilder asciiRepr = new StringBuilder();
-
-            for (int i = 0; i < bytesRead; i++) {
-                if (i > 0 && i % 16 == 0) {
-                    hexDump.append("\\n");
-                    asciiRepr.append("\\n");
-                }
-
-                hexDump.append(String.format("%02X ", bytes[i] & 0xFF));
-
-                // ASCII representation (printable chars only)
-                char c = (char) (bytes[i] & 0xFF);
-                if (c >= 0x20 && c <= 0x7E) {
-                    asciiRepr.append(c);
-                } else if (c == 0x00) {
-                    asciiRepr.append("\\0");
-                } else {
-                    asciiRepr.append(".");
-                }
-            }
-
-            // String detection heuristics
-            boolean likelyString = false;
-            int printableCount = 0;
-            int nullTerminatorIndex = -1;
-            int consecutivePrintable = 0;
-            int maxConsecutivePrintable = 0;
-
-            for (int i = 0; i < bytesRead; i++) {
-                char c = (char) (bytes[i] & 0xFF);
-
-                if (c >= 0x20 && c <= 0x7E) {
-                    printableCount++;
-                    consecutivePrintable++;
-                    if (consecutivePrintable > maxConsecutivePrintable) {
-                        maxConsecutivePrintable = consecutivePrintable;
-                    }
-                } else {
-                    consecutivePrintable = 0;
-                }
-
-                if (c == 0x00 && nullTerminatorIndex == -1) {
-                    nullTerminatorIndex = i;
-                }
-            }
-
-            double printableRatio = (double) printableCount / bytesRead;
-
-            // String detection criteria:
-            // - At least 60% printable characters OR
-            // - At least 4 consecutive printable chars followed by null terminator
-            if (detectStrings) {
-                likelyString = (printableRatio >= 0.6) ||
-                              (maxConsecutivePrintable >= 4 && nullTerminatorIndex > 0);
-            }
-
-            // Detect potential string content
-            String detectedString = null;
-            int stringLength = 0;
-            if (likelyString && nullTerminatorIndex > 0) {
-                detectedString = new String(bytes, 0, nullTerminatorIndex, StandardCharsets.US_ASCII);
-                stringLength = nullTerminatorIndex + 1; // Include null terminator
-            } else if (likelyString && printableRatio >= 0.8) {
-                // String without null terminator (might be fixed-length string)
-                int endIdx = bytesRead;
-                for (int i = bytesRead - 1; i >= 0; i--) {
-                    if ((bytes[i] & 0xFF) >= 0x20 && (bytes[i] & 0xFF) <= 0x7E) {
-                        endIdx = i + 1;
-                        break;
-                    }
-                }
-                detectedString = new String(bytes, 0, endIdx, StandardCharsets.US_ASCII);
-                stringLength = endIdx;
-            }
-
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"address\": \"").append(addressStr).append("\",");
-            result.append("\"bytes_read\": ").append(bytesRead).append(",");
-            result.append("\"hex_dump\": \"").append(hexDump.toString().trim()).append("\",");
-            result.append("\"ascii_repr\": \"").append(asciiRepr.toString().trim()).append("\",");
-            result.append("\"printable_count\": ").append(printableCount).append(",");
-            result.append("\"printable_ratio\": ").append(String.format("%.2f", printableRatio)).append(",");
-            result.append("\"null_terminator_at\": ").append(nullTerminatorIndex).append(",");
-            result.append("\"max_consecutive_printable\": ").append(maxConsecutivePrintable).append(",");
-            result.append("\"is_likely_string\": ").append(likelyString).append(",");
-
-            if (detectedString != null) {
-                result.append("\"detected_string\": \"").append(escapeJson(detectedString)).append("\",");
-                result.append("\"suggested_type\": \"char[").append(stringLength).append("]\",");
-                result.append("\"string_length\": ").append(stringLength);
-            } else {
-                result.append("\"detected_string\": null,");
-                result.append("\"suggested_type\": null,");
-                result.append("\"string_length\": 0");
-            }
-
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) {
+            return "{\"error\": \"Invalid address: " + addressStr + "\"}";
         }
+
+        Memory memory = program.getMemory();
+        byte[] bytes = new byte[length];
+        int bytesRead = memory.getBytes(addr, bytes);
+
+        // Build hex dump
+        StringBuilder hexDump = new StringBuilder();
+        StringBuilder asciiRepr = new StringBuilder();
+
+        for (int i = 0; i < bytesRead; i++) {
+            if (i > 0 && i % 16 == 0) {
+                hexDump.append("\\n");
+                asciiRepr.append("\\n");
+            }
+
+            hexDump.append(String.format("%02X ", bytes[i] & 0xFF));
+
+            // ASCII representation (printable chars only)
+            char c = (char) (bytes[i] & 0xFF);
+            if (c >= 0x20 && c <= 0x7E) {
+                asciiRepr.append(c);
+            } else if (c == 0x00) {
+                asciiRepr.append("\\0");
+            } else {
+                asciiRepr.append(".");
+            }
+        }
+
+        // String detection heuristics
+        boolean likelyString = false;
+        int printableCount = 0;
+        int nullTerminatorIndex = -1;
+        int consecutivePrintable = 0;
+        int maxConsecutivePrintable = 0;
+
+        for (int i = 0; i < bytesRead; i++) {
+            char c = (char) (bytes[i] & 0xFF);
+
+            if (c >= 0x20 && c <= 0x7E) {
+                printableCount++;
+                consecutivePrintable++;
+                if (consecutivePrintable > maxConsecutivePrintable) {
+                    maxConsecutivePrintable = consecutivePrintable;
+                }
+            } else {
+                consecutivePrintable = 0;
+            }
+
+            if (c == 0x00 && nullTerminatorIndex == -1) {
+                nullTerminatorIndex = i;
+            }
+        }
+
+        double printableRatio = (double) printableCount / bytesRead;
+
+        // String detection criteria:
+        // - At least 60% printable characters OR
+        // - At least 4 consecutive printable chars followed by null terminator
+        if (detectStrings) {
+            likelyString = (printableRatio >= 0.6) ||
+                          (maxConsecutivePrintable >= 4 && nullTerminatorIndex > 0);
+        }
+
+        // Detect potential string content
+        String detectedString = null;
+        int stringLength = 0;
+        if (likelyString && nullTerminatorIndex > 0) {
+            detectedString = new String(bytes, 0, nullTerminatorIndex, StandardCharsets.US_ASCII);
+            stringLength = nullTerminatorIndex + 1; // Include null terminator
+        } else if (likelyString && printableRatio >= 0.8) {
+            // String without null terminator (might be fixed-length string)
+            int endIdx = bytesRead;
+            for (int i = bytesRead - 1; i >= 0; i--) {
+                if ((bytes[i] & 0xFF) >= 0x20 && (bytes[i] & 0xFF) <= 0x7E) {
+                    endIdx = i + 1;
+                    break;
+                }
+            }
+            detectedString = new String(bytes, 0, endIdx, StandardCharsets.US_ASCII);
+            stringLength = endIdx;
+        }
+
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{");
+        result.append("\"address\": \"").append(addressStr).append("\",");
+        result.append("\"bytes_read\": ").append(bytesRead).append(",");
+        result.append("\"hex_dump\": \"").append(hexDump.toString().trim()).append("\",");
+        result.append("\"ascii_repr\": \"").append(asciiRepr.toString().trim()).append("\",");
+        result.append("\"printable_count\": ").append(printableCount).append(",");
+        result.append("\"printable_ratio\": ").append(String.format("%.2f", printableRatio)).append(",");
+        result.append("\"null_terminator_at\": ").append(nullTerminatorIndex).append(",");
+        result.append("\"max_consecutive_printable\": ").append(maxConsecutivePrintable).append(",");
+        result.append("\"is_likely_string\": ").append(likelyString).append(",");
+
+        if (detectedString != null) {
+            result.append("\"detected_string\": \"").append(escapeJson(detectedString)).append("\",");
+            result.append("\"suggested_type\": \"char[").append(stringLength).append("]\",");
+            result.append("\"string_length\": ").append(stringLength);
+        } else {
+            result.append("\"detected_string\": null,");
+            result.append("\"suggested_type\": null,");
+            result.append("\"string_length\": 0");
+        }
+
+        result.append("}");
+
+        return result.toString();
     }
 
     // ============================================================================
@@ -5117,37 +5084,33 @@ public class EndpointRouter {
     /**
      * Detect cryptographic constants in the binary (AES S-boxes, SHA constants, etc.)
      */
-    private String detectCryptoConstants() {
+    private String detectCryptoConstants() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
         }
 
-        try {
-            final StringBuilder result = new StringBuilder();
-            result.append("[\n");
+        final StringBuilder result = new StringBuilder();
+        result.append("[\n");
 
-            // This is a placeholder implementation
-            // Full implementation would search for known crypto constants like:
-            // - AES S-boxes (0x63, 0x7c, 0x77, 0x7b, 0xf2, ...)
-            // - SHA constants (0x67452301, 0xefcdab89, ...)
-            // - DES constants, RC4 initialization vectors, etc.
+        // This is a placeholder implementation
+        // Full implementation would search for known crypto constants like:
+        // - AES S-boxes (0x63, 0x7c, 0x77, 0x7b, 0xf2, ...)
+        // - SHA constants (0x67452301, 0xefcdab89, ...)
+        // - DES constants, RC4 initialization vectors, etc.
 
-            result.append("  {\"algorithm\": \"Crypto Detection\", \"status\": \"Not yet implemented\", ");
-            result.append("\"note\": \"This endpoint requires advanced pattern matching against known crypto constants\"}\n");
-            result.append("]");
+        result.append("  {\"algorithm\": \"Crypto Detection\", \"status\": \"Not yet implemented\", ");
+        result.append("\"note\": \"This endpoint requires advanced pattern matching against known crypto constants\"}\n");
+        result.append("]");
 
-            return result.toString();
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
-        }
+        return result.toString();
     }
 
     /**
      * Find functions structurally similar to the target function
      * Uses basic block count, instruction count, call count, and cyclomatic complexity
      */
-    private String findSimilarFunctions(String targetFunction, double threshold) {
+    private String findSimilarFunctions(String targetFunction, double threshold) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5157,93 +5120,89 @@ public class EndpointRouter {
             return "Error: Target function name is required";
         }
 
-        try {
-            FunctionManager functionManager = program.getFunctionManager();
-            Function targetFunc = null;
-            
-            // Find the target function
-            for (Function f : functionManager.getFunctions(true)) {
-                if (f.getName().equals(targetFunction)) {
-                    targetFunc = f;
-                    break;
-                }
+        FunctionManager functionManager = program.getFunctionManager();
+        Function targetFunc = null;
+        
+        // Find the target function
+        for (Function f : functionManager.getFunctions(true)) {
+            if (f.getName().equals(targetFunction)) {
+                targetFunc = f;
+                break;
             }
-            
-            if (targetFunc == null) {
-                return "{\"error\": \"Function not found: " + escapeJson(targetFunction) + "\"}";
-            }
-            
-            // Calculate metrics for target function
-            BasicBlockModel blockModel = new BasicBlockModel(program);
-            FunctionMetrics targetMetrics = calculateFunctionMetrics(targetFunc, blockModel, program);
-            
-            // Find similar functions
-            List<Map<String, Object>> similarFunctions = new ArrayList<>();
-            
-            for (Function func : functionManager.getFunctions(true)) {
-                if (func.getName().equals(targetFunction)) continue;
-                if (func.isThunk()) continue;
-                
-                FunctionMetrics funcMetrics = calculateFunctionMetrics(func, blockModel, program);
-                double similarity = calculateSimilarity(targetMetrics, funcMetrics);
-                
-                if (similarity >= threshold) {
-                    Map<String, Object> match = new LinkedHashMap<>();
-                    match.put("name", func.getName());
-                    match.put("address", func.getEntryPoint().toString());
-                    match.put("similarity", Math.round(similarity * 1000.0) / 1000.0);
-                    match.put("basic_blocks", funcMetrics.basicBlockCount);
-                    match.put("instructions", funcMetrics.instructionCount);
-                    match.put("calls", funcMetrics.callCount);
-                    match.put("complexity", funcMetrics.cyclomaticComplexity);
-                    similarFunctions.add(match);
-                }
-            }
-            
-            // Sort by similarity descending
-            similarFunctions.sort((a, b) -> Double.compare((Double)b.get("similarity"), (Double)a.get("similarity")));
-            
-            // Limit results
-            if (similarFunctions.size() > 50) {
-                similarFunctions = similarFunctions.subList(0, 50);
-            }
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"target_function\": \"").append(escapeJson(targetFunction)).append("\",\n");
-            result.append("  \"target_metrics\": {\n");
-            result.append("    \"basic_blocks\": ").append(targetMetrics.basicBlockCount).append(",\n");
-            result.append("    \"instructions\": ").append(targetMetrics.instructionCount).append(",\n");
-            result.append("    \"calls\": ").append(targetMetrics.callCount).append(",\n");
-            result.append("    \"complexity\": ").append(targetMetrics.cyclomaticComplexity).append("\n");
-            result.append("  },\n");
-            result.append("  \"threshold\": ").append(threshold).append(",\n");
-            result.append("  \"matches_found\": ").append(similarFunctions.size()).append(",\n");
-            result.append("  \"similar_functions\": [\n");
-            
-            for (int i = 0; i < similarFunctions.size(); i++) {
-                Map<String, Object> match = similarFunctions.get(i);
-                result.append("    {");
-                result.append("\"name\": \"").append(escapeJson((String)match.get("name"))).append("\", ");
-                result.append("\"address\": \"").append(match.get("address")).append("\", ");
-                result.append("\"similarity\": ").append(match.get("similarity")).append(", ");
-                result.append("\"basic_blocks\": ").append(match.get("basic_blocks")).append(", ");
-                result.append("\"instructions\": ").append(match.get("instructions")).append(", ");
-                result.append("\"calls\": ").append(match.get("calls")).append(", ");
-                result.append("\"complexity\": ").append(match.get("complexity"));
-                result.append("}");
-                if (i < similarFunctions.size() - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        if (targetFunc == null) {
+            return "{\"error\": \"Function not found: " + escapeJson(targetFunction) + "\"}";
+        }
+        
+        // Calculate metrics for target function
+        BasicBlockModel blockModel = new BasicBlockModel(program);
+        FunctionMetrics targetMetrics = calculateFunctionMetrics(targetFunc, blockModel, program);
+        
+        // Find similar functions
+        List<Map<String, Object>> similarFunctions = new ArrayList<>();
+        
+        for (Function func : functionManager.getFunctions(true)) {
+            if (func.getName().equals(targetFunction)) continue;
+            if (func.isThunk()) continue;
+            
+            FunctionMetrics funcMetrics = calculateFunctionMetrics(func, blockModel, program);
+            double similarity = calculateSimilarity(targetMetrics, funcMetrics);
+            
+            if (similarity >= threshold) {
+                Map<String, Object> match = new LinkedHashMap<>();
+                match.put("name", func.getName());
+                match.put("address", func.getEntryPoint().toString());
+                match.put("similarity", Math.round(similarity * 1000.0) / 1000.0);
+                match.put("basic_blocks", funcMetrics.basicBlockCount);
+                match.put("instructions", funcMetrics.instructionCount);
+                match.put("calls", funcMetrics.callCount);
+                match.put("complexity", funcMetrics.cyclomaticComplexity);
+                similarFunctions.add(match);
+            }
+        }
+        
+        // Sort by similarity descending
+        similarFunctions.sort((a, b) -> Double.compare((Double)b.get("similarity"), (Double)a.get("similarity")));
+        
+        // Limit results
+        if (similarFunctions.size() > 50) {
+            similarFunctions = similarFunctions.subList(0, 50);
+        }
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"target_function\": \"").append(escapeJson(targetFunction)).append("\",\n");
+        result.append("  \"target_metrics\": {\n");
+        result.append("    \"basic_blocks\": ").append(targetMetrics.basicBlockCount).append(",\n");
+        result.append("    \"instructions\": ").append(targetMetrics.instructionCount).append(",\n");
+        result.append("    \"calls\": ").append(targetMetrics.callCount).append(",\n");
+        result.append("    \"complexity\": ").append(targetMetrics.cyclomaticComplexity).append("\n");
+        result.append("  },\n");
+        result.append("  \"threshold\": ").append(threshold).append(",\n");
+        result.append("  \"matches_found\": ").append(similarFunctions.size()).append(",\n");
+        result.append("  \"similar_functions\": [\n");
+        
+        for (int i = 0; i < similarFunctions.size(); i++) {
+            Map<String, Object> match = similarFunctions.get(i);
+            result.append("    {");
+            result.append("\"name\": \"").append(escapeJson((String)match.get("name"))).append("\", ");
+            result.append("\"address\": \"").append(match.get("address")).append("\", ");
+            result.append("\"similarity\": ").append(match.get("similarity")).append(", ");
+            result.append("\"basic_blocks\": ").append(match.get("basic_blocks")).append(", ");
+            result.append("\"instructions\": ").append(match.get("instructions")).append(", ");
+            result.append("\"calls\": ").append(match.get("calls")).append(", ");
+            result.append("\"complexity\": ").append(match.get("complexity"));
+            result.append("}");
+            if (i < similarFunctions.size() - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
     
     /**
@@ -5345,7 +5304,7 @@ public class EndpointRouter {
      * Analyze function control flow complexity
      * Calculates cyclomatic complexity, basic blocks, edges, and detailed metrics
      */
-    private String analyzeControlFlow(String functionName) {
+    private String analyzeControlFlow(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
@@ -5355,362 +5314,354 @@ public class EndpointRouter {
             return "{\"error\": \"Function name is required\"}";
         }
 
-        try {
-            FunctionManager functionManager = program.getFunctionManager();
-            Function func = null;
-            
-            // Find the function by name
-            for (Function f : functionManager.getFunctions(true)) {
-                if (f.getName().equals(functionName)) {
-                    func = f;
-                    break;
-                }
+        FunctionManager functionManager = program.getFunctionManager();
+        Function func = null;
+        
+        // Find the function by name
+        for (Function f : functionManager.getFunctions(true)) {
+            if (f.getName().equals(functionName)) {
+                func = f;
+                break;
             }
-            
-            if (func == null) {
-                return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
-            }
-            
-            BasicBlockModel blockModel = new BasicBlockModel(program);
-            Listing listing = program.getListing();
-            ReferenceManager refManager = program.getReferenceManager();
-            
-            // Collect detailed metrics
-            int basicBlockCount = 0;
-            int edgeCount = 0;
-            int conditionalBranches = 0;
-            int unconditionalJumps = 0;
-            int loops = 0;
-            int instructionCount = 0;
-            int callCount = 0;
-            int returnCount = 0;
-            List<Map<String, Object>> blocks = new ArrayList<>();
-            Set<Address> blockEntries = new HashSet<>();
-            
-            // First pass: collect all block entry points
-            CodeBlockIterator blockIter = blockModel.getCodeBlocksContaining(func.getBody(), null);
-            while (blockIter.hasNext()) {
-                CodeBlock block = blockIter.next();
-                blockEntries.add(block.getFirstStartAddress());
-            }
-            
-            // Second pass: detailed analysis
-            blockIter = blockModel.getCodeBlocksContaining(func.getBody(), null);
-            while (blockIter.hasNext()) {
-                CodeBlock block = blockIter.next();
-                basicBlockCount++;
-                
-                Map<String, Object> blockInfo = new LinkedHashMap<>();
-                blockInfo.put("address", block.getFirstStartAddress().toString());
-                blockInfo.put("size", block.getNumAddresses());
-                
-                // Count edges and detect loops
-                int outEdges = 0;
-                boolean hasBackEdge = false;
-                List<String> successors = new ArrayList<>();
-                
-                CodeBlockReferenceIterator destIter = block.getDestinations(null);
-                while (destIter.hasNext()) {
-                    CodeBlockReference ref = destIter.next();
-                    outEdges++;
-                    edgeCount++;
-                    Address destAddr = ref.getDestinationAddress();
-                    successors.add(destAddr.toString());
-                    
-                    // Detect back edges (loops) - destination is before current block
-                    if (destAddr.compareTo(block.getFirstStartAddress()) < 0 && 
-                        blockEntries.contains(destAddr)) {
-                        hasBackEdge = true;
-                    }
-                }
-                
-                if (hasBackEdge) loops++;
-                blockInfo.put("successors", successors.size());
-                blockInfo.put("is_loop_header", hasBackEdge);
-                
-                // Classify block type
-                if (outEdges == 0) {
-                    blockInfo.put("type", "exit");
-                } else if (outEdges == 1) {
-                    blockInfo.put("type", "sequential");
-                } else if (outEdges == 2) {
-                    blockInfo.put("type", "conditional");
-                    conditionalBranches++;
-                } else {
-                    blockInfo.put("type", "switch");
-                }
-                
-                blocks.add(blockInfo);
-            }
-            
-            // Count instructions by type
-            InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-            while (instrIter.hasNext()) {
-                Instruction instr = instrIter.next();
-                instructionCount++;
-                
-                if (instr.getFlowType().isCall()) {
-                    callCount++;
-                } else if (instr.getFlowType().isTerminal()) {
-                    returnCount++;
-                } else if (instr.getFlowType().isJump()) {
-                    if (instr.getFlowType().isConditional()) {
-                        // Already counted above
-                    } else {
-                        unconditionalJumps++;
-                    }
-                }
-            }
-            
-            // Calculate cyclomatic complexity: M = E - N + 2P
-            int cyclomaticComplexity = edgeCount - basicBlockCount + 2;
-            if (cyclomaticComplexity < 1) cyclomaticComplexity = 1;
-            
-            // Complexity rating
-            String complexityRating;
-            if (cyclomaticComplexity <= 5) {
-                complexityRating = "low";
-            } else if (cyclomaticComplexity <= 10) {
-                complexityRating = "moderate";
-            } else if (cyclomaticComplexity <= 20) {
-                complexityRating = "high";
-            } else if (cyclomaticComplexity <= 50) {
-                complexityRating = "very_high";
-            } else {
-                complexityRating = "extreme";
-            }
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"function_name\": \"").append(escapeJson(functionName)).append("\",\n");
-            result.append("  \"entry_point\": \"").append(func.getEntryPoint().toString()).append("\",\n");
-            result.append("  \"size_bytes\": ").append(func.getBody().getNumAddresses()).append(",\n");
-            result.append("  \"metrics\": {\n");
-            result.append("    \"cyclomatic_complexity\": ").append(cyclomaticComplexity).append(",\n");
-            result.append("    \"complexity_rating\": \"").append(complexityRating).append("\",\n");
-            result.append("    \"basic_blocks\": ").append(basicBlockCount).append(",\n");
-            result.append("    \"edges\": ").append(edgeCount).append(",\n");
-            result.append("    \"instructions\": ").append(instructionCount).append(",\n");
-            result.append("    \"conditional_branches\": ").append(conditionalBranches).append(",\n");
-            result.append("    \"unconditional_jumps\": ").append(unconditionalJumps).append(",\n");
-            result.append("    \"loops_detected\": ").append(loops).append(",\n");
-            result.append("    \"calls\": ").append(callCount).append(",\n");
-            result.append("    \"returns\": ").append(returnCount).append("\n");
-            result.append("  },\n");
-            result.append("  \"basic_block_details\": [\n");
-            
-            for (int i = 0; i < Math.min(blocks.size(), 100); i++) {
-                Map<String, Object> block = blocks.get(i);
-                result.append("    {");
-                result.append("\"address\": \"").append(block.get("address")).append("\", ");
-                result.append("\"size\": ").append(block.get("size")).append(", ");
-                result.append("\"type\": \"").append(block.get("type")).append("\", ");
-                result.append("\"successors\": ").append(block.get("successors")).append(", ");
-                result.append("\"is_loop_header\": ").append(block.get("is_loop_header"));
-                result.append("}");
-                if (i < Math.min(blocks.size(), 100) - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            if (blocks.size() > 100) {
-                result.append("    {\"note\": \"").append(blocks.size() - 100).append(" additional blocks truncated\"}\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        if (func == null) {
+            return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
+        }
+        
+        BasicBlockModel blockModel = new BasicBlockModel(program);
+        Listing listing = program.getListing();
+        ReferenceManager refManager = program.getReferenceManager();
+        
+        // Collect detailed metrics
+        int basicBlockCount = 0;
+        int edgeCount = 0;
+        int conditionalBranches = 0;
+        int unconditionalJumps = 0;
+        int loops = 0;
+        int instructionCount = 0;
+        int callCount = 0;
+        int returnCount = 0;
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        Set<Address> blockEntries = new HashSet<>();
+        
+        // First pass: collect all block entry points
+        CodeBlockIterator blockIter = blockModel.getCodeBlocksContaining(func.getBody(), null);
+        while (blockIter.hasNext()) {
+            CodeBlock block = blockIter.next();
+            blockEntries.add(block.getFirstStartAddress());
+        }
+        
+        // Second pass: detailed analysis
+        blockIter = blockModel.getCodeBlocksContaining(func.getBody(), null);
+        while (blockIter.hasNext()) {
+            CodeBlock block = blockIter.next();
+            basicBlockCount++;
+            
+            Map<String, Object> blockInfo = new LinkedHashMap<>();
+            blockInfo.put("address", block.getFirstStartAddress().toString());
+            blockInfo.put("size", block.getNumAddresses());
+            
+            // Count edges and detect loops
+            int outEdges = 0;
+            boolean hasBackEdge = false;
+            List<String> successors = new ArrayList<>();
+            
+            CodeBlockReferenceIterator destIter = block.getDestinations(null);
+            while (destIter.hasNext()) {
+                CodeBlockReference ref = destIter.next();
+                outEdges++;
+                edgeCount++;
+                Address destAddr = ref.getDestinationAddress();
+                successors.add(destAddr.toString());
+                
+                // Detect back edges (loops) - destination is before current block
+                if (destAddr.compareTo(block.getFirstStartAddress()) < 0 && 
+                    blockEntries.contains(destAddr)) {
+                    hasBackEdge = true;
+                }
+            }
+            
+            if (hasBackEdge) loops++;
+            blockInfo.put("successors", successors.size());
+            blockInfo.put("is_loop_header", hasBackEdge);
+            
+            // Classify block type
+            if (outEdges == 0) {
+                blockInfo.put("type", "exit");
+            } else if (outEdges == 1) {
+                blockInfo.put("type", "sequential");
+            } else if (outEdges == 2) {
+                blockInfo.put("type", "conditional");
+                conditionalBranches++;
+            } else {
+                blockInfo.put("type", "switch");
+            }
+            
+            blocks.add(blockInfo);
+        }
+        
+        // Count instructions by type
+        InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
+        while (instrIter.hasNext()) {
+            Instruction instr = instrIter.next();
+            instructionCount++;
+            
+            if (instr.getFlowType().isCall()) {
+                callCount++;
+            } else if (instr.getFlowType().isTerminal()) {
+                returnCount++;
+            } else if (instr.getFlowType().isJump()) {
+                if (instr.getFlowType().isConditional()) {
+                    // Already counted above
+                } else {
+                    unconditionalJumps++;
+                }
+            }
+        }
+        
+        // Calculate cyclomatic complexity: M = E - N + 2P
+        int cyclomaticComplexity = edgeCount - basicBlockCount + 2;
+        if (cyclomaticComplexity < 1) cyclomaticComplexity = 1;
+        
+        // Complexity rating
+        String complexityRating;
+        if (cyclomaticComplexity <= 5) {
+            complexityRating = "low";
+        } else if (cyclomaticComplexity <= 10) {
+            complexityRating = "moderate";
+        } else if (cyclomaticComplexity <= 20) {
+            complexityRating = "high";
+        } else if (cyclomaticComplexity <= 50) {
+            complexityRating = "very_high";
+        } else {
+            complexityRating = "extreme";
+        }
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"function_name\": \"").append(escapeJson(functionName)).append("\",\n");
+        result.append("  \"entry_point\": \"").append(func.getEntryPoint().toString()).append("\",\n");
+        result.append("  \"size_bytes\": ").append(func.getBody().getNumAddresses()).append(",\n");
+        result.append("  \"metrics\": {\n");
+        result.append("    \"cyclomatic_complexity\": ").append(cyclomaticComplexity).append(",\n");
+        result.append("    \"complexity_rating\": \"").append(complexityRating).append("\",\n");
+        result.append("    \"basic_blocks\": ").append(basicBlockCount).append(",\n");
+        result.append("    \"edges\": ").append(edgeCount).append(",\n");
+        result.append("    \"instructions\": ").append(instructionCount).append(",\n");
+        result.append("    \"conditional_branches\": ").append(conditionalBranches).append(",\n");
+        result.append("    \"unconditional_jumps\": ").append(unconditionalJumps).append(",\n");
+        result.append("    \"loops_detected\": ").append(loops).append(",\n");
+        result.append("    \"calls\": ").append(callCount).append(",\n");
+        result.append("    \"returns\": ").append(returnCount).append("\n");
+        result.append("  },\n");
+        result.append("  \"basic_block_details\": [\n");
+        
+        for (int i = 0; i < Math.min(blocks.size(), 100); i++) {
+            Map<String, Object> block = blocks.get(i);
+            result.append("    {");
+            result.append("\"address\": \"").append(block.get("address")).append("\", ");
+            result.append("\"size\": ").append(block.get("size")).append(", ");
+            result.append("\"type\": \"").append(block.get("type")).append("\", ");
+            result.append("\"successors\": ").append(block.get("successors")).append(", ");
+            result.append("\"is_loop_header\": ").append(block.get("is_loop_header"));
+            result.append("}");
+            if (i < Math.min(blocks.size(), 100) - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        if (blocks.size() > 100) {
+            result.append("    {\"note\": \"").append(blocks.size() - 100).append(" additional blocks truncated\"}\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
 
     /**
      * Detect anti-analysis and anti-debugging techniques
      * Scans for known anti-debug APIs, timing checks, VM detection, and SEH tricks
      */
-    private String findAntiAnalysisTechniques() {
+    private String findAntiAnalysisTechniques() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            // Define patterns to search for
-            Map<String, String[]> antiDebugAPIs = new LinkedHashMap<>();
-            antiDebugAPIs.put("debugger_detection", new String[]{
-                "IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess",
-                "OutputDebugString", "DebugActiveProcess", "CloseHandle", "NtClose"
-            });
-            antiDebugAPIs.put("timing_checks", new String[]{
-                "GetTickCount", "GetTickCount64", "QueryPerformanceCounter", 
-                "GetSystemTimeAsFileTime", "timeGetTime", "NtQuerySystemTime"
-            });
-            antiDebugAPIs.put("process_enumeration", new String[]{
-                "CreateToolhelp32Snapshot", "Process32First", "Process32Next",
-                "EnumProcesses", "NtQuerySystemInformation", "OpenProcess"
-            });
-            antiDebugAPIs.put("vm_detection", new String[]{
-                "GetSystemFirmwareTable", "EnumSystemFirmwareTable", 
-                "WMI", "SMBIOS", "ACPI"
-            });
-            antiDebugAPIs.put("exception_based", new String[]{
-                "SetUnhandledExceptionFilter", "AddVectoredExceptionHandler",
-                "RtlAddVectoredExceptionHandler", "NtSetInformationThread"
-            });
-            antiDebugAPIs.put("memory_checks", new String[]{
-                "VirtualQuery", "NtQueryVirtualMemory", "ReadProcessMemory",
-                "WriteProcessMemory"
-            });
-            
-            // Instruction patterns to detect
-            String[] suspiciousInstructions = {"RDTSC", "CPUID", "INT 3", "INT 0x2d", "SIDT", "SGDT", "SLDT", "STR"};
-            
-            List<Map<String, Object>> findings = new ArrayList<>();
-            FunctionManager functionManager = program.getFunctionManager();
-            SymbolTable symbolTable = program.getSymbolTable();
-            Listing listing = program.getListing();
-            
-            // Scan for API calls
-            for (Map.Entry<String, String[]> category : antiDebugAPIs.entrySet()) {
-                String categoryName = category.getKey();
-                for (String apiName : category.getValue()) {
-                    // Search for symbols matching the API name
-                    SymbolIterator symbols = symbolTable.getSymbolIterator("*" + apiName + "*", true);
-                    while (symbols.hasNext()) {
-                        Symbol sym = symbols.next();
-                        // Find references to this symbol
-                        ReferenceManager refManager = program.getReferenceManager();
-                        ReferenceIterator refs = refManager.getReferencesTo(sym.getAddress());
-                        while (refs.hasNext()) {
-                            Reference ref = refs.next();
-                            if (ref.getReferenceType().isCall()) {
-                                Function callingFunc = functionManager.getFunctionContaining(ref.getFromAddress());
-                                Map<String, Object> finding = new LinkedHashMap<>();
-                                finding.put("category", categoryName);
-                                finding.put("technique", apiName);
-                                finding.put("address", ref.getFromAddress().toString());
-                                finding.put("function", callingFunc != null ? callingFunc.getName() : "unknown");
-                                finding.put("severity", getSeverity(categoryName));
-                                findings.add(finding);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Scan for suspicious instructions
-            for (Function func : functionManager.getFunctions(true)) {
-                InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-                while (instrIter.hasNext()) {
-                    Instruction instr = instrIter.next();
-                    String mnemonic = instr.getMnemonicString().toUpperCase();
-                    
-                    for (String suspicious : suspiciousInstructions) {
-                        if (mnemonic.contains(suspicious.split(" ")[0])) {
+        // Define patterns to search for
+        Map<String, String[]> antiDebugAPIs = new LinkedHashMap<>();
+        antiDebugAPIs.put("debugger_detection", new String[]{
+            "IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess",
+            "OutputDebugString", "DebugActiveProcess", "CloseHandle", "NtClose"
+        });
+        antiDebugAPIs.put("timing_checks", new String[]{
+            "GetTickCount", "GetTickCount64", "QueryPerformanceCounter", 
+            "GetSystemTimeAsFileTime", "timeGetTime", "NtQuerySystemTime"
+        });
+        antiDebugAPIs.put("process_enumeration", new String[]{
+            "CreateToolhelp32Snapshot", "Process32First", "Process32Next",
+            "EnumProcesses", "NtQuerySystemInformation", "OpenProcess"
+        });
+        antiDebugAPIs.put("vm_detection", new String[]{
+            "GetSystemFirmwareTable", "EnumSystemFirmwareTable", 
+            "WMI", "SMBIOS", "ACPI"
+        });
+        antiDebugAPIs.put("exception_based", new String[]{
+            "SetUnhandledExceptionFilter", "AddVectoredExceptionHandler",
+            "RtlAddVectoredExceptionHandler", "NtSetInformationThread"
+        });
+        antiDebugAPIs.put("memory_checks", new String[]{
+            "VirtualQuery", "NtQueryVirtualMemory", "ReadProcessMemory",
+            "WriteProcessMemory"
+        });
+        
+        // Instruction patterns to detect
+        String[] suspiciousInstructions = {"RDTSC", "CPUID", "INT 3", "INT 0x2d", "SIDT", "SGDT", "SLDT", "STR"};
+        
+        List<Map<String, Object>> findings = new ArrayList<>();
+        FunctionManager functionManager = program.getFunctionManager();
+        SymbolTable symbolTable = program.getSymbolTable();
+        Listing listing = program.getListing();
+        
+        // Scan for API calls
+        for (Map.Entry<String, String[]> category : antiDebugAPIs.entrySet()) {
+            String categoryName = category.getKey();
+            for (String apiName : category.getValue()) {
+                // Search for symbols matching the API name
+                SymbolIterator symbols = symbolTable.getSymbolIterator("*" + apiName + "*", true);
+                while (symbols.hasNext()) {
+                    Symbol sym = symbols.next();
+                    // Find references to this symbol
+                    ReferenceManager refManager = program.getReferenceManager();
+                    ReferenceIterator refs = refManager.getReferencesTo(sym.getAddress());
+                    while (refs.hasNext()) {
+                        Reference ref = refs.next();
+                        if (ref.getReferenceType().isCall()) {
+                            Function callingFunc = functionManager.getFunctionContaining(ref.getFromAddress());
                             Map<String, Object> finding = new LinkedHashMap<>();
-                            finding.put("category", "suspicious_instruction");
-                            finding.put("technique", suspicious);
-                            finding.put("address", instr.getAddress().toString());
-                            finding.put("function", func.getName());
-                            finding.put("instruction", instr.toString());
-                            finding.put("severity", "medium");
+                            finding.put("category", categoryName);
+                            finding.put("technique", apiName);
+                            finding.put("address", ref.getFromAddress().toString());
+                            finding.put("function", callingFunc != null ? callingFunc.getName() : "unknown");
+                            finding.put("severity", getSeverity(categoryName));
                             findings.add(finding);
                         }
                     }
                 }
             }
-            
-            // Check for PEB access patterns (common anti-debug)
-            for (Function func : functionManager.getFunctions(true)) {
-                InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-                boolean foundFsAccess = false;
-                while (instrIter.hasNext()) {
-                    Instruction instr = instrIter.next();
-                    String instrStr = instr.toString().toUpperCase();
-                    // FS:[0x30] is PEB access, FS:[0x18] is TEB
-                    if (instrStr.contains("FS:") && (instrStr.contains("0X30") || instrStr.contains("0X18"))) {
-                        if (!foundFsAccess) {
-                            Map<String, Object> finding = new LinkedHashMap<>();
-                            finding.put("category", "peb_teb_access");
-                            finding.put("technique", "Direct PEB/TEB access");
-                            finding.put("address", instr.getAddress().toString());
-                            finding.put("function", func.getName());
-                            finding.put("instruction", instr.toString());
-                            finding.put("severity", "high");
-                            finding.put("description", "Direct access to PEB/TEB can be used to detect debuggers");
-                            findings.add(finding);
-                            foundFsAccess = true;
-                        }
-                    }
-                }
-            }
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"total_findings\": ").append(findings.size()).append(",\n");
-            result.append("  \"summary\": {\n");
-            
-            // Count by category
-            Map<String, Integer> categoryCounts = new LinkedHashMap<>();
-            Map<String, Integer> severityCounts = new LinkedHashMap<>();
-            for (Map<String, Object> finding : findings) {
-                String cat = (String) finding.get("category");
-                String sev = (String) finding.get("severity");
-                categoryCounts.put(cat, categoryCounts.getOrDefault(cat, 0) + 1);
-                severityCounts.put(sev, severityCounts.getOrDefault(sev, 0) + 1);
-            }
-            
-            result.append("    \"by_category\": {");
-            int catIdx = 0;
-            for (Map.Entry<String, Integer> entry : categoryCounts.entrySet()) {
-                if (catIdx++ > 0) result.append(", ");
-                result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-            }
-            result.append("},\n");
-            
-            result.append("    \"by_severity\": {");
-            int sevIdx = 0;
-            for (Map.Entry<String, Integer> entry : severityCounts.entrySet()) {
-                if (sevIdx++ > 0) result.append(", ");
-                result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-            }
-            result.append("}\n");
-            result.append("  },\n");
-            
-            result.append("  \"findings\": [\n");
-            for (int i = 0; i < Math.min(findings.size(), 100); i++) {
-                Map<String, Object> finding = findings.get(i);
-                result.append("    {");
-                result.append("\"category\": \"").append(finding.get("category")).append("\", ");
-                result.append("\"technique\": \"").append(escapeJson((String)finding.get("technique"))).append("\", ");
-                result.append("\"address\": \"").append(finding.get("address")).append("\", ");
-                result.append("\"function\": \"").append(escapeJson((String)finding.get("function"))).append("\", ");
-                result.append("\"severity\": \"").append(finding.get("severity")).append("\"");
-                if (finding.containsKey("instruction")) {
-                    result.append(", \"instruction\": \"").append(escapeJson((String)finding.get("instruction"))).append("\"");
-                }
-                if (finding.containsKey("description")) {
-                    result.append(", \"description\": \"").append(escapeJson((String)finding.get("description"))).append("\"");
-                }
-                result.append("}");
-                if (i < Math.min(findings.size(), 100) - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            if (findings.size() > 100) {
-                result.append("    {\"note\": \"").append(findings.size() - 100).append(" additional findings truncated\"}\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        // Scan for suspicious instructions
+        for (Function func : functionManager.getFunctions(true)) {
+            InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
+            while (instrIter.hasNext()) {
+                Instruction instr = instrIter.next();
+                String mnemonic = instr.getMnemonicString().toUpperCase();
+                
+                for (String suspicious : suspiciousInstructions) {
+                    if (mnemonic.contains(suspicious.split(" ")[0])) {
+                        Map<String, Object> finding = new LinkedHashMap<>();
+                        finding.put("category", "suspicious_instruction");
+                        finding.put("technique", suspicious);
+                        finding.put("address", instr.getAddress().toString());
+                        finding.put("function", func.getName());
+                        finding.put("instruction", instr.toString());
+                        finding.put("severity", "medium");
+                        findings.add(finding);
+                    }
+                }
+            }
+        }
+        
+        // Check for PEB access patterns (common anti-debug)
+        for (Function func : functionManager.getFunctions(true)) {
+            InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
+            boolean foundFsAccess = false;
+            while (instrIter.hasNext()) {
+                Instruction instr = instrIter.next();
+                String instrStr = instr.toString().toUpperCase();
+                // FS:[0x30] is PEB access, FS:[0x18] is TEB
+                if (instrStr.contains("FS:") && (instrStr.contains("0X30") || instrStr.contains("0X18"))) {
+                    if (!foundFsAccess) {
+                        Map<String, Object> finding = new LinkedHashMap<>();
+                        finding.put("category", "peb_teb_access");
+                        finding.put("technique", "Direct PEB/TEB access");
+                        finding.put("address", instr.getAddress().toString());
+                        finding.put("function", func.getName());
+                        finding.put("instruction", instr.toString());
+                        finding.put("severity", "high");
+                        finding.put("description", "Direct access to PEB/TEB can be used to detect debuggers");
+                        findings.add(finding);
+                        foundFsAccess = true;
+                    }
+                }
+            }
+        }
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"total_findings\": ").append(findings.size()).append(",\n");
+        result.append("  \"summary\": {\n");
+        
+        // Count by category
+        Map<String, Integer> categoryCounts = new LinkedHashMap<>();
+        Map<String, Integer> severityCounts = new LinkedHashMap<>();
+        for (Map<String, Object> finding : findings) {
+            String cat = (String) finding.get("category");
+            String sev = (String) finding.get("severity");
+            categoryCounts.put(cat, categoryCounts.getOrDefault(cat, 0) + 1);
+            severityCounts.put(sev, severityCounts.getOrDefault(sev, 0) + 1);
+        }
+        
+        result.append("    \"by_category\": {");
+        int catIdx = 0;
+        for (Map.Entry<String, Integer> entry : categoryCounts.entrySet()) {
+            if (catIdx++ > 0) result.append(", ");
+            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        result.append("},\n");
+        
+        result.append("    \"by_severity\": {");
+        int sevIdx = 0;
+        for (Map.Entry<String, Integer> entry : severityCounts.entrySet()) {
+            if (sevIdx++ > 0) result.append(", ");
+            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        result.append("}\n");
+        result.append("  },\n");
+        
+        result.append("  \"findings\": [\n");
+        for (int i = 0; i < Math.min(findings.size(), 100); i++) {
+            Map<String, Object> finding = findings.get(i);
+            result.append("    {");
+            result.append("\"category\": \"").append(finding.get("category")).append("\", ");
+            result.append("\"technique\": \"").append(escapeJson((String)finding.get("technique"))).append("\", ");
+            result.append("\"address\": \"").append(finding.get("address")).append("\", ");
+            result.append("\"function\": \"").append(escapeJson((String)finding.get("function"))).append("\", ");
+            result.append("\"severity\": \"").append(finding.get("severity")).append("\"");
+            if (finding.containsKey("instruction")) {
+                result.append(", \"instruction\": \"").append(escapeJson((String)finding.get("instruction"))).append("\"");
+            }
+            if (finding.containsKey("description")) {
+                result.append(", \"description\": \"").append(escapeJson((String)finding.get("description"))).append("\"");
+            }
+            result.append("}");
+            if (i < Math.min(findings.size(), 100) - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        if (findings.size() > 100) {
+            result.append("    {\"note\": \"").append(findings.size() - 100).append(" additional findings truncated\"}\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
     
     /**
@@ -5731,7 +5682,7 @@ public class EndpointRouter {
     /**
      * Batch decompile multiple functions
      */
-    private String batchDecompileFunctions(String functionsParam) {
+    private String batchDecompileFunctions(String functionsParam) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5741,69 +5692,65 @@ public class EndpointRouter {
             return "Error: Functions parameter is required";
         }
 
-        try {
-            String[] functionNames = functionsParam.split(",");
-            StringBuilder result = new StringBuilder();
-            result.append("{");
+        String[] functionNames = functionsParam.split(",");
+        StringBuilder result = new StringBuilder();
+        result.append("{");
 
-            FunctionManager funcManager = program.getFunctionManager();
-            final int MAX_FUNCTIONS = 20; // Limit to prevent overload
+        FunctionManager funcManager = program.getFunctionManager();
+        final int MAX_FUNCTIONS = 20; // Limit to prevent overload
 
-            for (int i = 0; i < functionNames.length && i < MAX_FUNCTIONS; i++) {
-                String funcName = functionNames[i].trim();
-                if (funcName.isEmpty()) continue;
+        for (int i = 0; i < functionNames.length && i < MAX_FUNCTIONS; i++) {
+            String funcName = functionNames[i].trim();
+            if (funcName.isEmpty()) continue;
 
-                if (i > 0) result.append(", ");
-                result.append("\"").append(escapeJson(funcName)).append("\": ");
+            if (i > 0) result.append(", ");
+            result.append("\"").append(escapeJson(funcName)).append("\": ");
 
-                // Find function by name
-                Function function = null;
-                SymbolTable symbolTable = program.getSymbolTable();
-                SymbolIterator symbols = symbolTable.getSymbols(funcName);
+            // Find function by name
+            Function function = null;
+            SymbolTable symbolTable = program.getSymbolTable();
+            SymbolIterator symbols = symbolTable.getSymbols(funcName);
 
-                while (symbols.hasNext()) {
-                    Symbol symbol = symbols.next();
-                    if (symbol.getSymbolType() == SymbolType.FUNCTION) {
-                        function = funcManager.getFunctionAt(symbol.getAddress());
-                        break;
-                    }
-                }
-
-                if (function == null) {
-                    result.append("\"Error: Function not found\"");
-                    continue;
-                }
-
-                // Decompile the function
-                try {
-                    DecompInterface decompiler = new DecompInterface();
-                    decompiler.openProgram(program);
-                    DecompileResults decompResults = decompiler.decompileFunction(function, 30, null);
-
-                    if (decompResults != null && decompResults.decompileCompleted()) {
-                        String decompCode = decompResults.getDecompiledFunction().getC();
-                        result.append("\"").append(escapeJson(decompCode)).append("\"");
-                    } else {
-                        result.append("\"Error: Decompilation failed\"");
-                    }
-
-                    decompiler.dispose();
-                } catch (Exception e) {
-                    result.append("\"Error: ").append(escapeJson(e.getMessage())).append("\"");
+            while (symbols.hasNext()) {
+                Symbol symbol = symbols.next();
+                if (symbol.getSymbolType() == SymbolType.FUNCTION) {
+                    function = funcManager.getFunctionAt(symbol.getAddress());
+                    break;
                 }
             }
 
-            result.append("}");
-            return result.toString();
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            if (function == null) {
+                result.append("\"Error: Function not found\"");
+                continue;
+            }
+
+            // Decompile the function
+            try {
+                DecompInterface decompiler = new DecompInterface();
+                decompiler.openProgram(program);
+                DecompileResults decompResults = decompiler.decompileFunction(function, 30, null);
+
+                if (decompResults != null && decompResults.decompileCompleted()) {
+                    String decompCode = decompResults.getDecompiledFunction().getC();
+                    result.append("\"").append(escapeJson(decompCode)).append("\"");
+                } else {
+                    result.append("\"Error: Decompilation failed\"");
+                }
+
+                decompiler.dispose();
+            } catch (Exception e) {
+                result.append("\"Error: ").append(escapeJson(e.getMessage())).append("\"");
+            }
         }
+
+        result.append("}");
+        return result.toString();
     }
 
     /**
      * Find potentially unreachable code blocks
      */
-    private String findDeadCode(String functionName) {
+    private String findDeadCode(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
@@ -5813,266 +5760,254 @@ public class EndpointRouter {
             return "Error: Function name is required";
         }
 
-        try {
-            final StringBuilder result = new StringBuilder();
-            result.append("[\n");
+        final StringBuilder result = new StringBuilder();
+        result.append("[\n");
 
-            // Placeholder implementation
-            // Full implementation would analyze control flow to find unreachable blocks
+        // Placeholder implementation
+        // Full implementation would analyze control flow to find unreachable blocks
 
-            result.append("  {\"function_name\": \"").append(escapeJson(functionName)).append("\", ");
-            result.append("\"status\": \"Not yet implemented\", ");
-            result.append("\"note\": \"This endpoint requires reachability analysis via control flow graph\"}\n");
-            result.append("]");
+        result.append("  {\"function_name\": \"").append(escapeJson(functionName)).append("\", ");
+        result.append("\"status\": \"Not yet implemented\", ");
+        result.append("\"note\": \"This endpoint requires reachability analysis via control flow graph\"}\n");
+        result.append("]");
 
-            return result.toString();
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
-        }
+        return result.toString();
     }
 
     /**
      * Automatically identify and decrypt obfuscated strings
      */
-    private String autoDecryptStrings() {
+    private String autoDecryptStrings() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "Error: No program loaded";
         }
 
-        try {
-            final StringBuilder result = new StringBuilder();
-            result.append("[\n");
+        final StringBuilder result = new StringBuilder();
+        result.append("[\n");
 
-            // Placeholder implementation
-            // Full implementation would detect and decrypt:
-            // - XOR-encoded strings
-            // - Base64-encoded strings
-            // - ROT13 encoding
-            // - Stack strings
-            // - RC4/AES encrypted strings
+        // Placeholder implementation
+        // Full implementation would detect and decrypt:
+        // - XOR-encoded strings
+        // - Base64-encoded strings
+        // - ROT13 encoding
+        // - Stack strings
+        // - RC4/AES encrypted strings
 
-            result.append("  {\"method\": \"String Decryption\", \"status\": \"Not yet implemented\", ");
-            result.append("\"note\": \"This endpoint requires pattern detection and decryption of various encoding schemes\"}\n");
-            result.append("]");
+        result.append("  {\"method\": \"String Decryption\", \"status\": \"Not yet implemented\", ");
+        result.append("\"note\": \"This endpoint requires pattern detection and decryption of various encoding schemes\"}\n");
+        result.append("]");
 
-            return result.toString();
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
-        }
+        return result.toString();
     }
 
     /**
      * Identify and analyze suspicious API call chains
      * Detects threat patterns like process injection, persistence, credential theft
      */
-    private String analyzeAPICallChains() {
+    private String analyzeAPICallChains() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            // Define threat patterns as API call sequences
-            List<ThreatPattern> threatPatterns = new ArrayList<>();
+        // Define threat patterns as API call sequences
+        List<ThreatPattern> threatPatterns = new ArrayList<>();
+        
+        // Process Injection patterns
+        threatPatterns.add(new ThreatPattern("process_injection_classic",
+            "Classic Process Injection", "critical",
+            new String[]{"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"},
+            "Allocates memory in remote process, writes code, and creates thread to execute"));
+        
+        threatPatterns.add(new ThreatPattern("process_injection_ntapi",
+            "NT API Process Injection", "critical",
+            new String[]{"NtOpenProcess", "NtAllocateVirtualMemory", "NtWriteVirtualMemory", "NtCreateThreadEx"},
+            "Process injection using NT native APIs"));
+        
+        threatPatterns.add(new ThreatPattern("process_hollowing",
+            "Process Hollowing", "critical",
+            new String[]{"CreateProcess", "NtUnmapViewOfSection", "VirtualAllocEx", "WriteProcessMemory", "SetThreadContext", "ResumeThread"},
+            "Creates suspended process, hollows it out, and replaces with malicious code"));
+        
+        threatPatterns.add(new ThreatPattern("dll_injection",
+            "DLL Injection", "high",
+            new String[]{"OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "LoadLibrary"},
+            "Injects DLL into remote process"));
+        
+        // Persistence patterns
+        threatPatterns.add(new ThreatPattern("registry_persistence",
+            "Registry Persistence", "high",
+            new String[]{"RegOpenKey", "RegSetValue"},
+            "Modifies registry for persistence"));
+        
+        threatPatterns.add(new ThreatPattern("service_persistence",
+            "Service Persistence", "high",
+            new String[]{"OpenSCManager", "CreateService"},
+            "Creates Windows service for persistence"));
+        
+        threatPatterns.add(new ThreatPattern("scheduled_task",
+            "Scheduled Task Persistence", "high",
+            new String[]{"CoCreateInstance", "ITaskScheduler"},
+            "Creates scheduled task for persistence"));
+        
+        // Credential theft patterns
+        threatPatterns.add(new ThreatPattern("lsass_access",
+            "LSASS Memory Access", "critical",
+            new String[]{"OpenProcess", "ReadProcessMemory"},
+            "May be accessing LSASS for credential extraction"));
+        
+        threatPatterns.add(new ThreatPattern("sam_access",
+            "SAM Database Access", "critical",
+            new String[]{"RegOpenKey", "SAM"},
+            "May be accessing SAM database for password hashes"));
+        
+        // Network patterns
+        threatPatterns.add(new ThreatPattern("socket_communication",
+            "Network Communication", "medium",
+            new String[]{"WSAStartup", "socket", "connect", "send", "recv"},
+            "Establishes network connection"));
+        
+        threatPatterns.add(new ThreatPattern("http_communication",
+            "HTTP Communication", "medium",
+            new String[]{"InternetOpen", "InternetConnect", "HttpOpenRequest"},
+            "Performs HTTP communication"));
+        
+        // File operations
+        threatPatterns.add(new ThreatPattern("file_encryption",
+            "Potential Ransomware", "critical",
+            new String[]{"FindFirstFile", "FindNextFile", "CryptEncrypt"},
+            "File enumeration combined with encryption"));
+        
+        // Analyze functions for these patterns
+        FunctionManager functionManager = program.getFunctionManager();
+        SymbolTable symbolTable = program.getSymbolTable();
+        ReferenceManager refManager = program.getReferenceManager();
+        
+        List<Map<String, Object>> detectedPatterns = new ArrayList<>();
+        
+        // Build API call map per function
+        Map<Function, Set<String>> functionAPIs = new LinkedHashMap<>();
+        
+        for (Function func : functionManager.getFunctions(true)) {
+            if (func.isThunk()) continue;
             
-            // Process Injection patterns
-            threatPatterns.add(new ThreatPattern("process_injection_classic",
-                "Classic Process Injection", "critical",
-                new String[]{"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"},
-                "Allocates memory in remote process, writes code, and creates thread to execute"));
+            Set<String> apis = new HashSet<>();
+            Listing listing = program.getListing();
+            InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
             
-            threatPatterns.add(new ThreatPattern("process_injection_ntapi",
-                "NT API Process Injection", "critical",
-                new String[]{"NtOpenProcess", "NtAllocateVirtualMemory", "NtWriteVirtualMemory", "NtCreateThreadEx"},
-                "Process injection using NT native APIs"));
-            
-            threatPatterns.add(new ThreatPattern("process_hollowing",
-                "Process Hollowing", "critical",
-                new String[]{"CreateProcess", "NtUnmapViewOfSection", "VirtualAllocEx", "WriteProcessMemory", "SetThreadContext", "ResumeThread"},
-                "Creates suspended process, hollows it out, and replaces with malicious code"));
-            
-            threatPatterns.add(new ThreatPattern("dll_injection",
-                "DLL Injection", "high",
-                new String[]{"OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "LoadLibrary"},
-                "Injects DLL into remote process"));
-            
-            // Persistence patterns
-            threatPatterns.add(new ThreatPattern("registry_persistence",
-                "Registry Persistence", "high",
-                new String[]{"RegOpenKey", "RegSetValue"},
-                "Modifies registry for persistence"));
-            
-            threatPatterns.add(new ThreatPattern("service_persistence",
-                "Service Persistence", "high",
-                new String[]{"OpenSCManager", "CreateService"},
-                "Creates Windows service for persistence"));
-            
-            threatPatterns.add(new ThreatPattern("scheduled_task",
-                "Scheduled Task Persistence", "high",
-                new String[]{"CoCreateInstance", "ITaskScheduler"},
-                "Creates scheduled task for persistence"));
-            
-            // Credential theft patterns
-            threatPatterns.add(new ThreatPattern("lsass_access",
-                "LSASS Memory Access", "critical",
-                new String[]{"OpenProcess", "ReadProcessMemory"},
-                "May be accessing LSASS for credential extraction"));
-            
-            threatPatterns.add(new ThreatPattern("sam_access",
-                "SAM Database Access", "critical",
-                new String[]{"RegOpenKey", "SAM"},
-                "May be accessing SAM database for password hashes"));
-            
-            // Network patterns
-            threatPatterns.add(new ThreatPattern("socket_communication",
-                "Network Communication", "medium",
-                new String[]{"WSAStartup", "socket", "connect", "send", "recv"},
-                "Establishes network connection"));
-            
-            threatPatterns.add(new ThreatPattern("http_communication",
-                "HTTP Communication", "medium",
-                new String[]{"InternetOpen", "InternetConnect", "HttpOpenRequest"},
-                "Performs HTTP communication"));
-            
-            // File operations
-            threatPatterns.add(new ThreatPattern("file_encryption",
-                "Potential Ransomware", "critical",
-                new String[]{"FindFirstFile", "FindNextFile", "CryptEncrypt"},
-                "File enumeration combined with encryption"));
-            
-            // Analyze functions for these patterns
-            FunctionManager functionManager = program.getFunctionManager();
-            SymbolTable symbolTable = program.getSymbolTable();
-            ReferenceManager refManager = program.getReferenceManager();
-            
-            List<Map<String, Object>> detectedPatterns = new ArrayList<>();
-            
-            // Build API call map per function
-            Map<Function, Set<String>> functionAPIs = new LinkedHashMap<>();
-            
-            for (Function func : functionManager.getFunctions(true)) {
-                if (func.isThunk()) continue;
-                
-                Set<String> apis = new HashSet<>();
-                Listing listing = program.getListing();
-                InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-                
-                while (instrIter.hasNext()) {
-                    Instruction instr = instrIter.next();
-                    if (instr.getFlowType().isCall()) {
-                        for (Reference ref : refManager.getReferencesFrom(instr.getAddress())) {
-                            if (ref.getReferenceType().isCall()) {
-                                Symbol sym = symbolTable.getPrimarySymbol(ref.getToAddress());
-                                if (sym != null) {
-                                    apis.add(sym.getName());
-                                }
+            while (instrIter.hasNext()) {
+                Instruction instr = instrIter.next();
+                if (instr.getFlowType().isCall()) {
+                    for (Reference ref : refManager.getReferencesFrom(instr.getAddress())) {
+                        if (ref.getReferenceType().isCall()) {
+                            Symbol sym = symbolTable.getPrimarySymbol(ref.getToAddress());
+                            if (sym != null) {
+                                apis.add(sym.getName());
                             }
                         }
                     }
                 }
-                
-                if (!apis.isEmpty()) {
-                    functionAPIs.put(func, apis);
-                }
             }
             
-            // Check each function against threat patterns
-            for (Map.Entry<Function, Set<String>> entry : functionAPIs.entrySet()) {
-                Function func = entry.getKey();
-                Set<String> apis = entry.getValue();
-                
-                for (ThreatPattern pattern : threatPatterns) {
-                    int matchCount = 0;
-                    List<String> matchedAPIs = new ArrayList<>();
-                    
-                    for (String requiredAPI : pattern.apis) {
-                        for (String funcAPI : apis) {
-                            if (funcAPI.toLowerCase().contains(requiredAPI.toLowerCase())) {
-                                matchCount++;
-                                matchedAPIs.add(funcAPI);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Require at least half of the pattern APIs to match
-                    if (matchCount >= Math.ceil(pattern.apis.length / 2.0) && matchCount >= 2) {
-                        double confidence = (double) matchCount / pattern.apis.length;
-                        
-                        Map<String, Object> detection = new LinkedHashMap<>();
-                        detection.put("pattern_id", pattern.id);
-                        detection.put("pattern_name", pattern.name);
-                        detection.put("severity", pattern.severity);
-                        detection.put("function", func.getName());
-                        detection.put("address", func.getEntryPoint().toString());
-                        detection.put("confidence", Math.round(confidence * 100.0) / 100.0);
-                        detection.put("matched_apis", matchedAPIs);
-                        detection.put("description", pattern.description);
-                        
-                        detectedPatterns.add(detection);
-                    }
-                }
+            if (!apis.isEmpty()) {
+                functionAPIs.put(func, apis);
             }
-            
-            // Sort by severity and confidence
-            detectedPatterns.sort((a, b) -> {
-                int sevCompare = getSeverityRank((String)a.get("severity")) - getSeverityRank((String)b.get("severity"));
-                if (sevCompare != 0) return sevCompare;
-                return Double.compare((Double)b.get("confidence"), (Double)a.get("confidence"));
-            });
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"total_patterns_detected\": ").append(detectedPatterns.size()).append(",\n");
-            result.append("  \"severity_summary\": {\n");
-            
-            // Count by severity
-            Map<String, Integer> sevCounts = new LinkedHashMap<>();
-            for (Map<String, Object> det : detectedPatterns) {
-                String sev = (String) det.get("severity");
-                sevCounts.put(sev, sevCounts.getOrDefault(sev, 0) + 1);
-            }
-            
-            int sevIdx = 0;
-            for (Map.Entry<String, Integer> entry : sevCounts.entrySet()) {
-                if (sevIdx++ > 0) result.append(",\n");
-                result.append("    \"").append(entry.getKey()).append("\": ").append(entry.getValue());
-            }
-            result.append("\n  },\n");
-            
-            result.append("  \"detected_patterns\": [\n");
-            for (int i = 0; i < Math.min(detectedPatterns.size(), 50); i++) {
-                Map<String, Object> det = detectedPatterns.get(i);
-                result.append("    {\n");
-                result.append("      \"pattern_id\": \"").append(det.get("pattern_id")).append("\",\n");
-                result.append("      \"pattern_name\": \"").append(escapeJson((String)det.get("pattern_name"))).append("\",\n");
-                result.append("      \"severity\": \"").append(det.get("severity")).append("\",\n");
-                result.append("      \"function\": \"").append(escapeJson((String)det.get("function"))).append("\",\n");
-                result.append("      \"address\": \"").append(det.get("address")).append("\",\n");
-                result.append("      \"confidence\": ").append(det.get("confidence")).append(",\n");
-                result.append("      \"matched_apis\": [");
-                @SuppressWarnings("unchecked")
-                List<String> matchedAPIs = (List<String>) det.get("matched_apis");
-                for (int j = 0; j < matchedAPIs.size(); j++) {
-                    if (j > 0) result.append(", ");
-                    result.append("\"").append(escapeJson(matchedAPIs.get(j))).append("\"");
-                }
-                result.append("],\n");
-                result.append("      \"description\": \"").append(escapeJson((String)det.get("description"))).append("\"\n");
-                result.append("    }");
-                if (i < Math.min(detectedPatterns.size(), 50) - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        // Check each function against threat patterns
+        for (Map.Entry<Function, Set<String>> entry : functionAPIs.entrySet()) {
+            Function func = entry.getKey();
+            Set<String> apis = entry.getValue();
+            
+            for (ThreatPattern pattern : threatPatterns) {
+                int matchCount = 0;
+                List<String> matchedAPIs = new ArrayList<>();
+                
+                for (String requiredAPI : pattern.apis) {
+                    for (String funcAPI : apis) {
+                        if (funcAPI.toLowerCase().contains(requiredAPI.toLowerCase())) {
+                            matchCount++;
+                            matchedAPIs.add(funcAPI);
+                            break;
+                        }
+                    }
+                }
+                
+                // Require at least half of the pattern APIs to match
+                if (matchCount >= Math.ceil(pattern.apis.length / 2.0) && matchCount >= 2) {
+                    double confidence = (double) matchCount / pattern.apis.length;
+                    
+                    Map<String, Object> detection = new LinkedHashMap<>();
+                    detection.put("pattern_id", pattern.id);
+                    detection.put("pattern_name", pattern.name);
+                    detection.put("severity", pattern.severity);
+                    detection.put("function", func.getName());
+                    detection.put("address", func.getEntryPoint().toString());
+                    detection.put("confidence", Math.round(confidence * 100.0) / 100.0);
+                    detection.put("matched_apis", matchedAPIs);
+                    detection.put("description", pattern.description);
+                    
+                    detectedPatterns.add(detection);
+                }
+            }
+        }
+        
+        // Sort by severity and confidence
+        detectedPatterns.sort((a, b) -> {
+            int sevCompare = getSeverityRank((String)a.get("severity")) - getSeverityRank((String)b.get("severity"));
+            if (sevCompare != 0) return sevCompare;
+            return Double.compare((Double)b.get("confidence"), (Double)a.get("confidence"));
+        });
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"total_patterns_detected\": ").append(detectedPatterns.size()).append(",\n");
+        result.append("  \"severity_summary\": {\n");
+        
+        // Count by severity
+        Map<String, Integer> sevCounts = new LinkedHashMap<>();
+        for (Map<String, Object> det : detectedPatterns) {
+            String sev = (String) det.get("severity");
+            sevCounts.put(sev, sevCounts.getOrDefault(sev, 0) + 1);
+        }
+        
+        int sevIdx = 0;
+        for (Map.Entry<String, Integer> entry : sevCounts.entrySet()) {
+            if (sevIdx++ > 0) result.append(",\n");
+            result.append("    \"").append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        result.append("\n  },\n");
+        
+        result.append("  \"detected_patterns\": [\n");
+        for (int i = 0; i < Math.min(detectedPatterns.size(), 50); i++) {
+            Map<String, Object> det = detectedPatterns.get(i);
+            result.append("    {\n");
+            result.append("      \"pattern_id\": \"").append(det.get("pattern_id")).append("\",\n");
+            result.append("      \"pattern_name\": \"").append(escapeJson((String)det.get("pattern_name"))).append("\",\n");
+            result.append("      \"severity\": \"").append(det.get("severity")).append("\",\n");
+            result.append("      \"function\": \"").append(escapeJson((String)det.get("function"))).append("\",\n");
+            result.append("      \"address\": \"").append(det.get("address")).append("\",\n");
+            result.append("      \"confidence\": ").append(det.get("confidence")).append(",\n");
+            result.append("      \"matched_apis\": [");
+            @SuppressWarnings("unchecked")
+            List<String> matchedAPIs = (List<String>) det.get("matched_apis");
+            for (int j = 0; j < matchedAPIs.size(); j++) {
+                if (j > 0) result.append(", ");
+                result.append("\"").append(escapeJson(matchedAPIs.get(j))).append("\"");
+            }
+            result.append("],\n");
+            result.append("      \"description\": \"").append(escapeJson((String)det.get("description"))).append("\"\n");
+            result.append("    }");
+            if (i < Math.min(detectedPatterns.size(), 50) - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
     
     /**
@@ -6110,112 +6045,108 @@ public class EndpointRouter {
     /**
      * Enhanced IOC extraction with context and confidence scoring
      */
-    private String extractIOCsWithContext() {
+    private String extractIOCsWithContext() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            List<Map<String, Object>> iocs = new ArrayList<>();
-            Listing listing = program.getListing();
-            FunctionManager functionManager = program.getFunctionManager();
-            
-            // Regex patterns for IOC extraction
-            Pattern ipv4Pattern = Pattern.compile("\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b");
-            Pattern urlPattern = Pattern.compile("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+", Pattern.CASE_INSENSITIVE);
-            Pattern domainPattern = Pattern.compile("\\b[a-zA-Z0-9][a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9]\\.[a-zA-Z]{2,}\\b");
-            Pattern emailPattern = Pattern.compile("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}");
-            Pattern registryPattern = Pattern.compile("(HKEY_[A-Z_]+|HKLM|HKCU|HKCR|HKU|HKCC)\\\\[\\w\\\\]+", Pattern.CASE_INSENSITIVE);
-            Pattern filePathPattern = Pattern.compile("([a-zA-Z]:\\\\[^\"<>|*?\\n]+|\\\\\\\\[\\w.]+\\\\[^\"<>|*?\\n]+)");
-            Pattern bitcoinPattern = Pattern.compile("\\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\\b");
-            Pattern md5Pattern = Pattern.compile("\\b[a-fA-F0-9]{32}\\b");
-            Pattern sha256Pattern = Pattern.compile("\\b[a-fA-F0-9]{64}\\b");
-            
-            // Scan defined strings
-            DataIterator dataIter = listing.getDefinedData(true);
-            while (dataIter.hasNext()) {
-                Data data = dataIter.next();
-                if (data.getDataType() instanceof StringDataType || 
-                    data.getDataType().getName().toLowerCase().contains("string")) {
+        List<Map<String, Object>> iocs = new ArrayList<>();
+        Listing listing = program.getListing();
+        FunctionManager functionManager = program.getFunctionManager();
+        
+        // Regex patterns for IOC extraction
+        Pattern ipv4Pattern = Pattern.compile("\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b");
+        Pattern urlPattern = Pattern.compile("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+", Pattern.CASE_INSENSITIVE);
+        Pattern domainPattern = Pattern.compile("\\b[a-zA-Z0-9][a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9]\\.[a-zA-Z]{2,}\\b");
+        Pattern emailPattern = Pattern.compile("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}");
+        Pattern registryPattern = Pattern.compile("(HKEY_[A-Z_]+|HKLM|HKCU|HKCR|HKU|HKCC)\\\\[\\w\\\\]+", Pattern.CASE_INSENSITIVE);
+        Pattern filePathPattern = Pattern.compile("([a-zA-Z]:\\\\[^\"<>|*?\\n]+|\\\\\\\\[\\w.]+\\\\[^\"<>|*?\\n]+)");
+        Pattern bitcoinPattern = Pattern.compile("\\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\\b");
+        Pattern md5Pattern = Pattern.compile("\\b[a-fA-F0-9]{32}\\b");
+        Pattern sha256Pattern = Pattern.compile("\\b[a-fA-F0-9]{64}\\b");
+        
+        // Scan defined strings
+        DataIterator dataIter = listing.getDefinedData(true);
+        while (dataIter.hasNext()) {
+            Data data = dataIter.next();
+            if (data.getDataType() instanceof StringDataType || 
+                data.getDataType().getName().toLowerCase().contains("string")) {
+                
+                Object value = data.getValue();
+                if (value != null) {
+                    String strValue = value.toString();
+                    Address addr = data.getAddress();
                     
-                    Object value = data.getValue();
-                    if (value != null) {
-                        String strValue = value.toString();
-                        Address addr = data.getAddress();
-                        
-                        // Find containing function for context
-                        Function containingFunc = functionManager.getFunctionContaining(addr);
-                        String funcContext = containingFunc != null ? containingFunc.getName() : "global";
-                        
-                        // Check each pattern
-                        checkAndAddIOC(iocs, strValue, ipv4Pattern, "ipv4", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, urlPattern, "url", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, domainPattern, "domain", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, emailPattern, "email", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, registryPattern, "registry_key", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, filePathPattern, "file_path", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, bitcoinPattern, "bitcoin_address", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, md5Pattern, "md5_hash", addr, funcContext);
-                        checkAndAddIOC(iocs, strValue, sha256Pattern, "sha256_hash", addr, funcContext);
-                    }
+                    // Find containing function for context
+                    Function containingFunc = functionManager.getFunctionContaining(addr);
+                    String funcContext = containingFunc != null ? containingFunc.getName() : "global";
+                    
+                    // Check each pattern
+                    checkAndAddIOC(iocs, strValue, ipv4Pattern, "ipv4", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, urlPattern, "url", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, domainPattern, "domain", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, emailPattern, "email", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, registryPattern, "registry_key", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, filePathPattern, "file_path", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, bitcoinPattern, "bitcoin_address", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, md5Pattern, "md5_hash", addr, funcContext);
+                    checkAndAddIOC(iocs, strValue, sha256Pattern, "sha256_hash", addr, funcContext);
                 }
             }
-            
-            // Calculate confidence scores
-            for (Map<String, Object> ioc : iocs) {
-                double confidence = calculateIOCConfidence(ioc, program);
-                ioc.put("confidence", Math.round(confidence * 100.0) / 100.0);
-            }
-            
-            // Sort by confidence descending
-            iocs.sort((a, b) -> Double.compare((Double)b.get("confidence"), (Double)a.get("confidence")));
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"total_iocs\": ").append(iocs.size()).append(",\n");
-            
-            // Summary by type
-            Map<String, Integer> typeCounts = new LinkedHashMap<>();
-            for (Map<String, Object> ioc : iocs) {
-                String type = (String) ioc.get("type");
-                typeCounts.put(type, typeCounts.getOrDefault(type, 0) + 1);
-            }
-            
-            result.append("  \"by_type\": {");
-            int typeIdx = 0;
-            for (Map.Entry<String, Integer> entry : typeCounts.entrySet()) {
-                if (typeIdx++ > 0) result.append(", ");
-                result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-            }
-            result.append("},\n");
-            
-            result.append("  \"iocs\": [\n");
-            for (int i = 0; i < Math.min(iocs.size(), 100); i++) {
-                Map<String, Object> ioc = iocs.get(i);
-                result.append("    {");
-                result.append("\"type\": \"").append(ioc.get("type")).append("\", ");
-                result.append("\"value\": \"").append(escapeJson((String)ioc.get("value"))).append("\", ");
-                result.append("\"address\": \"").append(ioc.get("address")).append("\", ");
-                result.append("\"function_context\": \"").append(escapeJson((String)ioc.get("function_context"))).append("\", ");
-                result.append("\"confidence\": ").append(ioc.get("confidence"));
-                result.append("}");
-                if (i < Math.min(iocs.size(), 100) - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            if (iocs.size() > 100) {
-                result.append("    {\"note\": \"").append(iocs.size() - 100).append(" additional IOCs truncated\"}\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        // Calculate confidence scores
+        for (Map<String, Object> ioc : iocs) {
+            double confidence = calculateIOCConfidence(ioc, program);
+            ioc.put("confidence", Math.round(confidence * 100.0) / 100.0);
+        }
+        
+        // Sort by confidence descending
+        iocs.sort((a, b) -> Double.compare((Double)b.get("confidence"), (Double)a.get("confidence")));
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"total_iocs\": ").append(iocs.size()).append(",\n");
+        
+        // Summary by type
+        Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        for (Map<String, Object> ioc : iocs) {
+            String type = (String) ioc.get("type");
+            typeCounts.put(type, typeCounts.getOrDefault(type, 0) + 1);
+        }
+        
+        result.append("  \"by_type\": {");
+        int typeIdx = 0;
+        for (Map.Entry<String, Integer> entry : typeCounts.entrySet()) {
+            if (typeIdx++ > 0) result.append(", ");
+            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        result.append("},\n");
+        
+        result.append("  \"iocs\": [\n");
+        for (int i = 0; i < Math.min(iocs.size(), 100); i++) {
+            Map<String, Object> ioc = iocs.get(i);
+            result.append("    {");
+            result.append("\"type\": \"").append(ioc.get("type")).append("\", ");
+            result.append("\"value\": \"").append(escapeJson((String)ioc.get("value"))).append("\", ");
+            result.append("\"address\": \"").append(ioc.get("address")).append("\", ");
+            result.append("\"function_context\": \"").append(escapeJson((String)ioc.get("function_context"))).append("\", ");
+            result.append("\"confidence\": ").append(ioc.get("confidence"));
+            result.append("}");
+            if (i < Math.min(iocs.size(), 100) - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        if (iocs.size() > 100) {
+            result.append("    {\"note\": \"").append(iocs.size() - 100).append(" additional IOCs truncated\"}\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
     
     /**
@@ -6298,179 +6229,175 @@ public class EndpointRouter {
     /**
      * Detect common malware behaviors and techniques
      */
-    private String detectMalwareBehaviors() {
+    private String detectMalwareBehaviors() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"error\": \"No program loaded\"}";
         }
 
-        try {
-            List<Map<String, Object>> behaviors = new ArrayList<>();
-            FunctionManager functionManager = program.getFunctionManager();
-            SymbolTable symbolTable = program.getSymbolTable();
-            ReferenceManager refManager = program.getReferenceManager();
-            Listing listing = program.getListing();
+        List<Map<String, Object>> behaviors = new ArrayList<>();
+        FunctionManager functionManager = program.getFunctionManager();
+        SymbolTable symbolTable = program.getSymbolTable();
+        ReferenceManager refManager = program.getReferenceManager();
+        Listing listing = program.getListing();
+        
+        // Define behavior categories and their indicators
+        Map<String, String[]> behaviorIndicators = new LinkedHashMap<>();
+        
+        // Code injection
+        behaviorIndicators.put("code_injection", new String[]{
+            "VirtualAlloc", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
+            "NtWriteVirtualMemory", "RtlCreateUserThread", "QueueUserAPC"
+        });
+        
+        // Keylogging
+        behaviorIndicators.put("keylogging", new String[]{
+            "SetWindowsHookEx", "GetAsyncKeyState", "GetKeyState", "RegisterRawInputDevices"
+        });
+        
+        // Screen capture
+        behaviorIndicators.put("screen_capture", new String[]{
+            "GetDC", "GetWindowDC", "BitBlt", "CreateCompatibleBitmap", "GetDIBits"
+        });
+        
+        // Privilege escalation
+        behaviorIndicators.put("privilege_escalation", new String[]{
+            "AdjustTokenPrivileges", "LookupPrivilegeValue", "OpenProcessToken",
+            "ImpersonateLoggedOnUser", "DuplicateToken"
+        });
+        
+        // Defense evasion
+        behaviorIndicators.put("defense_evasion", new String[]{
+            "NtSetInformationThread", "NtQueryInformationProcess", "GetProcAddress",
+            "LoadLibrary", "VirtualProtect"
+        });
+        
+        // Lateral movement
+        behaviorIndicators.put("lateral_movement", new String[]{
+            "WNetAddConnection", "NetShareEnum", "WNetEnumResource"
+        });
+        
+        // Data exfiltration
+        behaviorIndicators.put("data_exfiltration", new String[]{
+            "InternetOpen", "HttpSendRequest", "FtpPutFile", "send", "WSASend"
+        });
+        
+        // Cryptographic operations
+        behaviorIndicators.put("crypto_operations", new String[]{
+            "CryptAcquireContext", "CryptGenKey", "CryptEncrypt", "CryptDecrypt",
+            "CryptImportKey", "CryptDeriveKey"
+        });
+        
+        // Process manipulation
+        behaviorIndicators.put("process_manipulation", new String[]{
+            "TerminateProcess", "SuspendThread", "ResumeThread", "NtSuspendProcess"
+        });
+        
+        // Check each function for behavior indicators
+        for (Function func : functionManager.getFunctions(true)) {
+            if (func.isThunk()) continue;
             
-            // Define behavior categories and their indicators
-            Map<String, String[]> behaviorIndicators = new LinkedHashMap<>();
+            Set<String> funcAPIs = new HashSet<>();
+            InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
             
-            // Code injection
-            behaviorIndicators.put("code_injection", new String[]{
-                "VirtualAlloc", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
-                "NtWriteVirtualMemory", "RtlCreateUserThread", "QueueUserAPC"
-            });
-            
-            // Keylogging
-            behaviorIndicators.put("keylogging", new String[]{
-                "SetWindowsHookEx", "GetAsyncKeyState", "GetKeyState", "RegisterRawInputDevices"
-            });
-            
-            // Screen capture
-            behaviorIndicators.put("screen_capture", new String[]{
-                "GetDC", "GetWindowDC", "BitBlt", "CreateCompatibleBitmap", "GetDIBits"
-            });
-            
-            // Privilege escalation
-            behaviorIndicators.put("privilege_escalation", new String[]{
-                "AdjustTokenPrivileges", "LookupPrivilegeValue", "OpenProcessToken",
-                "ImpersonateLoggedOnUser", "DuplicateToken"
-            });
-            
-            // Defense evasion
-            behaviorIndicators.put("defense_evasion", new String[]{
-                "NtSetInformationThread", "NtQueryInformationProcess", "GetProcAddress",
-                "LoadLibrary", "VirtualProtect"
-            });
-            
-            // Lateral movement
-            behaviorIndicators.put("lateral_movement", new String[]{
-                "WNetAddConnection", "NetShareEnum", "WNetEnumResource"
-            });
-            
-            // Data exfiltration
-            behaviorIndicators.put("data_exfiltration", new String[]{
-                "InternetOpen", "HttpSendRequest", "FtpPutFile", "send", "WSASend"
-            });
-            
-            // Cryptographic operations
-            behaviorIndicators.put("crypto_operations", new String[]{
-                "CryptAcquireContext", "CryptGenKey", "CryptEncrypt", "CryptDecrypt",
-                "CryptImportKey", "CryptDeriveKey"
-            });
-            
-            // Process manipulation
-            behaviorIndicators.put("process_manipulation", new String[]{
-                "TerminateProcess", "SuspendThread", "ResumeThread", "NtSuspendProcess"
-            });
-            
-            // Check each function for behavior indicators
-            for (Function func : functionManager.getFunctions(true)) {
-                if (func.isThunk()) continue;
-                
-                Set<String> funcAPIs = new HashSet<>();
-                InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-                
-                while (instrIter.hasNext()) {
-                    Instruction instr = instrIter.next();
-                    if (instr.getFlowType().isCall()) {
-                        for (Reference ref : refManager.getReferencesFrom(instr.getAddress())) {
-                            if (ref.getReferenceType().isCall()) {
-                                Symbol sym = symbolTable.getPrimarySymbol(ref.getToAddress());
-                                if (sym != null) {
-                                    funcAPIs.add(sym.getName());
-                                }
+            while (instrIter.hasNext()) {
+                Instruction instr = instrIter.next();
+                if (instr.getFlowType().isCall()) {
+                    for (Reference ref : refManager.getReferencesFrom(instr.getAddress())) {
+                        if (ref.getReferenceType().isCall()) {
+                            Symbol sym = symbolTable.getPrimarySymbol(ref.getToAddress());
+                            if (sym != null) {
+                                funcAPIs.add(sym.getName());
                             }
                         }
                     }
                 }
+            }
+            
+            // Check against behavior indicators
+            for (Map.Entry<String, String[]> entry : behaviorIndicators.entrySet()) {
+                String behaviorType = entry.getKey();
+                String[] indicators = entry.getValue();
                 
-                // Check against behavior indicators
-                for (Map.Entry<String, String[]> entry : behaviorIndicators.entrySet()) {
-                    String behaviorType = entry.getKey();
-                    String[] indicators = entry.getValue();
-                    
-                    List<String> matchedIndicators = new ArrayList<>();
-                    for (String indicator : indicators) {
-                        for (String api : funcAPIs) {
-                            if (api.toLowerCase().contains(indicator.toLowerCase())) {
-                                matchedIndicators.add(api);
-                            }
+                List<String> matchedIndicators = new ArrayList<>();
+                for (String indicator : indicators) {
+                    for (String api : funcAPIs) {
+                        if (api.toLowerCase().contains(indicator.toLowerCase())) {
+                            matchedIndicators.add(api);
                         }
                     }
-                    
-                    if (matchedIndicators.size() >= 2) {
-                        Map<String, Object> behavior = new LinkedHashMap<>();
-                        behavior.put("behavior_type", behaviorType);
-                        behavior.put("function", func.getName());
-                        behavior.put("address", func.getEntryPoint().toString());
-                        behavior.put("indicators", matchedIndicators);
-                        behavior.put("indicator_count", matchedIndicators.size());
-                        behavior.put("severity", getBehaviorSeverity(behaviorType));
-                        behaviors.add(behavior);
-                    }
+                }
+                
+                if (matchedIndicators.size() >= 2) {
+                    Map<String, Object> behavior = new LinkedHashMap<>();
+                    behavior.put("behavior_type", behaviorType);
+                    behavior.put("function", func.getName());
+                    behavior.put("address", func.getEntryPoint().toString());
+                    behavior.put("indicators", matchedIndicators);
+                    behavior.put("indicator_count", matchedIndicators.size());
+                    behavior.put("severity", getBehaviorSeverity(behaviorType));
+                    behaviors.add(behavior);
                 }
             }
-            
-            // Sort by severity and indicator count
-            behaviors.sort((a, b) -> {
-                int sevCompare = getSeverityRank((String)a.get("severity")) - getSeverityRank((String)b.get("severity"));
-                if (sevCompare != 0) return sevCompare;
-                return (Integer)b.get("indicator_count") - (Integer)a.get("indicator_count");
-            });
-            
-            // Build JSON response
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            result.append("  \"total_behaviors_detected\": ").append(behaviors.size()).append(",\n");
-            
-            // Summary by behavior type
-            Map<String, Integer> behaviorCounts = new LinkedHashMap<>();
-            for (Map<String, Object> behavior : behaviors) {
-                String type = (String) behavior.get("behavior_type");
-                behaviorCounts.put(type, behaviorCounts.getOrDefault(type, 0) + 1);
-            }
-            
-            result.append("  \"by_behavior_type\": {");
-            int typeIdx = 0;
-            for (Map.Entry<String, Integer> entry : behaviorCounts.entrySet()) {
-                if (typeIdx++ > 0) result.append(", ");
-                result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-            }
-            result.append("},\n");
-            
-            result.append("  \"behaviors\": [\n");
-            for (int i = 0; i < Math.min(behaviors.size(), 100); i++) {
-                Map<String, Object> behavior = behaviors.get(i);
-                result.append("    {\n");
-                result.append("      \"behavior_type\": \"").append(behavior.get("behavior_type")).append("\",\n");
-                result.append("      \"severity\": \"").append(behavior.get("severity")).append("\",\n");
-                result.append("      \"function\": \"").append(escapeJson((String)behavior.get("function"))).append("\",\n");
-                result.append("      \"address\": \"").append(behavior.get("address")).append("\",\n");
-                result.append("      \"indicator_count\": ").append(behavior.get("indicator_count")).append(",\n");
-                result.append("      \"indicators\": [");
-                @SuppressWarnings("unchecked")
-                List<String> indicators = (List<String>) behavior.get("indicators");
-                for (int j = 0; j < indicators.size(); j++) {
-                    if (j > 0) result.append(", ");
-                    result.append("\"").append(escapeJson(indicators.get(j))).append("\"");
-                }
-                result.append("]\n");
-                result.append("    }");
-                if (i < Math.min(behaviors.size(), 100) - 1) result.append(",");
-                result.append("\n");
-            }
-            
-            if (behaviors.size() > 100) {
-                result.append("    {\"note\": \"").append(behaviors.size() - 100).append(" additional behaviors truncated\"}\n");
-            }
-            
-            result.append("  ]\n");
-            result.append("}");
-
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
         }
+        
+        // Sort by severity and indicator count
+        behaviors.sort((a, b) -> {
+            int sevCompare = getSeverityRank((String)a.get("severity")) - getSeverityRank((String)b.get("severity"));
+            if (sevCompare != 0) return sevCompare;
+            return (Integer)b.get("indicator_count") - (Integer)a.get("indicator_count");
+        });
+        
+        // Build JSON response
+        StringBuilder result = new StringBuilder();
+        result.append("{\n");
+        result.append("  \"total_behaviors_detected\": ").append(behaviors.size()).append(",\n");
+        
+        // Summary by behavior type
+        Map<String, Integer> behaviorCounts = new LinkedHashMap<>();
+        for (Map<String, Object> behavior : behaviors) {
+            String type = (String) behavior.get("behavior_type");
+            behaviorCounts.put(type, behaviorCounts.getOrDefault(type, 0) + 1);
+        }
+        
+        result.append("  \"by_behavior_type\": {");
+        int typeIdx = 0;
+        for (Map.Entry<String, Integer> entry : behaviorCounts.entrySet()) {
+            if (typeIdx++ > 0) result.append(", ");
+            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        result.append("},\n");
+        
+        result.append("  \"behaviors\": [\n");
+        for (int i = 0; i < Math.min(behaviors.size(), 100); i++) {
+            Map<String, Object> behavior = behaviors.get(i);
+            result.append("    {\n");
+            result.append("      \"behavior_type\": \"").append(behavior.get("behavior_type")).append("\",\n");
+            result.append("      \"severity\": \"").append(behavior.get("severity")).append("\",\n");
+            result.append("      \"function\": \"").append(escapeJson((String)behavior.get("function"))).append("\",\n");
+            result.append("      \"address\": \"").append(behavior.get("address")).append("\",\n");
+            result.append("      \"indicator_count\": ").append(behavior.get("indicator_count")).append(",\n");
+            result.append("      \"indicators\": [");
+            @SuppressWarnings("unchecked")
+            List<String> indicators = (List<String>) behavior.get("indicators");
+            for (int j = 0; j < indicators.size(); j++) {
+                if (j > 0) result.append(", ");
+                result.append("\"").append(escapeJson(indicators.get(j))).append("\"");
+            }
+            result.append("]\n");
+            result.append("    }");
+            if (i < Math.min(behaviors.size(), 100) - 1) result.append(",");
+            result.append("\n");
+        }
+        
+        if (behaviors.size() > 100) {
+            result.append("    {\"note\": \"").append(behaviors.size() - 100).append(" additional behaviors truncated\"}\n");
+        }
+        
+        result.append("  ]\n");
+        result.append("}");
+
+        return result.toString();
     }
     
     /**
@@ -7727,7 +7654,7 @@ public class EndpointRouter {
      * this endpoint provides script discovery and validation. Full execution with output
      * capture should be done through Ghidra's Script Manager UI or headless mode.
      */
-    private String runGhidraScriptWithCapture(String scriptName, String scriptArgs, int timeoutSeconds, boolean captureOutput) {
+    private String runGhidraScriptWithCapture(String scriptName, String scriptArgs, int timeoutSeconds, boolean captureOutput) throws Exception {
         if (scriptName == null || scriptName.isEmpty()) {
             return "{\"success\": false, \"error\": \"Script name is required\"}";
         }
@@ -7737,72 +7664,68 @@ public class EndpointRouter {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
         }
 
-        try {
-            // Locate the script file — search Ghidra's standard script directories
-            File scriptFile = null;
-            String filename = scriptName;
-            // If no extension, try .java and .py
-            boolean hasExtension = scriptName.contains(".");
+        // Locate the script file — search Ghidra's standard script directories
+        File scriptFile = null;
+        String filename = scriptName;
+        // If no extension, try .java and .py
+        boolean hasExtension = scriptName.contains(".");
 
-            String[] searchDirs = {
-                System.getProperty("user.home") + "/ghidra_scripts",
-                System.getProperty("user.dir") + "/ghidra_scripts",
-                "./ghidra_scripts"
-            };
+        String[] searchDirs = {
+            System.getProperty("user.home") + "/ghidra_scripts",
+            System.getProperty("user.dir") + "/ghidra_scripts",
+            "./ghidra_scripts"
+        };
 
-            String[] extensions = hasExtension ? new String[]{""} : new String[]{".java", ".py", ""};
+        String[] extensions = hasExtension ? new String[]{""} : new String[]{".java", ".py", ""};
 
-            for (String dirPath : searchDirs) {
-                if (dirPath == null) continue;
-                for (String ext : extensions) {
-                    File candidate = new File(dirPath, filename + ext);
-                    if (candidate.exists()) {
-                        scriptFile = candidate;
-                        break;
-                    }
-                }
-                if (scriptFile != null) break;
-            }
-
-            // Also try as absolute path
-            if (scriptFile == null) {
-                File candidate = new File(scriptName);
+        for (String dirPath : searchDirs) {
+            if (dirPath == null) continue;
+            for (String ext : extensions) {
+                File candidate = new File(dirPath, filename + ext);
                 if (candidate.exists()) {
                     scriptFile = candidate;
+                    break;
                 }
             }
-
-            if (scriptFile == null) {
-                StringBuilder searched = new StringBuilder();
-                for (String dir : searchDirs) {
-                    if (dir != null) searched.append(dir).append(", ");
-                }
-                return "{\"success\": false, \"error\": \"Script '" + escapeJsonString(filename) +
-                       "' not found. Searched: " + escapeJsonString(searched.toString()) + "\"}";
-            }
-
-            // Execute the script via the existing execution method
-            long startTime = System.currentTimeMillis();
-            String output = runGhidraScript(scriptFile.getAbsolutePath(), scriptArgs);
-            double executionTime = (System.currentTimeMillis() - startTime) / 1000.0;
-
-            boolean succeeded = output.contains("SCRIPT COMPLETED SUCCESSFULLY");
-
-            // Build JSON response
-            StringBuilder response = new StringBuilder();
-            response.append("{");
-            response.append("\"success\": ").append(succeeded).append(", ");
-            response.append("\"script_name\": \"").append(escapeJsonString(scriptName)).append("\", ");
-            response.append("\"script_path\": \"").append(escapeJsonString(scriptFile.getAbsolutePath())).append("\", ");
-            response.append("\"execution_time_seconds\": ").append(String.format("%.2f", executionTime)).append(", ");
-            response.append("\"console_output\": \"").append(escapeJsonString(output)).append("\"");
-            response.append("}");
-
-            return response.toString();
-
-        } catch (Exception e) {
-            return "{\"success\": false, \"error\": \"" + escapeJsonString(e.getMessage()) + "\"}";
+            if (scriptFile != null) break;
         }
+
+        // Also try as absolute path
+        if (scriptFile == null) {
+            File candidate = new File(scriptName);
+            if (candidate.exists()) {
+                scriptFile = candidate;
+            }
+        }
+
+        if (scriptFile == null) {
+            StringBuilder searched = new StringBuilder();
+            for (String dir : searchDirs) {
+                if (dir != null) searched.append(dir).append(", ");
+            }
+            return "{\"success\": false, \"error\": \"Script '" + escapeJsonString(filename) +
+                   "' not found. Searched: " + escapeJsonString(searched.toString()) + "\"}";
+        }
+
+        // Execute the script via the existing execution method
+        long startTime = System.currentTimeMillis();
+        String output = runGhidraScript(scriptFile.getAbsolutePath(), scriptArgs);
+        double executionTime = (System.currentTimeMillis() - startTime) / 1000.0;
+
+        boolean succeeded = output.contains("SCRIPT COMPLETED SUCCESSFULLY");
+
+        // Build JSON response
+        StringBuilder response = new StringBuilder();
+        response.append("{");
+        response.append("\"success\": ").append(succeeded).append(", ");
+        response.append("\"script_name\": \"").append(escapeJsonString(scriptName)).append("\", ");
+        response.append("\"script_path\": \"").append(escapeJsonString(scriptFile.getAbsolutePath())).append("\", ");
+        response.append("\"execution_time_seconds\": ").append(String.format("%.2f", executionTime)).append(", ");
+        response.append("\"console_output\": \"").append(escapeJsonString(output)).append("\"");
+        response.append("}");
+
+        return response.toString();
+
     }
 
     // ===================================================================================
@@ -7813,7 +7736,7 @@ public class EndpointRouter {
      * Set a bookmark at an address with category and comment.
      * Creates or updates the bookmark if one already exists at the address with the same category.
      */
-    private String setBookmark(String addressStr, String category, String comment) {
+    private String setBookmark(String addressStr, String category, String comment) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
@@ -7828,65 +7751,76 @@ public class EndpointRouter {
             comment = "";
         }
 
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) {
+            return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+        }
+
+        BookmarkManager bookmarkManager = program.getBookmarkManager();
+        final String finalCategory = category;
+        final String finalComment = comment;
+
+        int transactionId = program.startTransaction("Set bookmark at " + addressStr);
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            if (addr == null) {
-                return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+            // Check if bookmark already exists at this address with this category
+            Bookmark existing = bookmarkManager.getBookmark(addr, BookmarkType.NOTE, finalCategory);
+            if (existing != null) {
+                // Remove existing to update
+                bookmarkManager.removeBookmark(existing);
             }
 
-            BookmarkManager bookmarkManager = program.getBookmarkManager();
-            final String finalCategory = category;
-            final String finalComment = comment;
+            // Create new bookmark
+            bookmarkManager.setBookmark(addr, BookmarkType.NOTE, finalCategory, finalComment);
+            program.endTransaction(transactionId, true);
 
-            int transactionId = program.startTransaction("Set bookmark at " + addressStr);
-            try {
-                // Check if bookmark already exists at this address with this category
-                Bookmark existing = bookmarkManager.getBookmark(addr, BookmarkType.NOTE, finalCategory);
-                if (existing != null) {
-                    // Remove existing to update
-                    bookmarkManager.removeBookmark(existing);
-                }
-
-                // Create new bookmark
-                bookmarkManager.setBookmark(addr, BookmarkType.NOTE, finalCategory, finalComment);
-                program.endTransaction(transactionId, true);
-
-                return "{\"success\": true, \"address\": \"" + escapeJsonString(addr.toString()) +
-                       "\", \"category\": \"" + escapeJsonString(finalCategory) +
-                       "\", \"comment\": \"" + escapeJsonString(finalComment) + "\"}";
-
-            } catch (Exception e) {
-                program.endTransaction(transactionId, false);
-                throw e;
-            }
+            return "{\"success\": true, \"address\": \"" + escapeJsonString(addr.toString()) +
+                   "\", \"category\": \"" + escapeJsonString(finalCategory) +
+                   "\", \"comment\": \"" + escapeJsonString(finalComment) + "\"}";
 
         } catch (Exception e) {
-            return "{\"success\": false, \"error\": \"" + escapeJsonString(e.getMessage()) + "\"}";
+            program.endTransaction(transactionId, false);
+            throw e;
         }
+
     }
 
     /**
      * List bookmarks, optionally filtered by category and/or address.
      */
-    private String listBookmarks(String category, String addressStr) {
+    private String listBookmarks(String category, String addressStr) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
         }
 
-        try {
-            BookmarkManager bookmarkManager = program.getBookmarkManager();
-            List<Map<String, String>> bookmarks = new ArrayList<>();
+        BookmarkManager bookmarkManager = program.getBookmarkManager();
+        List<Map<String, String>> bookmarks = new ArrayList<>();
 
-            // If specific address provided, get bookmarks at that address
-            if (addressStr != null && !addressStr.isEmpty()) {
-                Address addr = program.getAddressFactory().getAddress(addressStr);
-                if (addr == null) {
-                    return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+        // If specific address provided, get bookmarks at that address
+        if (addressStr != null && !addressStr.isEmpty()) {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) {
+                return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+            }
+
+            Bookmark[] bms = bookmarkManager.getBookmarks(addr);
+            for (Bookmark bm : bms) {
+                if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
+                    Map<String, String> bmMap = new HashMap<>();
+                    bmMap.put("address", bm.getAddress().toString());
+                    bmMap.put("category", bm.getCategory());
+                    bmMap.put("comment", bm.getComment());
+                    bmMap.put("type", bm.getTypeString());
+                    bookmarks.add(bmMap);
                 }
-
-                Bookmark[] bms = bookmarkManager.getBookmarks(addr);
-                for (Bookmark bm : bms) {
+            }
+        } else {
+            // Iterate all bookmarks
+            BookmarkType[] types = bookmarkManager.getBookmarkTypes();
+            for (BookmarkType type : types) {
+                Iterator<Bookmark> iter = bookmarkManager.getBookmarksIterator(type.getTypeString());
+                while (iter.hasNext()) {
+                    Bookmark bm = iter.next();
                     if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
                         Map<String, String> bmMap = new HashMap<>();
                         bmMap.put("address", bm.getAddress().toString());
@@ -7896,51 +7830,32 @@ public class EndpointRouter {
                         bookmarks.add(bmMap);
                     }
                 }
-            } else {
-                // Iterate all bookmarks
-                BookmarkType[] types = bookmarkManager.getBookmarkTypes();
-                for (BookmarkType type : types) {
-                    Iterator<Bookmark> iter = bookmarkManager.getBookmarksIterator(type.getTypeString());
-                    while (iter.hasNext()) {
-                        Bookmark bm = iter.next();
-                        if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
-                            Map<String, String> bmMap = new HashMap<>();
-                            bmMap.put("address", bm.getAddress().toString());
-                            bmMap.put("category", bm.getCategory());
-                            bmMap.put("comment", bm.getComment());
-                            bmMap.put("type", bm.getTypeString());
-                            bookmarks.add(bmMap);
-                        }
-                    }
-                }
             }
-
-            // Build JSON response
-            StringBuilder response = new StringBuilder();
-            response.append("{\"success\": true, \"bookmarks\": [");
-            for (int i = 0; i < bookmarks.size(); i++) {
-                if (i > 0) response.append(", ");
-                Map<String, String> bm = bookmarks.get(i);
-                response.append("{");
-                response.append("\"address\": \"").append(escapeJsonString(bm.get("address"))).append("\", ");
-                response.append("\"category\": \"").append(escapeJsonString(bm.get("category"))).append("\", ");
-                response.append("\"comment\": \"").append(escapeJsonString(bm.get("comment"))).append("\", ");
-                response.append("\"type\": \"").append(escapeJsonString(bm.get("type"))).append("\"");
-                response.append("}");
-            }
-            response.append("], \"count\": ").append(bookmarks.size()).append("}");
-
-            return response.toString();
-
-        } catch (Exception e) {
-            return "{\"success\": false, \"error\": \"" + escapeJsonString(e.getMessage()) + "\"}";
         }
+
+        // Build JSON response
+        StringBuilder response = new StringBuilder();
+        response.append("{\"success\": true, \"bookmarks\": [");
+        for (int i = 0; i < bookmarks.size(); i++) {
+            if (i > 0) response.append(", ");
+            Map<String, String> bm = bookmarks.get(i);
+            response.append("{");
+            response.append("\"address\": \"").append(escapeJsonString(bm.get("address"))).append("\", ");
+            response.append("\"category\": \"").append(escapeJsonString(bm.get("category"))).append("\", ");
+            response.append("\"comment\": \"").append(escapeJsonString(bm.get("comment"))).append("\", ");
+            response.append("\"type\": \"").append(escapeJsonString(bm.get("type"))).append("\"");
+            response.append("}");
+        }
+        response.append("], \"count\": ").append(bookmarks.size()).append("}");
+
+        return response.toString();
+
     }
 
     /**
      * Delete a bookmark at an address with optional category filter.
      */
-    private String deleteBookmark(String addressStr, String category) {
+    private String deleteBookmark(String addressStr, String category) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
             return "{\"success\": false, \"error\": \"No program loaded\"}";
@@ -7949,37 +7864,33 @@ public class EndpointRouter {
             return "{\"success\": false, \"error\": \"Address is required\"}";
         }
 
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) {
+            return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+        }
+
+        BookmarkManager bookmarkManager = program.getBookmarkManager();
+
+        int transactionId = program.startTransaction("Delete bookmark at " + addressStr);
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            if (addr == null) {
-                return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
-            }
+            int deleted = 0;
+            Bookmark[] bookmarks = bookmarkManager.getBookmarks(addr);
 
-            BookmarkManager bookmarkManager = program.getBookmarkManager();
-
-            int transactionId = program.startTransaction("Delete bookmark at " + addressStr);
-            try {
-                int deleted = 0;
-                Bookmark[] bookmarks = bookmarkManager.getBookmarks(addr);
-
-                for (Bookmark bm : bookmarks) {
-                    if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
-                        bookmarkManager.removeBookmark(bm);
-                        deleted++;
-                    }
+            for (Bookmark bm : bookmarks) {
+                if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
+                    bookmarkManager.removeBookmark(bm);
+                    deleted++;
                 }
-
-                program.endTransaction(transactionId, true);
-                return "{\"success\": true, \"deleted\": " + deleted + ", \"address\": \"" + escapeJsonString(addr.toString()) + "\"}";
-
-            } catch (Exception e) {
-                program.endTransaction(transactionId, false);
-                throw e;
             }
+
+            program.endTransaction(transactionId, true);
+            return "{\"success\": true, \"deleted\": " + deleted + ", \"address\": \"" + escapeJsonString(addr.toString()) + "\"}";
 
         } catch (Exception e) {
-            return "{\"success\": false, \"error\": \"" + escapeJsonString(e.getMessage()) + "\"}";
+            program.endTransaction(transactionId, false);
+            throw e;
         }
+
     }
 
 
@@ -8021,55 +7932,51 @@ public class EndpointRouter {
     /**
      * Get details of a specific external location
      */
-    private String getExternalLocationDetails(String address, String dllName, String programName) {
+    private String getExternalLocationDetails(String address, String dllName, String programName) throws Exception {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) return (String) programResult[1];
 
-        try {
-            Address addr = program.getAddressFactory().getAddress(address);
-            ExternalManager extMgr = program.getExternalManager();
+        Address addr = program.getAddressFactory().getAddress(address);
+        ExternalManager extMgr = program.getExternalManager();
 
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"address\": \"").append(address).append("\", ");
+        StringBuilder result = new StringBuilder();
+        result.append("{");
+        result.append("\"address\": \"").append(address).append("\", ");
 
-            if (dllName != null && !dllName.isEmpty()) {
-                ExternalLocationIterator iter = extMgr.getExternalLocations(dllName);
+        if (dllName != null && !dllName.isEmpty()) {
+            ExternalLocationIterator iter = extMgr.getExternalLocations(dllName);
+            while (iter.hasNext()) {
+                ExternalLocation extLoc = iter.next();
+                if (extLoc.getAddress().equals(addr)) {
+                    result.append("\"dll_name\": \"").append(dllName).append("\", ");
+                    result.append("\"label\": \"").append(escapeJson(extLoc.getLabel())).append("\", ");
+                    result.append("\"address\": \"").append(addr).append("\"");
+                    break;
+                }
+            }
+            if (!result.toString().contains("label")) {
+                result.append("\"error\": \"External location not found in DLL\"");
+            }
+        } else {
+            // Try to find it in any DLL
+            String[] libNames = extMgr.getExternalLibraryNames();
+            for (String libName : libNames) {
+                ExternalLocationIterator iter = extMgr.getExternalLocations(libName);
                 while (iter.hasNext()) {
                     ExternalLocation extLoc = iter.next();
                     if (extLoc.getAddress().equals(addr)) {
-                        result.append("\"dll_name\": \"").append(dllName).append("\", ");
+                        result.append("\"dll_name\": \"").append(libName).append("\", ");
                         result.append("\"label\": \"").append(escapeJson(extLoc.getLabel())).append("\", ");
                         result.append("\"address\": \"").append(addr).append("\"");
                         break;
                     }
                 }
-                if (!result.toString().contains("label")) {
-                    result.append("\"error\": \"External location not found in DLL\"");
-                }
-            } else {
-                // Try to find it in any DLL
-                String[] libNames = extMgr.getExternalLibraryNames();
-                for (String libName : libNames) {
-                    ExternalLocationIterator iter = extMgr.getExternalLocations(libName);
-                    while (iter.hasNext()) {
-                        ExternalLocation extLoc = iter.next();
-                        if (extLoc.getAddress().equals(addr)) {
-                            result.append("\"dll_name\": \"").append(libName).append("\", ");
-                            result.append("\"label\": \"").append(escapeJson(extLoc.getLabel())).append("\", ");
-                            result.append("\"address\": \"").append(addr).append("\"");
-                            break;
-                        }
-                    }
-                    if (result.toString().contains("label")) break;
-                }
+                if (result.toString().contains("label")) break;
             }
-            result.append("}");
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
         }
+        result.append("}");
+        return result.toString();
     }
     
 
