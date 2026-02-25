@@ -5,30 +5,18 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
-import ghidra.program.model.symbol.ReferenceManager;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceIterator;
-import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighSymbol;
-import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.pcode.HighFunctionDBUtil;
-import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
-import ghidra.app.script.GhidraScriptUtil;
-import ghidra.app.script.GhidraScript;
-import ghidra.app.script.GhidraScriptProvider;
-import ghidra.app.plugin.core.script.GhidraScriptMgrPlugin;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.data.*;
 import ghidra.program.model.mem.Memory;
@@ -36,9 +24,6 @@ import ghidra.program.util.ProgramLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.program.model.pcode.HighVariable;
-import ghidra.program.model.data.DataType;
-import ghidra.program.model.data.DataTypeManager;
-import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
@@ -56,14 +41,9 @@ import com.sun.net.httpserver.Headers;
 import javax.swing.SwingUtilities;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
-import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -77,7 +57,6 @@ import java.util.function.Supplier;
 public class EndpointRouter {
 
     private final MultiToolProgramProvider programProvider;
-    private final SwingThreadingStrategy threadingStrategy;
     private final Supplier<PluginTool> activeToolSupplier;
     private final ListingService listingService;
     private final CommentService commentService;
@@ -88,31 +67,12 @@ public class EndpointRouter {
     private final AnalysisService analysisService;
     private final ComparisonService comparisonService;
 
-    private static final int MAX_FUNCTIONS_TO_ANALYZE = 100;
-    private static final int MIN_FUNCTIONS_TO_ANALYZE = 1;
     private static final int MAX_STRUCT_FIELDS = 256;
-    private static final int MAX_FIELD_EXAMPLES = 50;
     private static final int DECOMPILE_TIMEOUT_SECONDS = 60;  // Increased from 30s to 60s for large functions
-    private static final int MIN_TOKEN_LENGTH = 3;
     private static final int MAX_FIELD_OFFSET = 65536;
-
-    // HTTP server timeout constants (v1.6.1)
-    private static final int HTTP_CONNECTION_TIMEOUT_SECONDS = 180;  // 3 minutes for connection timeout
-    private static final int HTTP_IDLE_TIMEOUT_SECONDS = 300;        // 5 minutes for idle connections
-    private static final int BATCH_OPERATION_CHUNK_SIZE = 20;        // Process batch operations in chunks of 20
-
-    // C language keywords to filter from field name suggestions
-    private static final Set<String> C_KEYWORDS = Set.of(
-        "if", "else", "for", "while", "do", "switch", "case", "default",
-        "break", "continue", "return", "goto", "int", "void", "char",
-        "float", "double", "long", "short", "struct", "union", "enum",
-        "typedef", "sizeof", "const", "static", "extern", "auto", "register",
-        "signed", "unsigned", "volatile", "inline", "restrict"
-    );
 
     public EndpointRouter(
             MultiToolProgramProvider programProvider,
-            SwingThreadingStrategy threadingStrategy,
             Supplier<PluginTool> activeToolSupplier,
             ListingService listingService,
             CommentService commentService,
@@ -123,7 +83,6 @@ public class EndpointRouter {
             AnalysisService analysisService,
             ComparisonService comparisonService) {
         this.programProvider = programProvider;
-        this.threadingStrategy = threadingStrategy;
         this.activeToolSupplier = activeToolSupplier;
         this.listingService = listingService;
         this.commentService = commentService;
@@ -330,6 +289,13 @@ public class EndpointRouter {
         return v != null ? v.toString() : null;
     }
 
+    /** Coerce a parsed JSON value (String, List, Map) to a JSON string for service methods that accept raw JSON. */
+    private static String coerceToJsonString(Object obj) {
+        if (obj == null) return null;
+        if (obj instanceof String) return (String) obj;
+        return JsonHelper.toJson(obj);
+    }
+
     public void registerAll(UdsHttpServer server) {
         getPage(server, "/list_methods",    listingService::listMethods);
         getPage(server, "/list_classes",    listingService::listClasses);
@@ -463,31 +429,11 @@ public class EndpointRouter {
         // Data type endpoints
         getPage1r(server, "/list_data_types", "category", listingService::listDataTypes);
 
-        server.createContext("/create_struct", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String name = (String) params.get("name");
-            Object fieldsObj = params.get("fields");
-            String fieldsJson;
-            if (fieldsObj instanceof String) {
-                fieldsJson = (String) fieldsObj;
-            } else if (fieldsObj instanceof java.util.List) {
-                // Convert List to proper JSON array
-                fieldsJson = serializeListToJson((java.util.List<?>) fieldsObj);
-            } else {
-                fieldsJson = fieldsObj != null ? fieldsObj.toString() : null;
-            }
-            sendResponse(exchange, dataTypeService.createStruct(name, fieldsJson));
-        }));
+        jsonPost(server, "/create_struct", p ->
+            dataTypeService.createStruct(getStr(p, "name"), coerceToJsonString(p.get("fields"))));
 
-        jsonPost(server, "/create_enum", p -> {
-            String name = getStr(p, "name");
-            Object valuesObj = p.get("values");
-            String valuesJson = valuesObj instanceof String ? (String) valuesObj
-                : valuesObj instanceof Map ? serializeMapToJson((Map<?, ?>) valuesObj)
-                : valuesObj != null ? valuesObj.toString() : null;
-            int size = p.get("size") instanceof Number ? ((Number) p.get("size")).intValue() : getInt(p, "size", 4);
-            return dataTypeService.createEnum(name, valuesJson, size);
-        });
+        jsonPost(server, "/create_enum", p ->
+            dataTypeService.createEnum(getStr(p, "name"), coerceToJsonString(p.get("values")), getInt(p, "size", 4)));
 
         jsonPost(server, "/apply_data_type", p ->
             dataTypeService.applyDataType(getStr(p, "address"), getStr(p, "type_name"), getBool(p, "clear_existing", true)));
@@ -506,21 +452,8 @@ public class EndpointRouter {
 
         get0(server, "/get_entry_points", () -> symbolService.getEntryPoints(null));
 
-        server.createContext("/create_union", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String name = (String) params.get("name");
-            Object fieldsObj = params.get("fields");
-            String fieldsJson;
-            if (fieldsObj instanceof String) {
-                fieldsJson = (String) fieldsObj;
-            } else if (fieldsObj instanceof java.util.List) {
-                // Convert List to proper JSON array (same as create_struct)
-                fieldsJson = serializeListToJson((java.util.List<?>) fieldsObj);
-            } else {
-                fieldsJson = fieldsObj != null ? fieldsObj.toString() : null;
-            }
-            sendResponse(exchange, dataTypeService.createUnion(name, fieldsJson));
-        }));
+        jsonPost(server, "/create_union", p ->
+            dataTypeService.createUnion(getStr(p, "name"), coerceToJsonString(p.get("fields"))));
 
         get1(server, "/get_type_size", "type_name", this::getTypeSize);
 
@@ -539,26 +472,14 @@ public class EndpointRouter {
 
         json4(server, "/modify_struct_field", "struct_name", "field_name", "new_type", "new_name", dataTypeService::modifyStructField);
 
-        server.createContext("/add_struct_field", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String structName = (String) params.get("struct_name");
-            String fieldName = (String) params.get("field_name");
-            String fieldType = (String) params.get("field_type");
-            Object offsetObj = params.get("offset");
-            int offset = (offsetObj instanceof Integer) ? (Integer) offsetObj : -1;
-            sendResponse(exchange, dataTypeService.addStructField(structName, fieldName, fieldType, offset));
-        }));
+        jsonPost(server, "/add_struct_field", p ->
+            dataTypeService.addStructField(getStr(p, "struct_name"), getStr(p, "field_name"),
+                getStr(p, "field_type"), getInt(p, "offset", -1)));
 
         post2(server, "/remove_struct_field", "struct_name", "field_name", dataTypeService::removeStructField);
 
-        server.createContext("/create_array_type", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String baseType = (String) params.get("base_type");
-            Object lengthObj = params.get("length");
-            int length = (lengthObj instanceof Integer) ? (Integer) lengthObj : 1;
-            String name = (String) params.get("name");
-            sendResponse(exchange, dataTypeService.createArrayType(baseType, length, name));
-        }));
+        jsonPost(server, "/create_array_type", p ->
+            dataTypeService.createArrayType(getStr(p, "base_type"), getInt(p, "length", 1), getStr(p, "name")));
 
         post2(server, "/create_pointer_type", "base_type", "name", dataTypeService::createPointerType);
 
@@ -570,47 +491,23 @@ public class EndpointRouter {
 
         json1(server, "/delete_function", "address", mutationService::deleteFunctionAtAddress);
 
-        server.createContext("/create_function", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String address = (String) params.get("address");
-            String name = (String) params.get("name");
-            Object dfObj = params.get("disassemble_first");
-            boolean disassembleFirst = dfObj == null || Boolean.TRUE.equals(dfObj) ||
-                "true".equalsIgnoreCase(String.valueOf(dfObj));
-            sendResponse(exchange, mutationService.createFunctionAtAddress(address, name, disassembleFirst));
-        }));
+        jsonPost(server, "/create_function", p ->
+            mutationService.createFunctionAtAddress(getStr(p, "address"), getStr(p, "name"),
+                getBool(p, "disassemble_first", true)));
 
-        server.createContext("/create_function_signature", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String name = (String) params.get("name");
-            String returnType = (String) params.get("return_type");
-            Object parametersObj = params.get("parameters");
-            String parametersJson = (parametersObj instanceof String) ? (String) parametersObj : 
-                                   (parametersObj != null ? parametersObj.toString() : null);
-            sendResponse(exchange, createFunctionSignature(name, returnType, parametersJson));
-        }));
+        jsonPost(server, "/create_function_signature", p ->
+            createFunctionSignature(getStr(p, "name"), getStr(p, "return_type"),
+                coerceToJsonString(p.get("parameters"))));
 
-        server.createContext("/read_memory", safeHandler(exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            String address = qparams.get("address");
-            String lengthStr = qparams.get("length");
-            String programName = qparams.get("program");
-            int length = parseIntOrDefault(lengthStr, 16);
-            sendResponse(exchange, readMemory(address, length, programName));
-        }));
+        getWithQuery(server, "/read_memory", q ->
+            readMemory(getStr(q, "address"), getInt(q, "length", 16), getStr(q, "program")));
 
-        server.createContext("/create_memory_block", safeHandler(exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String name = (String) params.get("name");
-            String address = (String) params.get("address");
-            long size = params.get("size") != null ? ((Number) params.get("size")).longValue() : 0;
-            boolean read = parseBoolOrDefault(params.get("read"), true);
-            boolean write = parseBoolOrDefault(params.get("write"), true);
-            boolean execute = parseBoolOrDefault(params.get("execute"), false);
-            boolean isVolatile = parseBoolOrDefault(params.get("volatile"), false);
-            String comment = (String) params.get("comment");
-            sendResponse(exchange, mutationService.createMemoryBlock(name, address, size, read, write, execute, isVolatile, comment));
-        }));
+        jsonPost(server, "/create_memory_block", p -> {
+            long size = p.get("size") != null ? ((Number) p.get("size")).longValue() : 0;
+            return mutationService.createMemoryBlock(getStr(p, "name"), getStr(p, "address"), size,
+                getBool(p, "read", true), getBool(p, "write", true), getBool(p, "execute", false),
+                getBool(p, "volatile", false), getStr(p, "comment"));
+        });
 
         // Data analysis endpoints
         jsonPost(server, "/get_bulk_xrefs", p -> {
@@ -736,22 +633,16 @@ public class EndpointRouter {
                 getStr(q, "pattern"), getStr(q, "direction"), getStr(q, "program")));
 
         jsonPost(server, "/batch_set_variable_types", p -> {
-            Map<String, String> variableTypes = new HashMap<>();
-            Object vtObj = p.get("variable_types");
-            if (vtObj instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, String> vtMap = (Map<String, String>) vtObj;
-                variableTypes = vtMap;
-            } else if (vtObj instanceof String) {
-                variableTypes = parseJsonObject((String) vtObj);
-            }
+            @SuppressWarnings("unchecked")
+            Map<String, String> variableTypes = p.get("variable_types") instanceof Map
+                ? (Map<String, String>) p.get("variable_types") : new HashMap<>();
             return batchSetVariableTypesOptimized(getStr(p, "function_address"), variableTypes);
         });
 
         jsonPost(server, "/batch_rename_variables", p -> {
-            Object renamesObj = p.get("variable_renames");
-            Map<String, String> variableRenames = renamesObj instanceof String ? parseJsonObject((String) renamesObj)
-                : renamesObj instanceof Map ? (Map<String, String>) renamesObj : new HashMap<>();
+            @SuppressWarnings("unchecked")
+            Map<String, String> variableRenames = p.get("variable_renames") instanceof Map
+                ? (Map<String, String>) p.get("variable_renames") : new HashMap<>();
             return mutationService.batchRenameVariables(getStr(p, "function_address"), variableRenames);
         });
 
@@ -848,25 +739,6 @@ public class EndpointRouter {
                 getDouble(q, "threshold", 0.7), getInt(q, "offset", 0), getInt(q, "limit", 50), getStr(q, "filter")));
 
         get4(server, "/diff_functions", "address_a", "address_b", "program_a", "program_b", comparisonService::diffFunctions);
-    }
-
-    private String decompileFunctionByName(String name) {
-        Program program = getCurrentProgram();
-        if (program == null) return "No program loaded";
-        DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-        for (Function func : program.getFunctionManager().getFunctions(true)) {
-            if (func.getName().equals(name)) {
-                DecompileResults result =
-                    decomp.decompileFunction(func, DECOMPILE_TIMEOUT_SECONDS, new ConsoleTaskMonitor());
-                if (result != null && result.decompileCompleted()) {
-                    return result.getDecompiledFunction().getC();
-                } else {
-                    return "Decompilation failed";
-                }
-            }
-        }
-        return "Function not found";
     }
 
     /**
@@ -2054,263 +1926,11 @@ public class EndpointRouter {
         return params;
     }
 
-    /**
-     * Parse JSON from POST request body
-     */
+    /** Parse JSON from POST request body using Gson. */
     private Map<String, Object> parseJsonParams(UdsHttpExchange exchange) throws IOException {
-        byte[] body = exchange.getRequestBody().readAllBytes();
-        String bodyStr = new String(body, StandardCharsets.UTF_8);
-        
-        // Simple JSON parsing - this is a basic implementation
-        // In a production environment, you'd want to use a proper JSON library
-        Map<String, Object> result = new HashMap<>();
-        
-        if (bodyStr.trim().isEmpty()) {
-            return result;
-        }
-        
-        try {
-            // Remove outer braces and parse key-value pairs
-            String content = bodyStr.trim();
-            if (content.startsWith("{") && content.endsWith("}")) {
-                content = content.substring(1, content.length() - 1).trim();
-                
-                // Simple parsing - split by commas but handle nested objects/arrays
-                String[] parts = splitJsonPairs(content);
-                
-                for (String part : parts) {
-                    String[] kv = part.split(":", 2);
-                    if (kv.length == 2) {
-                        String key = kv[0].trim().replaceAll("^\"|\"$", "");
-                        String value = kv[1].trim();
-                        
-                        // Handle different value types
-                        if (value.startsWith("\"") && value.endsWith("\"")) {
-                            // String value — unescape JSON escape sequences
-                            result.put(key, unescapeJsonString(value.substring(1, value.length() - 1)));
-                        } else if (value.startsWith("[") && value.endsWith("]")) {
-                            // Array value - parse into List
-                            result.put(key, parseJsonArray(value));
-                        } else if (value.startsWith("{") && value.endsWith("}")) {
-                            // Object value - keep as string for now
-                            result.put(key, value);
-                        } else if (value.matches("\\d+")) {
-                            // Integer value
-                            result.put(key, Integer.parseInt(value));
-                        } else {
-                            // Default to string
-                            result.put(key, value);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Msg.error(this, "Error parsing JSON: " + e.getMessage(), e);
-        }
-        
-        return result;
+        return JsonHelper.parseBody(exchange.getRequestBody());
     }
     
-    /**
-     * Split JSON content by commas, but respect nested braces and brackets
-     */
-    private String[] splitJsonPairs(String content) {
-        List<String> parts = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        int braceDepth = 0;
-        int bracketDepth = 0;
-        boolean inString = false;
-        boolean escaped = false;
-        
-        for (char c : content.toCharArray()) {
-            if (escaped) {
-                escaped = false;
-                current.append(c);
-                continue;
-            }
-            
-            if (c == '\\' && inString) {
-                escaped = true;
-                current.append(c);
-                continue;
-            }
-            
-            if (c == '"') {
-                inString = !inString;
-                current.append(c);
-                continue;
-            }
-            
-            if (!inString) {
-                if (c == '{') braceDepth++;
-                else if (c == '}') braceDepth--;
-                else if (c == '[') bracketDepth++;
-                else if (c == ']') bracketDepth--;
-                else if (c == ',' && braceDepth == 0 && bracketDepth == 0) {
-                    parts.add(current.toString().trim());
-                    current = new StringBuilder();
-                    continue;
-                }
-            }
-            
-            current.append(c);
-        }
-        
-        if (current.length() > 0) {
-            parts.add(current.toString().trim());
-        }
-        
-        return parts.toArray(new String[0]);
-    }
-
-    /**
-     * Parse a JSON array string into a List of Objects (can be Strings or Maps)
-     * Example: "[\"0x6FAC8A58\", \"0x6FAC8A5C\"]" -> List<String>
-     * Example: "[{\"address\": \"0x...\", \"comment\": \"...\"}]" -> List<Map<String, String>>
-     */
-    private List<Object> parseJsonArray(String arrayStr) {
-        List<Object> result = new ArrayList<>();
-
-        if (arrayStr == null || !arrayStr.startsWith("[") || !arrayStr.endsWith("]")) {
-            return result;
-        }
-
-        // Remove outer brackets
-        String content = arrayStr.substring(1, arrayStr.length() - 1).trim();
-
-        if (content.isEmpty()) {
-            return result;
-        }
-
-        // Split by comma, but respect quoted strings and nested objects/arrays
-        StringBuilder current = new StringBuilder();
-        boolean inString = false;
-        boolean escaped = false;
-        int braceDepth = 0;
-        int bracketDepth = 0;
-
-        for (char c : content.toCharArray()) {
-            if (escaped) {
-                escaped = false;
-                current.append(c);
-                continue;
-            }
-
-            if (c == '\\' && inString) {
-                escaped = true;
-                current.append(c);
-                continue;
-            }
-
-            if (c == '"') {
-                inString = !inString;
-                current.append(c);
-                continue;
-            }
-
-            if (!inString) {
-                if (c == '{') braceDepth++;
-                else if (c == '}') braceDepth--;
-                else if (c == '[') bracketDepth++;
-                else if (c == ']') bracketDepth--;
-                else if (c == ',' && braceDepth == 0 && bracketDepth == 0) {
-                    // End of current element
-                    String element = current.toString().trim();
-                    if (!element.isEmpty()) {
-                        result.add(parseJsonElement(element));
-                    }
-                    current = new StringBuilder();
-                    continue;
-                }
-            }
-
-            current.append(c);
-        }
-
-        // Add last element
-        String element = current.toString().trim();
-        if (!element.isEmpty()) {
-            result.add(parseJsonElement(element));
-        }
-
-        return result;
-    }
-
-    /**
-     * Parse a single JSON element (string, number, object, array, etc.)
-     */
-    private Object parseJsonElement(String element) {
-        element = element.trim();
-
-        // String
-        if (element.startsWith("\"") && element.endsWith("\"")) {
-            return element.substring(1, element.length() - 1);
-        }
-
-        // Object
-        if (element.startsWith("{") && element.endsWith("}")) {
-            return parseJsonObject(element);
-        }
-
-        // Array
-        if (element.startsWith("[") && element.endsWith("]")) {
-            return parseJsonArray(element);
-        }
-
-        // Number
-        if (element.matches("-?\\d+")) {
-            return Integer.parseInt(element);
-        }
-
-        // Boolean
-        if (element.equals("true")) return true;
-        if (element.equals("false")) return false;
-
-        // Null
-        if (element.equals("null")) return null;
-
-        // Default to string
-        return element;
-    }
-
-    /**
-     * Parse a JSON object string into a Map<String, String>
-     * Example: "{\"address\": \"0x...\", \"comment\": \"...\"}" -> Map
-     */
-    private Map<String, String> parseJsonObject(String objectStr) {
-        Map<String, String> result = new HashMap<>();
-
-        if (objectStr == null || !objectStr.startsWith("{") || !objectStr.endsWith("}")) {
-            return result;
-        }
-
-        // Remove outer braces
-        String content = objectStr.substring(1, objectStr.length() - 1).trim();
-
-        if (content.isEmpty()) {
-            return result;
-        }
-
-        // Split by commas, respecting nested structures
-        String[] pairs = splitJsonPairs(content);
-
-        for (String pair : pairs) {
-            String[] kv = pair.split(":", 2);
-            if (kv.length == 2) {
-                String key = kv[0].trim().replaceAll("^\"|\"$", "");
-                String value = kv[1].trim();
-
-                // Remove quotes from string values
-                if (value.startsWith("\"") && value.endsWith("\"")) {
-                    value = value.substring(1, value.length() - 1);
-                }
-
-                result.put(key, value);
-            }
-        }
-
-        return result;
-    }
 
     /**
      * Convert Object (potentially List<Object>) to List<Map<String, String>>
@@ -2365,16 +1985,6 @@ public class EndpointRouter {
         }
     }
 
-    private double parseDoubleOrDefault(String val, double defaultValue) {
-        if (val == null) return defaultValue;
-        try {
-            return Double.parseDouble(val);
-        }
-        catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
     private String objectToCommaSeparated(Object obj) {
         if (obj == null) return "";
         if (obj instanceof List) {
@@ -2390,23 +2000,6 @@ public class EndpointRouter {
         return obj.toString();
     }
 
-    /**
-     * Escape non-ASCII chars to avoid potential decode issues.
-     */
-    private String escapeNonAscii(String input) {
-        if (input == null) return "";
-        StringBuilder sb = new StringBuilder();
-        for (char c : input.toCharArray()) {
-            if (c >= 32 && c < 127) {
-                sb.append(c);
-            }
-            else {
-                sb.append("\\x");
-                sb.append(Integer.toHexString(c & 0xFF));
-            }
-        }
-        return sb.toString();
-    }
 
     /**
      * Get a program by name with error message if not found.
@@ -4525,63 +4118,11 @@ public class EndpointRouter {
         }
     }
 
-    /** Serialize a List to JSON. Uses Gson for consistent escaping. */
-    private String serializeListToJson(java.util.List<?> list) {
-        return JsonHelper.toJson(list);
-    }
-
-    /** Serialize a Map to JSON. Uses Gson for consistent escaping. */
-    private String serializeMapToJson(java.util.Map<?, ?> map) {
-        return JsonHelper.toJson(map);
-    }
-
     /** Escape special characters in JSON string values (for manual JSON building). Uses Gson. */
     private String escapeJsonString(String str) {
         if (str == null) return "";
         String quoted = JsonHelper.toJson(str);
         return quoted.length() > 2 ? quoted.substring(1, quoted.length() - 1) : "";
-    }
-
-    /**
-     * Unescape JSON string escape sequences: \n → newline, \" → quote, \\ → backslash, etc.
-     */
-    private static String unescapeJsonString(String s) {
-        if (s == null || s.isEmpty()) return s;
-        StringBuilder sb = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\\' && i + 1 < s.length()) {
-                char next = s.charAt(i + 1);
-                switch (next) {
-                    case 'n':  sb.append('\n'); i++; break;
-                    case 'r':  sb.append('\r'); i++; break;
-                    case 't':  sb.append('\t'); i++; break;
-                    case '"':  sb.append('"');  i++; break;
-                    case '\\': sb.append('\\'); i++; break;
-                    case '/':  sb.append('/');  i++; break;
-                    case 'u':
-                        // Unicode escape: backslash-u + 4 hex digits
-                        if (i + 5 < s.length()) {
-                            try {
-                                int cp = Integer.parseInt(s.substring(i + 2, i + 6), 16);
-                                sb.append((char) cp);
-                                i += 5;
-                            } catch (NumberFormatException e) {
-                                sb.append(c); // malformed, keep as-is
-                            }
-                        } else {
-                            sb.append(c);
-                        }
-                        break;
-                    default:
-                        sb.append(c); // unknown escape, keep backslash
-                        break;
-                }
-            } else {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
     }
 
     /**
@@ -4847,11 +4388,6 @@ public class EndpointRouter {
         }
     }
     
-    // Backward compatibility overload
-    private String readMemory(String addressStr, int length) {
-        return readMemory(addressStr, length, null);
-    }
-
     /**
      * Import data types from various sources
      */
@@ -4862,54 +4398,6 @@ public class EndpointRouter {
         return "Import functionality not yet implemented. Source: " + source + ", Format: " + format;
     }
 
-    /**
-     * Helper method to extract JSON values from simple JSON strings
-     */
-    private String extractJsonValue(String json, String key) {
-        String searchPattern = "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"";
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(searchPattern);
-        java.util.regex.Matcher matcher = pattern.matcher(json);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        return null;
-    }
-
-    /**
-     * Convert an object to JSON string format
-     */
-    private String convertToJsonString(Object obj) {
-        if (obj == null) return null;
-        
-        if (obj instanceof java.util.List) {
-            java.util.List<?> list = (java.util.List<?>) obj;
-            StringBuilder json = new StringBuilder("[");
-            
-            for (int i = 0; i < list.size(); i++) {
-                if (i > 0) json.append(",");
-                Object item = list.get(i);
-                
-                if (item instanceof java.util.Map) {
-                    java.util.Map<?, ?> map = (java.util.Map<?, ?>) item;
-                    json.append("{");
-                    boolean first = true;
-                    for (java.util.Map.Entry<?, ?> entry : map.entrySet()) {
-                        if (!first) json.append(",");
-                        json.append("\"").append(entry.getKey()).append("\":\"")
-                            .append(entry.getValue()).append("\"");
-                        first = false;
-                    }
-                    json.append("}");
-                } else {
-                    json.append("\"").append(item).append("\"");
-                }
-            }
-            json.append("]");
-            return json.toString();
-        }
-        
-        return obj.toString();
-    }
 
     /**
      * Create a new data type category
@@ -5089,15 +4577,6 @@ public class EndpointRouter {
     // HIGH-PERFORMANCE DATA ANALYSIS METHODS (v1.3.0)
     // ==========================================================================
 
-    /**
-     * Helper to parse boolean from Object (can be Boolean or String "true"/"false")
-     */
-    private boolean parseBoolOrDefault(Object obj, boolean defaultValue) {
-        if (obj == null) return defaultValue;
-        if (obj instanceof Boolean) return (Boolean) obj;
-        if (obj instanceof String) return Boolean.parseBoolean((String) obj);
-        return defaultValue;
-    }
 
     /**
      * Helper to escape strings for JSON
@@ -7020,7 +6499,6 @@ public class EndpointRouter {
     /**
      * v1.5.0: Batch rename function and all its components atomically
      */
-    @SuppressWarnings("deprecation")
     private String batchRenameFunctionComponents(String functionAddress, String functionName,
                                                 Map<String, String> parameterRenames,
                                                 Map<String, String> localRenames,
@@ -7181,7 +6659,6 @@ public class EndpointRouter {
     /**
      * v1.5.0: Analyze function completeness for documentation
      */
-    @SuppressWarnings("deprecation")
     private String analyzeFunctionCompleteness(String functionAddress) {
         Program program = getCurrentProgram();
         if (program == null) {
@@ -7879,118 +7356,7 @@ public class EndpointRouter {
         return recommendations;
     }
 
-    /**
-     * v1.5.0: Batch set variable types
-     */
-    @SuppressWarnings("deprecation")
-    private String batchSetVariableTypes(String functionAddress, Map<String, String> variableTypes, boolean forceIndividual) {
-        Program program = getCurrentProgram();
-        if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
-        }
 
-        // If forceIndividual is true, skip batch operations and use individual method
-        if (forceIndividual) {
-            return batchSetVariableTypesIndividual(functionAddress, variableTypes);
-        }
-
-        final StringBuilder result = new StringBuilder();
-        result.append("{");
-        final AtomicBoolean success = new AtomicBoolean(false);
-        final AtomicReference<Integer> typesSet = new AtomicReference<>(0);
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Batch Set Variable Types");
-                try {
-                    Address addr = program.getAddressFactory().getAddress(functionAddress);
-                    if (addr == null) {
-                        result.append("\"error\": \"Invalid address: ").append(functionAddress).append("\"");
-                        return;
-                    }
-
-                    Function func = program.getFunctionManager().getFunctionAt(addr);
-                    if (func == null) {
-                        result.append("\"error\": \"No function at address: ").append(functionAddress).append("\"");
-                        return;
-                    }
-
-                    DataTypeManager dtm = program.getDataTypeManager();
-
-                    if (variableTypes != null) {
-                        // Set parameter types
-                        for (Parameter param : func.getParameters()) {
-                            String newType = variableTypes.get(param.getName());
-                            if (newType != null) {
-                                DataType dt = dtm.getDataType(newType);
-                                if (dt != null) {
-                                    param.setDataType(dt, SourceType.USER_DEFINED);
-                                    typesSet.getAndSet(typesSet.get() + 1);
-                                }
-                            }
-                        }
-
-                        // Set local variable types
-                        for (Variable local : func.getLocalVariables()) {
-                            String newType = variableTypes.get(local.getName());
-                            if (newType != null) {
-                                DataType dt = dtm.getDataType(newType);
-                                if (dt != null) {
-                                    local.setDataType(dt, SourceType.USER_DEFINED);
-                                    typesSet.getAndSet(typesSet.get() + 1);
-                                }
-                            }
-                        }
-                    }
-
-                    success.set(true);
-                } catch (Exception e) {
-                    // If batch operation fails, try individual operations as fallback
-                    Msg.warn(this, "Batch set variable types failed, attempting individual operations: " + e.getMessage());
-                    try {
-                        program.endTransaction(tx, false);
-
-                        // Try individual operations
-                        String individualResult = batchSetVariableTypesIndividual(functionAddress, variableTypes);
-                        result.append("\"fallback_used\": true, ");
-                        result.append(individualResult);
-                        return;
-                    } catch (Exception fallbackE) {
-                        result.append("\"error\": \"Batch operation failed and fallback also failed: ").append(e.getMessage()).append("\"");
-                        Msg.error(this, "Both batch and individual type setting operations failed", e);
-                    }
-                } finally {
-                    if (!result.toString().contains("\"fallback_used\"")) {
-                        program.endTransaction(tx, success.get());
-                    }
-                }
-            });
-
-            if (success.get() && !result.toString().contains("\"fallback_used\"")) {
-                result.append("\"success\": true, ");
-                result.append("\"method\": \"batch\", ");
-                result.append("\"variables_typed\": ").append(typesSet.get());
-            }
-        } catch (Exception e) {
-            result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
-        }
-
-        result.append("}");
-        return result.toString();
-    }
-
-    /**
-     * Individual variable type setting using setLocalVariableType (fallback method)
-     * NOW USES OPTIMIZED SINGLE-DECOMPILE METHOD
-     * This method was refactored to use batchSetVariableTypesOptimized() which decompiles
-     * the function ONCE and applies all type changes within that single decompilation,
-     * avoiding the repeated decompilation timeout issues that plagued the previous approach.
-     */
-    private String batchSetVariableTypesIndividual(String functionAddress, Map<String, String> variableTypes) {
-        // Delegate to the optimized batch method that decompiles once
-        // This fixes the issue where each setLocalVariableType() call caused its own decompilation
-        return batchSetVariableTypesOptimized(functionAddress, variableTypes);
-    }
 
     /**
      * OPTIMIZED: Batch set variable types - simple wrapper that calls setLocalVariableType
@@ -8054,122 +7420,6 @@ public class EndpointRouter {
         return result.toString();
     }
 
-    /**
-     * Validate that batch operations actually persisted by checking current state
-     */
-    private String validateBatchOperationResults(String functionAddress, Map<String, String> expectedRenames, Map<String, String> expectedTypes) {
-        Program program = getCurrentProgram();
-        if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
-        }
-
-        final StringBuilder result = new StringBuilder();
-        result.append("{");
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                try {
-                    Address addr = program.getAddressFactory().getAddress(functionAddress);
-                    if (addr == null) {
-                        result.append("\"error\": \"Invalid address: ").append(functionAddress).append("\"");
-                        return;
-                    }
-
-                    Function func = program.getFunctionManager().getFunctionAt(addr);
-                    if (func == null) {
-                        result.append("\"error\": \"No function at address: ").append(functionAddress).append("\"");
-                        return;
-                    }
-
-                    int renamesValidated = 0;
-                    int typesValidated = 0;
-                    List<String> validationErrors = new ArrayList<>();
-
-                    // Validate renames
-                    if (expectedRenames != null) {
-                        for (Parameter param : func.getParameters()) {
-                            String expectedName = expectedRenames.get(param.getName());
-                            if (expectedName != null) {
-                                // This parameter was supposed to be renamed to expectedName
-                                // But now it has a different name, so the rename didn't persist
-                                validationErrors.add("Parameter rename not persisted: expected '" + expectedName + "', found '" + param.getName() + "'");
-                            } else if (expectedRenames.containsValue(param.getName())) {
-                                // This parameter has a name that was expected from a rename
-                                renamesValidated++;
-                            }
-                        }
-
-                        for (Variable local : func.getLocalVariables()) {
-                            String expectedName = expectedRenames.get(local.getName());
-                            if (expectedName != null) {
-                                validationErrors.add("Local variable rename not persisted: expected '" + expectedName + "', found '" + local.getName() + "'");
-                            } else if (expectedRenames.containsValue(local.getName())) {
-                                renamesValidated++;
-                            }
-                        }
-                    }
-
-                    // Validate types
-                    if (expectedTypes != null) {
-                        DataTypeManager dtm = program.getDataTypeManager();
-
-                        for (Parameter param : func.getParameters()) {
-                            String expectedType = expectedTypes.get(param.getName());
-                            if (expectedType != null) {
-                                DataType currentType = param.getDataType();
-                                DataType expectedDataType = dtm.getDataType(expectedType);
-                                if (expectedDataType != null && currentType != null &&
-                                    currentType.getName().equals(expectedDataType.getName())) {
-                                    typesValidated++;
-                                } else {
-                                    validationErrors.add("Parameter type not persisted for '" + param.getName() +
-                                                       "': expected '" + expectedType + "', found '" +
-                                                       (currentType != null ? currentType.getName() : "null") + "'");
-                                }
-                            }
-                        }
-
-                        for (Variable local : func.getLocalVariables()) {
-                            String expectedType = expectedTypes.get(local.getName());
-                            if (expectedType != null) {
-                                DataType currentType = local.getDataType();
-                                DataType expectedDataType = dtm.getDataType(expectedType);
-                                if (expectedDataType != null && currentType != null &&
-                                    currentType.getName().equals(expectedDataType.getName())) {
-                                    typesValidated++;
-                                } else {
-                                    validationErrors.add("Local variable type not persisted for '" + local.getName() +
-                                                       "': expected '" + expectedType + "', found '" +
-                                                       (currentType != null ? currentType.getName() : "null") + "'");
-                                }
-                            }
-                        }
-                    }
-
-                    result.append("\"success\": true, ");
-                    result.append("\"renames_validated\": ").append(renamesValidated).append(", ");
-                    result.append("\"types_validated\": ").append(typesValidated);
-                    if (!validationErrors.isEmpty()) {
-                        result.append(", \"validation_errors\": [");
-                        for (int i = 0; i < validationErrors.size(); i++) {
-                            if (i > 0) result.append(", ");
-                            result.append("\"").append(validationErrors.get(i).replace("\"", "\\\"")).append("\"");
-                        }
-                        result.append("]");
-                    }
-
-                } catch (Exception e) {
-                    result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
-                    Msg.error(this, "Error validating batch operations", e);
-                }
-            });
-        } catch (Exception e) {
-            result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
-        }
-
-        result.append("}");
-        return result.toString();
-    }
 
     /**
      * NEW v1.6.0: Validate function prototype before applying
@@ -8461,211 +7711,13 @@ public class EndpointRouter {
         return response;
     }
 
-    private String generateScriptContent(String purpose, String workflowType, Map<String, Object> parameters) {
-        if (parameters == null) {
-            parameters = new HashMap<>();
-        }
 
-        switch (workflowType) {
-            case "document_functions":
-                return generateDocumentFunctionsScript(purpose, parameters);
-            case "fix_ordinals":
-                return generateFixOrdinalsScript(purpose, parameters);
-            case "bulk_rename":
-                return generateBulkRenameScript(purpose, parameters);
-            case "analyze_structures":
-                return generateAnalyzeStructuresScript(purpose, parameters);
-            case "find_patterns":
-                return generateFindPatternsScript(purpose, parameters);
-            case "custom":
-            default:
-                return generateCustomScript(purpose, parameters);
-        }
-    }
 
-    private String generateDocumentFunctionsScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.listing.Function;\n" +
-               "import ghidra.program.model.listing.FunctionManager;\n\n" +
-               "public class DocumentFunctions extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        FunctionManager funcMgr = currentProgram.getFunctionManager();\n" +
-               "        int documentedCount = 0;\n" +
-               "        \n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        for (Function func : funcMgr.getFunctions(true)) {\n" +
-               "            try {\n" +
-               "                // Add custom documentation logic here\n" +
-               "                // Example: set_plate_comment(func.getEntryPoint(), \"Documented: \" + func.getName());\n" +
-               "                documentedCount++;\n" +
-               "                \n" +
-               "                if (documentedCount % 100 == 0) {\n" +
-               "                    println(\"Processed \" + documentedCount + \" functions\");\n" +
-               "                }\n" +
-               "            } catch (Exception e) {\n" +
-               "                println(\"Error processing \" + func.getName() + \": \" + e.getMessage());\n" +
-               "            }\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Document functions workflow complete! Processed \" + documentedCount + \" functions.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
 
-    private String generateFixOrdinalsScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.symbol.ExternalManager;\n" +
-               "import ghidra.program.model.symbol.ExternalLocation;\n" +
-               "import ghidra.program.model.symbol.ExternalLocationIterator;\n\n" +
-               "public class FixOrdinalImports extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        ExternalManager extMgr = currentProgram.getExternalManager();\n" +
-               "        int fixedCount = 0;\n" +
-               "        \n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        for (String libName : extMgr.getExternalLibraryNames()) {\n" +
-               "            ExternalLocationIterator iter = extMgr.getExternalLocations(libName);\n" +
-               "            while (iter.hasNext()) {\n" +
-               "                ExternalLocation extLoc = iter.next();\n" +
-               "                String label = extLoc.getLabel();\n" +
-               "                \n" +
-               "                // Check if this is an ordinal import (e.g., \"Ordinal_123\")\n" +
-               "                if (label.startsWith(\"Ordinal_\")) {\n" +
-               "                    try {\n" +
-               "                        // Add logic to determine correct function name from ordinal\n" +
-               "                        // Then rename: extLoc.setName(..., correctName, SourceType.USER_DEFINED);\n" +
-               "                        fixedCount++;\n" +
-               "                    } catch (Exception e) {\n" +
-               "                        println(\"Error fixing ordinal \" + label + \": \" + e.getMessage());\n" +
-               "                    }\n" +
-               "                }\n" +
-               "            }\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Fix ordinals workflow complete! Fixed \" + fixedCount + \" ordinal imports.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
 
-    private String generateBulkRenameScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.symbol.SymbolTable;\n" +
-               "import ghidra.program.model.symbol.Symbol;\n" +
-               "import ghidra.program.model.symbol.SourceType;\n\n" +
-               "public class BulkRenameSymbols extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        SymbolTable symTable = currentProgram.getSymbolTable();\n" +
-               "        int renamedCount = 0;\n" +
-               "        \n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        for (Symbol symbol : symTable.getAllSymbols(true)) {\n" +
-               "            try {\n" +
-               "                String currentName = symbol.getName();\n" +
-               "                // Add pattern matching logic here\n" +
-               "                // Example: if (currentName.matches(\"var_.*\")) { newName = ... }\n" +
-               "                renamedCount++;\n" +
-               "            } catch (Exception e) {\n" +
-               "                println(\"Error renaming symbol: \" + e.getMessage());\n" +
-               "            }\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Bulk rename workflow complete! Renamed \" + renamedCount + \" symbols.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
 
-    private String generateAnalyzeStructuresScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.data.DataType;\n" +
-               "import ghidra.program.model.data.DataTypeManager;\n" +
-               "import ghidra.program.model.data.Structure;\n\n" +
-               "public class AnalyzeStructures extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        DataTypeManager dtMgr = currentProgram.getDataTypeManager();\n" +
-               "        int analyzedCount = 0;\n" +
-               "        \n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        for (DataType dt : dtMgr.getAllDataTypes()) {\n" +
-               "            if (dt instanceof Structure) {\n" +
-               "                try {\n" +
-               "                    Structure struct = (Structure) dt;\n" +
-               "                    // Add analysis logic here\n" +
-               "                    analyzedCount++;\n" +
-               "                } catch (Exception e) {\n" +
-               "                    println(\"Error analyzing \" + dt.getName() + \": \" + e.getMessage());\n" +
-               "                }\n" +
-               "            }\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Analyze structures workflow complete! Analyzed \" + analyzedCount + \" structures.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
 
-    private String generateFindPatternsScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.listing.Function;\n" +
-               "import ghidra.program.model.listing.FunctionManager;\n\n" +
-               "public class FindPatterns extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        FunctionManager funcMgr = currentProgram.getFunctionManager();\n" +
-               "        int foundCount = 0;\n" +
-               "        \n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        for (Function func : funcMgr.getFunctions(true)) {\n" +
-               "            try {\n" +
-               "                // Add pattern matching logic here\n" +
-               "                // Example: if (matchesPattern(func)) { handleMatch(func); }\n" +
-               "                foundCount++;\n" +
-               "            } catch (Exception e) {\n" +
-               "                println(\"Error processing \" + func.getName() + \": \" + e.getMessage());\n" +
-               "            }\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Find patterns workflow complete! Found \" + foundCount + \" matching patterns.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
 
-    private String generateCustomScript(String purpose, Map<String, Object> parameters) {
-        return "import ghidra.app.script.GhidraScript;\n" +
-               "import ghidra.program.model.listing.Function;\n" +
-               "import ghidra.program.model.listing.FunctionManager;\n\n" +
-               "public class CustomAnalysis extends GhidraScript {\n" +
-               "    public void run() throws Exception {\n" +
-               "        // Purpose: " + purpose + "\n" +
-               "        println(\"Custom analysis script started...\");\n" +
-               "        \n" +
-               "        // Add your custom analysis logic here\n" +
-               "        FunctionManager funcMgr = currentProgram.getFunctionManager();\n" +
-               "        int count = 0;\n" +
-               "        \n" +
-               "        for (Function func : funcMgr.getFunctions(true)) {\n" +
-               "            // Add logic here\n" +
-               "            count++;\n" +
-               "        }\n" +
-               "        \n" +
-               "        println(\"Custom analysis complete! Processed \" + count + \" items.\");\n" +
-               "    }\n" +
-               "}\n";
-    }
-
-    private String generateScriptName(String workflowType) {
-        switch (workflowType) {
-            case "document_functions":
-                return "DocumentFunctions.java";
-            case "fix_ordinals":
-                return "FixOrdinalImports.java";
-            case "bulk_rename":
-                return "BulkRenameSymbols.java";
-            case "analyze_structures":
-                return "AnalyzeStructures.java";
-            case "find_patterns":
-                return "FindPatterns.java";
-            default:
-                return "CustomAnalysis.java";
-        }
-    }
 
     /**
      * Execute a Ghidra script and capture all output, errors, and warnings (v1.9.1)
@@ -8930,73 +7982,7 @@ public class EndpointRouter {
         }
     }
 
-    /**
-     * Parse script console output for error and warning patterns
-     */
-    private void parseScriptOutput(String output, List<Map<String, Object>> errors, List<Map<String, Object>> warnings) {
-        if (output == null || output.isEmpty()) {
-            return;
-        }
 
-        String[] lines = output.split("\n");
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-
-            // Look for common error patterns
-            if (line.contains("Exception") || line.contains("Error") || line.contains("ERROR")) {
-                Map<String, Object> error = new HashMap<>();
-                error.put("type", "RuntimeError");
-                error.put("message", line.trim());
-                error.put("line", i);
-                if (!errors.contains(error)) {
-                    errors.add(error);
-                }
-            }
-
-            // Look for common warning patterns
-            if (line.contains("Warning") || line.contains("WARN") || line.contains("warning")) {
-                Map<String, Object> warning = new HashMap<>();
-                warning.put("type", "Warning");
-                warning.put("message", line.trim());
-                warning.put("line", i);
-                if (!warnings.contains(warning)) {
-                    warnings.add(warning);
-                }
-            }
-        }
-    }
-
-    /**
-     * Convert list of error maps to JSON array
-     */
-    private String jsonifyErrorList(List<Map<String, Object>> errorList) {
-        if (errorList.isEmpty()) {
-            return "[]";
-        }
-
-        StringBuilder json = new StringBuilder("[");
-        for (int i = 0; i < errorList.size(); i++) {
-            if (i > 0) json.append(", ");
-            Map<String, Object> error = errorList.get(i);
-            json.append("{");
-            boolean first = true;
-            for (Map.Entry<String, Object> entry : error.entrySet()) {
-                if (!first) json.append(", ");
-                json.append("\"").append(entry.getKey()).append("\": ");
-                if (entry.getValue() instanceof String) {
-                    json.append("\"").append(escapeJsonString((String) entry.getValue())).append("\"");
-                } else if (entry.getValue() instanceof Integer) {
-                    json.append(entry.getValue());
-                } else {
-                    json.append("\"").append(escapeJsonString(entry.getValue().toString())).append("\"");
-                }
-                first = false;
-            }
-            json.append("}");
-        }
-        json.append("]");
-        return json.toString();
-    }
 
     /**
      * List all external locations (imports, ordinal imports, etc.)
@@ -9031,10 +8017,6 @@ public class EndpointRouter {
         return paginateList(lines, offset, limit);
     }
     
-    // Backward compatibility overload
-    private String listExternalLocations(int offset, int limit) {
-        return listExternalLocations(offset, limit, null);
-    }
 
     /**
      * Get details of a specific external location
@@ -9090,10 +8072,6 @@ public class EndpointRouter {
         }
     }
     
-    // Backward compatibility overload
-    private String getExternalLocationDetails(String address, String dllName) {
-        return getExternalLocationDetails(address, dllName, null);
-    }
 
     /**
      * Rename an external location (e.g., change Ordinal_123 to a real function name)

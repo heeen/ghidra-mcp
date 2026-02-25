@@ -3,7 +3,12 @@ package com.xebyte.core;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Centralized JSON serialization for HTTP responses and error payloads.
@@ -19,6 +24,15 @@ public final class JsonHelper {
     public static String toJson(Object o) {
         if (o == null) return "null";
         return GSON.toJson(o);
+    }
+
+    /** Parse a JSON object from a request body InputStream. Returns empty map for blank input. */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> parseBody(InputStream body) throws IOException {
+        String s = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        if (s.isBlank()) return new HashMap<>();
+        Map<String, Object> m = GSON.fromJson(s, Map.class);
+        return m != null ? m : new HashMap<>();
     }
 
     /** Build a JSON object with a single "error" key. Used by safeHandler and validation. */

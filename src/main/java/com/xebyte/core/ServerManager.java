@@ -86,7 +86,7 @@ public class ServerManager {
             ComparisonService comparisonService = new ComparisonService(programProvider, ts);
 
             EndpointRouter router = new EndpointRouter(
-                programProvider, ts, this::getActiveTool,
+                programProvider, this::getActiveTool,
                 listingService, commentService, symbolService, functionService,
                 mutationService, dataTypeService, analysisService, comparisonService);
 
