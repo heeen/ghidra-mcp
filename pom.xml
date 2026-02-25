@@ -105,6 +105,13 @@
             <scope>system</scope>
             <systemPath>${project.basedir}/lib/FileSystem.jar</systemPath>
         </dependency>
+        <!-- Gson for JSON serialization (replaces manual JSON building in EndpointRouter) -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.9.0</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- JUnit (test only) -->
         <dependency>
             <groupId>junit</groupId>

@@ -266,4 +266,86 @@ public class ListingService extends BaseService {
         Collections.sort(lines);
         return paginateList(lines, offset, limit);
     }
+
+    /**
+     * List defined data items sorted by xref count (paginated).
+     * Endpoint: /list_data_items_by_xrefs
+     */
+    public String listDataItemsByXrefs(int offset, int limit, String format, String programName) {
+        Program program = resolveProgram(programName);
+        if (program == null) {
+            return programNotFoundError(programName);
+        }
+        if (format == null || format.isEmpty()) format = "text";
+
+        List<DataItemInfo> dataItems = new ArrayList<>();
+        ReferenceManager refMgr = program.getReferenceManager();
+
+        for (MemoryBlock block : program.getMemory().getBlocks()) {
+            DataIterator it = program.getListing().getDefinedData(block.getStart(), true);
+            while (it.hasNext()) {
+                Data data = it.next();
+                if (block.contains(data.getAddress())) {
+                    ghidra.program.model.address.Address addr = data.getAddress();
+                    int xrefCount = refMgr.getReferenceCountTo(addr);
+                    String label = data.getLabel() != null ? data.getLabel() : "DAT_" + addr.toString().replace(":", "");
+                    DataType dt = data.getDataType();
+                    String typeName = (dt != null) ? dt.getName() : "undefined";
+                    int length = data.getLength();
+                    dataItems.add(new DataItemInfo(addr.toString().replace(":", ""), label, typeName, length, xrefCount));
+                }
+            }
+        }
+
+        dataItems.sort((a, b) -> Integer.compare(b.xrefCount, a.xrefCount));
+
+        if ("json".equalsIgnoreCase(format)) {
+            return formatDataItemsAsJson(dataItems, offset, limit);
+        }
+        return formatDataItemsAsText(dataItems, offset, limit);
+    }
+
+    private static final class DataItemInfo {
+        final String address;
+        final String label;
+        final String typeName;
+        final int length;
+        final int xrefCount;
+
+        DataItemInfo(String address, String label, String typeName, int length, int xrefCount) {
+            this.address = address;
+            this.label = label;
+            this.typeName = typeName;
+            this.length = length;
+            this.xrefCount = xrefCount;
+        }
+    }
+
+    private String formatDataItemsAsText(List<DataItemInfo> dataItems, int offset, int limit) {
+        List<String> lines = new ArrayList<>();
+        int start = Math.min(offset, dataItems.size());
+        int end = Math.min(start + limit, dataItems.size());
+        for (int i = start; i < end; i++) {
+            DataItemInfo item = dataItems.get(i);
+            String sizeStr = (item.length == 1) ? "1 byte" : item.length + " bytes";
+            lines.add(item.label + " @ " + item.address + " [" + item.typeName + "] (" + sizeStr + ") - " + item.xrefCount + " xrefs");
+        }
+        return String.join("\n", lines);
+    }
+
+    private String formatDataItemsAsJson(List<DataItemInfo> dataItems, int offset, int limit) {
+        StringBuilder json = new StringBuilder("[");
+        int start = Math.min(offset, dataItems.size());
+        int end = Math.min(start + limit, dataItems.size());
+        for (int i = start; i < end; i++) {
+            if (i > start) json.append(",");
+            DataItemInfo item = dataItems.get(i);
+            String sizeStr = (item.length == 1) ? "1 byte" : item.length + " bytes";
+            json.append("\n  {\"address\": \"").append(item.address).append("\", \"name\": \"").append(escapeJson(item.label))
+                .append("\", \"type\": \"").append(escapeJson(item.typeName)).append("\", \"size\": \"").append(sizeStr)
+                .append("\", \"xref_count\": ").append(item.xrefCount).append("}");
+        }
+        json.append("\n]");
+        return json.toString();
+    }
 }
