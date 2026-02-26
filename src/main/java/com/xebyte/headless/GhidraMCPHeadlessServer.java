@@ -297,8 +297,10 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         server.createContext("/list_functions", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(params.get("offset"), 0);
+            int limit = parseIntOrDefault(params.get("limit"), 100);
             String programName = params.get("program");
-            sendResponse(exchange, listingService.listFunctions(programName));
+            sendResponse(exchange, listingService.listFunctions(offset, limit, programName));
         });
 
         server.createContext("/list_classes", exchange -> {

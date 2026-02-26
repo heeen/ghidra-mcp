@@ -56,10 +56,10 @@ public class ListingService extends BaseService {
     }
 
     /**
-     * List all functions with name and address.
+     * List all functions with name and address (paginated).
      * Endpoint: /list_functions
      */
-    public Response listFunctions(String programName) {
+    public Response listFunctions(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -69,7 +69,7 @@ public class ListingService extends BaseService {
         for (Function f : program.getFunctionManager().getFunctions(true)) {
             lines.add(f.getName() + " @ " + f.getEntryPoint().toString());
         }
-        return Response.text(String.join("\n", lines));
+        return paginateList(lines, offset, limit);
     }
 
     /**

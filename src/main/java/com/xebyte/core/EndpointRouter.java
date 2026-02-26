@@ -114,7 +114,6 @@ public class EndpointRouter {
     @FunctionalInterface interface PageFn   { Response apply(int offset, int limit, String prog) throws Exception; }
     @FunctionalInterface interface PageFn1  { Response apply(String p, int offset, int limit, String prog) throws Exception; }
     @FunctionalInterface interface PageFn1R { Response apply(int offset, int limit, String p, String prog) throws Exception; }
-    @FunctionalInterface interface ProgFn   { Response apply(String prog) throws Exception; }
     @FunctionalInterface interface Fn0      { Response apply() throws Exception; }
     @FunctionalInterface interface Fn1      { Response apply(String p1) throws Exception; }
     @FunctionalInterface interface Fn2      { Response apply(String p1, String p2) throws Exception; }
@@ -146,10 +145,6 @@ public class EndpointRouter {
             Map<String,String> q = parseQueryParams(ex);
             sendResponse(ex, fn.apply(parseIntOrDefault(q.get("offset"),0), parseIntOrDefault(q.get("limit"),100), q.get(pName), q.get("program")));
         })));
-    }
-    // GET: program-only param
-    private void getProg(UdsHttpServer s, String path, ProgFn fn) {
-        s.createContext(path, safeHandler(checked(ex -> sendResponse(ex, fn.apply(parseQueryParams(ex).get("program"))))));
     }
     // GET: no params
     private void get0(UdsHttpServer s, String path, Fn0 fn) {
@@ -271,7 +266,6 @@ public class EndpointRouter {
         record Get2(String path, String p1, String p2, Fn2 fn) implements Ep {}
         record Get3(String path, String p1, String p2, String p3, Fn3 fn) implements Ep {}
         record Get4(String path, String p1, String p2, String p3, String p4, Fn4 fn) implements Ep {}
-        record GetProg(String path, ProgFn fn) implements Ep {}
         record GetPage(String path, PageFn fn) implements Ep {}
         record GetPage1(String path, String pName, PageFn1 fn) implements Ep {}
         record GetPage1R(String path, String pName, PageFn1R fn) implements Ep {}
@@ -298,7 +292,6 @@ public class EndpointRouter {
             case Ep.Get2(var path, var p1, var p2, var fn)                     -> get2(s, path, p1, p2, fn);
             case Ep.Get3(var path, var p1, var p2, var p3, var fn)             -> get3(s, path, p1, p2, p3, fn);
             case Ep.Get4(var path, var p1, var p2, var p3, var p4, var fn)     -> get4(s, path, p1, p2, p3, p4, fn);
-            case Ep.GetProg(var path, var fn)                                  -> getProg(s, path, fn);
             case Ep.GetPage(var path, var fn)                                  -> getPage(s, path, fn);
             case Ep.GetPage1(var path, var pn, var fn)                         -> getPage1(s, path, pn, fn);
             case Ep.GetPage1R(var path, var pn, var fn)                        -> getPage1r(s, path, pn, fn);
@@ -439,7 +432,7 @@ public class EndpointRouter {
             new Ep.GetPage("/list_namespaces", listingService::listNamespaces),
             new Ep.GetPage("/list_data_items", listingService::listDataItems),
             new Ep.GetPage1R("/list_data_items_by_xrefs", "format", listingService::listDataItemsByXrefs),
-            new Ep.GetProg("/list_functions", listingService::listFunctions),
+            new Ep.GetPage("/list_functions", listingService::listFunctions),
             new Ep.GetQuery("/list_functions_enhanced", q ->
                 listFunctionsEnhanced(getInt(q, "offset", 0), getInt(q, "limit", 10000), getStr(q, "program"))),
             new Ep.GetQuery("/get_function_call_graph", q ->
