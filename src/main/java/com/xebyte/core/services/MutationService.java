@@ -115,18 +115,18 @@ public class MutationService extends BaseService {
         if (program == null) return programNotFoundError(null);
 
         try {
-            return threadingStrategy.executeWrite(program, "Save program", () -> {
-                ghidra.framework.model.DomainFile df = program.getDomainFile();
-                if (df == null) {
-                    return Response.err("Program has no domain file");
-                }
-                df.save(TaskMonitor.DUMMY);
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("success", true);
-                result.put("program", program.getName());
-                result.put("message", "Program saved successfully");
-                return Response.ok(result);
-            });
+            ghidra.framework.model.DomainFile df = program.getDomainFile();
+            if (df == null) {
+                return Response.err("Program has no domain file");
+            }
+            // Save outside of a transaction — df.save() needs exclusive lock
+            // which cannot be acquired while a transaction is active.
+            df.save(TaskMonitor.DUMMY);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("program", program.getName());
+            result.put("message", "Program saved successfully");
+            return Response.ok(result);
         } catch (Exception e) {
             return Response.err(e.getMessage());
         }

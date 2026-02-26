@@ -473,7 +473,11 @@ public class DataTypeService extends BaseService {
                 }
 
                 if (offset >= 0) {
-                    struct.insertAtOffset(offset, newFieldType, newFieldType.getLength(), fieldName, null);
+                    // Grow struct if needed to accommodate the field at the given offset
+                    while (struct.getLength() < offset + newFieldType.getLength()) {
+                        struct.add(ghidra.program.model.data.ByteDataType.dataType, "_pad", null);
+                    }
+                    struct.replaceAtOffset(offset, newFieldType, newFieldType.getLength(), fieldName, null);
                 } else {
                     struct.add(newFieldType, fieldName, null);
                 }
