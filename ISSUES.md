@@ -49,16 +49,10 @@ dismiss it manually in the Ghidra GUI.
 
 ---
 
-## 6. `run_script_inline` previously wrote corrupted scripts (FIXED)
+## 6. ~~`run_script_inline` previously wrote corrupted scripts~~ **FIXED**
 
-**Problem**: `parseJsonParams()` did not unescape JSON string escapes (`\n`, `\"`, `\\`),
-so inline script code was written with literal backslash-n instead of newlines. Every
-inline script failed Java compilation.
-
-**Fix**: Added `unescapeJsonString()` to properly convert JSON escape sequences. Also:
-- Inline scripts now use `_mcp_inline_` prefix to avoid collisions with user scripts
-- Scripts are written to `~/ghidra_scripts/` (not `/tmp/`) for OSGi compatibility
-- Cleanup deletes both `.java` and `.class` files, with `deleteOnExit()` fallback
+**Fix**: Added `unescapeJsonString()` to properly convert JSON escape sequences. Also
+switched to `_mcp_inline_` prefix, `~/ghidra_scripts/` for OSGi compat, and `.class` cleanup.
 
 ---
 
@@ -125,58 +119,47 @@ interfere with OSGi bundle resolution for imported packages.
 
 ---
 
-## 10. Multi-program tools fail with "Endpoint not found: //switch_program"
+## 10. ~~Multi-program tools fail with "Endpoint not found: //switch_program"~~ **FIXED**
 
-**Status**: Open.
-
-**Problem**: `switch_program`, `open_program`, `list_open_programs`, and
-`get_current_program_info` all fail with double-slash path errors:
-
-```
-{"error": "Endpoint not found: //switch_program"}
-{"error": "Endpoint not found: //list_open_programs"}
-{"error": "Endpoint not found: //open_program"}
-{"error": "Endpoint not found: //get_current_program_info"}
-```
-
-**Root cause**: `DEFAULT_GHIDRA_SERVER` is `"http://127.0.0.1:8089/"` (trailing `/`).
-These tool functions construct URLs with f-strings:
-
-```python
-url = f"{ghidra_server_url}/switch_program"  # → http://127.0.0.1:8089//switch_program
-```
-
-In `make_request()`, the UDS path extracts `endpoint = urlparse(url).path` which yields
-`//switch_program`. The Java `EndpointRouter` registers `/switch_program` (single slash)
-and doesn't match.
-
-Most other tools use `safe_get()` / `safe_post()` which call `urljoin()` and avoid this,
-but the multi-program tools at lines 5514, 5574, 5639 use raw f-strings.
-
-**Fix**: Either:
-- Remove trailing `/` from `DEFAULT_GHIDRA_SERVER` (line 27)
-- Or use `urljoin()` / `safe_get()` in the multi-program tools
-- Or strip leading double slashes in `make_request()` before passing to UDS
-
-**Impact**: All multi-program workflows are broken when using UDS transport — cannot switch
-between programs, cannot list open programs, cannot open programs from the project.
+**Fix**: Removed trailing `/` from `DEFAULT_GHIDRA_SERVER` (`"http://127.0.0.1:8089/"` →
+`"http://127.0.0.1:8089"`). The f-string URLs now produce correct single-slash paths.
 
 ---
 
-## 11. `save_program` fails with "Unable to lock due to active transaction"
+## 11. Instance not discoverable until a program is opened in CodeBrowser
 
 **Status**: Open.
 
-**Problem**: `save_program` returns `{"error": "Unable to lock due to active transaction"}`
-when called after script execution or bulk operations that leave an auto-analysis transaction
-open. The Ghidra program's domain object lock cannot be acquired while a transaction is active.
+**Problem**: When Ghidra GUI is running with a project open but no program is opened
+in the CodeBrowser, `list_instances` does not show the instance. It only appears once a
+program is opened (e.g., by double-clicking a binary in the project window).
 
-**Reproduction**: Run any script that modifies the program (e.g., `ImportSDKHeaders`,
-`batch_create_labels`), then immediately call `save_program`.
+**Reproduction**:
+1. Start Ghidra GUI, open a project (e.g., `ghidra_v407.gpr`)
+2. Do NOT open any program in CodeBrowser
+3. Call `list_instances` via MCP → instance is **not listed**
+4. Open a program in CodeBrowser
+5. Call `list_instances` again → instance now appears
 
-**Workaround**: Let Ghidra auto-save on program close, or wait for auto-analysis to complete
-before calling `save_program`.
+**Expected**: The instance should be discoverable as soon as the project is open, even
+if no program is loaded in CodeBrowser. The `programs` list can be empty, but the
+instance socket should be created and visible for `connect_instance`.
 
-**Likely fix**: The Java plugin's `save_program` endpoint should wait for active transactions
-to complete (with a timeout) before attempting to save, or queue the save for after the
-current transaction ends.
+**Likely cause**: The MCP plugin/script only starts the HTTP/UDS server when a
+CodeBrowser tool window is opened (which requires opening a program), not when the
+project manager starts.
+
+---
+
+## 12. ~~`add_struct_field` ignores `offset` parameter — always appends~~ **FIXED**
+
+**Fix**: Changed `insertAtOffset` to `replaceAtOffset` (matching `create_struct` pattern).
+Struct is grown with padding bytes if needed before replacing at the target offset.
+
+---
+
+## 13. ~~`save_program` fails with "Unable to lock due to active transaction"~~ **FIXED**
+
+**Fix**: Moved `df.save()` out of the `executeWrite` transaction wrapper. Save needs an
+exclusive lock which cannot be acquired while a transaction is active — it doesn't need
+a transaction of its own since it's a read-only persistence operation.
