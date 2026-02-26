@@ -46,6 +46,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.function.Supplier;
@@ -713,41 +714,35 @@ public class EndpointRouter {
     private Object listFunctionsEnhanced(int offset, int limit, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return "{\"error\": \"" + escapeJson((String) programResult[1]) + "\"}";
+        if (program == null) return programResult[1];
 
-        StringBuilder result = new StringBuilder();
-        result.append("{\"functions\": [");
-        
-        int count = 0;
+        var functions = new ArrayList<>();
         int skipped = 0;
-        boolean first = true;
-        
+        int count = 0;
+
         for (Function func : program.getFunctionManager().getFunctions(true)) {
             if (skipped < offset) {
                 skipped++;
                 continue;
             }
             if (count >= limit) break;
-            
-            if (!first) result.append(",");
-            first = false;
-            
-            result.append("{");
-            result.append("\"name\":\"").append(escapeJson(func.getName())).append("\",");
-            result.append("\"address\":\"").append(func.getEntryPoint()).append("\",");
-            result.append("\"isThunk\":").append(func.isThunk()).append(",");
-            result.append("\"isExternal\":").append(func.isExternal());
-            result.append("}");
-            
+
+            final var f = func;
+            functions.add(new Object() {
+                String name = f.getName();
+                String address = f.getEntryPoint().toString();
+                boolean isThunk = f.isThunk();
+                boolean isExternal = f.isExternal();
+            });
             count++;
         }
-        
-        result.append("],\"count\":").append(count);
-        result.append(",\"offset\":").append(offset);
-        result.append(",\"limit\":").append(limit);
-        result.append("}");
-        
-        return result.toString();
+
+        var result = new java.util.LinkedHashMap<String, Object>();
+        result.put("functions", functions);
+        result.put("count", count);
+        result.put("offset", offset);
+        result.put("limit", limit);
+        return result;
     }
 
     /**
@@ -1531,35 +1526,20 @@ public class EndpointRouter {
      * @return JSON list of available scripts
      */
     private Object listGhidraScripts(String filter) {
-        final StringBuilder resultMsg = new StringBuilder();
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                try {
-                    resultMsg.append("{\n  \"note\": \"Script listing requires Ghidra GUI access\",\n");
-                    resultMsg.append("  \"filter\": \"").append(filter != null ? filter : "none").append("\",\n");
-                    resultMsg.append("  \"instructions\": [\n");
-                    resultMsg.append("    \"To view available scripts:\",\n");
-                    resultMsg.append("    \"1. Open Ghidra's Script Manager (Window → Script Manager)\",\n");
-                    resultMsg.append("    \"2. Browse scripts by category\",\n");
-                    resultMsg.append("    \"3. Use the search filter at the top\"\n");
-                    resultMsg.append("  ],\n");
-                    resultMsg.append("  \"common_script_locations\": [\n");
-                    resultMsg.append("    \"<ghidra_install>/Ghidra/Features/*/ghidra_scripts/\",\n");
-                    resultMsg.append("    \"<user_home>/ghidra_scripts/\"\n");
-                    resultMsg.append("  ]\n");
-                    resultMsg.append("}");
-
-                } catch (Exception e) {
-                    resultMsg.append("Error: ").append(e.getMessage());
-                    Msg.error(this, "Error in list scripts handler", e);
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            return "Error: Failed to execute on Swing thread: " + e.getMessage();
-        }
-
-        return resultMsg.toString();
+        var response = new java.util.LinkedHashMap<String, Object>();
+        response.put("note", "Script listing requires Ghidra GUI access");
+        response.put("filter", filter != null ? filter : "none");
+        response.put("instructions", List.of(
+                "To view available scripts:",
+                "1. Open Ghidra's Script Manager (Window -> Script Manager)",
+                "2. Browse scripts by category",
+                "3. Use the search filter at the top"
+        ));
+        response.put("common_script_locations", List.of(
+                "<ghidra_install>/Ghidra/Features/*/ghidra_scripts/",
+                "<user_home>/ghidra_scripts/"
+        ));
+        return response;
     }
 
     /**
@@ -1944,26 +1924,19 @@ public class EndpointRouter {
         Program program = getProgram(programName);
         
         if (program == null && programName != null && !programName.trim().isEmpty()) {
-            // Program was explicitly requested but not found - provide helpful error
             ProgramManager pm = getActiveTool().getService(ProgramManager.class);
-            StringBuilder error = new StringBuilder();
-            error.append("{\"error\": \"Program not found: ").append(escapeJson(programName)).append("\", ");
-            error.append("\"available_programs\": [");
-            
+            var available = new ArrayList<String>();
             if (pm != null) {
-                Program[] programs = pm.getAllOpenPrograms();
-                for (int i = 0; i < programs.length; i++) {
-                    if (i > 0) error.append(", ");
-                    error.append("\"").append(escapeJson(programs[i].getName())).append("\"");
-                }
+                for (Program p : pm.getAllOpenPrograms()) available.add(p.getName());
             }
-            error.append("]}");
-            
-            return new Object[] { null, error.toString() };
+            var err = new LinkedHashMap<String, Object>();
+            err.put("error", "Program not found: " + programName);
+            err.put("available_programs", available);
+            return new Object[] { null, err };
         }
-        
+
         if (program == null) {
-            return new Object[] { null, "{\"error\": \"No program currently loaded\"}" };
+            return new Object[] { null, errorJson("No program currently loaded") };
         }
         
         return new Object[] { program, null };
@@ -1975,10 +1948,10 @@ public class EndpointRouter {
     private Object saveCurrentProgram() {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
+        final AtomicReference<Object> result = new AtomicReference<>();
         final AtomicReference<String> errorMsg = new AtomicReference<>();
 
         try {
@@ -1990,11 +1963,12 @@ public class EndpointRouter {
                         return;
                     }
                     df.save(new ConsoleTaskMonitor());
-                    result.append("{");
-                    result.append("\"success\": true, ");
-                    result.append("\"program\": \"").append(program.getName().replace("\"", "\\\"")).append("\", ");
-                    result.append("\"message\": \"Program saved successfully\"");
-                    result.append("}");
+                    final var name = program.getName();
+                    result.set(new Object() {
+                        boolean success = true;
+                        String program_name = name;
+                        String message = "Program saved successfully";
+                    });
                 } catch (Throwable e) {
                     String msg = e.getMessage() != null ? e.getMessage() : e.toString();
                     errorMsg.set(msg);
@@ -2003,51 +1977,57 @@ public class EndpointRouter {
             });
 
             if (errorMsg.get() != null) {
-                return "{\"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
+                return errorJson(errorMsg.get());
             }
         } catch (Throwable e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-            return "{\"error\": \"" + msg.replace("\"", "\\\"") + "\"}";
+            return errorJson(msg);
         }
 
-        return result.length() > 0 ? result.toString() : "{\"error\": \"Unknown failure\"}";
+        return result.get() != null ? result.get() : errorJson("Unknown failure");
     }
 
     private Object listOpenPrograms() {
         ProgramManager pm = getActiveTool().getService(ProgramManager.class);
         if (pm == null) {
-            return "{\"error\": \"ProgramManager service not available\"}";
+            return errorJson("ProgramManager service not available");
         }
 
         Program[] programs = pm.getAllOpenPrograms();
         Program currentProgram = pm.getCurrentProgram();
-        
-        StringBuilder result = new StringBuilder();
-        result.append("{\"programs\": [");
-        
-        boolean first = true;
+
+        var list = new ArrayList<>();
         for (Program prog : programs) {
-            if (!first) result.append(", ");
-            first = false;
-            
-            result.append("{");
-            result.append("\"name\": \"").append(escapeJson(prog.getName())).append("\", ");
-            result.append("\"path\": \"").append(escapeJson(prog.getDomainFile().getPathname())).append("\", ");
-            result.append("\"is_current\": ").append(prog == currentProgram).append(", ");
-            result.append("\"executable_path\": \"").append(escapeJson(prog.getExecutablePath() != null ? prog.getExecutablePath() : "")).append("\", ");
-            result.append("\"language\": \"").append(escapeJson(prog.getLanguageID().getIdAsString())).append("\", ");
-            result.append("\"compiler\": \"").append(escapeJson(prog.getCompilerSpec().getCompilerSpecID().getIdAsString())).append("\", ");
-            result.append("\"image_base\": \"").append(prog.getImageBase().toString()).append("\", ");
-            result.append("\"memory_size\": ").append(prog.getMemory().getSize()).append(", ");
-            result.append("\"function_count\": ").append(prog.getFunctionManager().getFunctionCount());
-            result.append("}");
+            final var name = prog.getName();
+            final var path = prog.getDomainFile().getPathname();
+            final var isCurrent = prog == currentProgram;
+            final var execPath = prog.getExecutablePath() != null ? prog.getExecutablePath() : "";
+            final var language = prog.getLanguageID().getIdAsString();
+            final var compiler = prog.getCompilerSpec().getCompilerSpecID().getIdAsString();
+            final var imageBase = prog.getImageBase().toString();
+            final var memSize = prog.getMemory().getSize();
+            final var funcCount = prog.getFunctionManager().getFunctionCount();
+            list.add(new Object() {
+                String prog_name = name;
+                String prog_path = path;
+                boolean is_current = isCurrent;
+                String executable_path = execPath;
+                String language_id = language;
+                String compiler_id = compiler;
+                String image_base = imageBase;
+                long memory_size = memSize;
+                int function_count = funcCount;
+            });
         }
-        
-        result.append("], \"count\": ").append(programs.length);
-        result.append(", \"current_program\": \"").append(currentProgram != null ? escapeJson(currentProgram.getName()) : "").append("\"");
-        result.append("}");
-        
-        return result.toString();
+
+        final var progList = list;
+        final var count = programs.length;
+        final var currentName = currentProgram != null ? currentProgram.getName() : "";
+        return new Object() {
+            List<?> program_list = progList;
+            int program_count = count;
+            String current_program = currentName;
+        };
     }
 
     /**
@@ -2056,34 +2036,44 @@ public class EndpointRouter {
     private Object getCurrentProgramInfo() {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program currently loaded\"}";
+            return errorJson("No program currently loaded");
         }
-        
-        StringBuilder result = new StringBuilder();
-        result.append("{");
-        result.append("\"name\": \"").append(escapeJson(program.getName())).append("\", ");
-        result.append("\"path\": \"").append(escapeJson(program.getDomainFile().getPathname())).append("\", ");
-        result.append("\"executable_path\": \"").append(escapeJson(program.getExecutablePath() != null ? program.getExecutablePath() : "")).append("\", ");
-        result.append("\"executable_format\": \"").append(escapeJson(program.getExecutableFormat())).append("\", ");
-        result.append("\"language\": \"").append(escapeJson(program.getLanguageID().getIdAsString())).append("\", ");
-        result.append("\"compiler\": \"").append(escapeJson(program.getCompilerSpec().getCompilerSpecID().getIdAsString())).append("\", ");
-        result.append("\"address_size\": ").append(program.getAddressFactory().getDefaultAddressSpace().getSize()).append(", ");
-        result.append("\"image_base\": \"").append(program.getImageBase().toString()).append("\", ");
-        result.append("\"min_address\": \"").append(program.getMinAddress() != null ? program.getMinAddress().toString() : "null").append("\", ");
-        result.append("\"max_address\": \"").append(program.getMaxAddress() != null ? program.getMaxAddress().toString() : "null").append("\", ");
-        result.append("\"memory_size\": ").append(program.getMemory().getSize()).append(", ");
-        result.append("\"function_count\": ").append(program.getFunctionManager().getFunctionCount()).append(", ");
-        result.append("\"symbol_count\": ").append(program.getSymbolTable().getNumSymbols()).append(", ");
-        result.append("\"data_type_count\": ").append(program.getDataTypeManager().getDataTypeCount(true)).append(", ");
-        
-        // Get creation and modification dates
-        result.append("\"creation_date\": \"").append(program.getCreationDate() != null ? program.getCreationDate().toString() : "unknown").append("\", ");
-        
-        // Get memory block count
-        result.append("\"memory_block_count\": ").append(program.getMemory().getBlocks().length);
-        
-        result.append("}");
-        return result.toString();
+
+        final var name = program.getName();
+        final var path = program.getDomainFile().getPathname();
+        final var execPath = program.getExecutablePath() != null ? program.getExecutablePath() : "";
+        final var execFormat = program.getExecutableFormat();
+        final var language = program.getLanguageID().getIdAsString();
+        final var compiler = program.getCompilerSpec().getCompilerSpecID().getIdAsString();
+        final var addrSize = program.getAddressFactory().getDefaultAddressSpace().getSize();
+        final var imageBase = program.getImageBase().toString();
+        final var minAddr = program.getMinAddress() != null ? program.getMinAddress().toString() : "null";
+        final var maxAddr = program.getMaxAddress() != null ? program.getMaxAddress().toString() : "null";
+        final var memSize = program.getMemory().getSize();
+        final var funcCount = program.getFunctionManager().getFunctionCount();
+        final var symCount = program.getSymbolTable().getNumSymbols();
+        final var dtCount = program.getDataTypeManager().getDataTypeCount(true);
+        final var creationDate = program.getCreationDate() != null ? program.getCreationDate().toString() : "unknown";
+        final var memBlockCount = program.getMemory().getBlocks().length;
+
+        return new Object() {
+            String prog_name = name;
+            String prog_path = path;
+            String executable_path = execPath;
+            String executable_format = execFormat;
+            String language_id = language;
+            String compiler_id = compiler;
+            int address_size = addrSize;
+            String image_base = imageBase;
+            String min_address = minAddr;
+            String max_address = maxAddr;
+            long memory_size = memSize;
+            int function_count = funcCount;
+            int symbol_count = symCount;
+            int data_type_count = dtCount;
+            String creation_date = creationDate;
+            int memory_block_count = memBlockCount;
+        };
     }
 
     /**
@@ -2091,12 +2081,12 @@ public class EndpointRouter {
      */
     private Object switchProgram(String programName) {
         if (programName == null || programName.trim().isEmpty()) {
-            return "{\"error\": \"Program name is required\"}";
+            return errorJson("Program name is required");
         }
-        
+
         ProgramManager pm = getActiveTool().getService(ProgramManager.class);
         if (pm == null) {
-            return "{\"error\": \"ProgramManager service not available\"}";
+            return errorJson("ProgramManager service not available");
         }
         
         Program[] programs = pm.getAllOpenPrograms();
@@ -2121,20 +2111,28 @@ public class EndpointRouter {
         }
         
         if (targetProgram == null) {
-            StringBuilder availablePrograms = new StringBuilder();
-            for (int i = 0; i < programs.length; i++) {
-                if (i > 0) availablePrograms.append(", ");
-                availablePrograms.append(programs[i].getName());
+            var available = new ArrayList<String>();
+            for (Program prog : programs) {
+                available.add(prog.getName());
             }
-            return "{\"error\": \"Program not found: " + escapeJson(programName) + "\", \"available_programs\": [" + 
-                   (programs.length > 0 ? "\"" + availablePrograms.toString().replace(", ", "\", \"") + "\"" : "") + "]}";
+            final var requestedName = programName;
+            final var availableList = available;
+            return new Object() {
+                String error = "Program not found: " + requestedName;
+                List<String> available_programs = availableList;
+            };
         }
-        
+
         // Switch to the target program
         pm.setCurrentProgram(targetProgram);
-        
-        return "{\"success\": true, \"switched_to\": \"" + escapeJson(targetProgram.getName()) + 
-               "\", \"path\": \"" + escapeJson(targetProgram.getDomainFile().getPathname()) + "\"}";
+
+        final var switchedTo = targetProgram.getName();
+        final var switchedPath = targetProgram.getDomainFile().getPathname();
+        return new Object() {
+            boolean success = true;
+            String switched_to = switchedTo;
+            String path = switchedPath;
+        };
     }
 
     /**
@@ -2143,12 +2141,12 @@ public class EndpointRouter {
     private Object listProjectFiles(String folderPath) {
         ghidra.framework.model.Project project = getActiveTool().getProject();
         if (project == null) {
-            return "{\"error\": \"No project is currently open\"}";
+            return errorJson("No project is currently open");
         }
-        
+
         ghidra.framework.model.ProjectData projectData = project.getProjectData();
         ghidra.framework.model.DomainFolder rootFolder = projectData.getRootFolder();
-        
+
         // If folder path specified, navigate to it
         ghidra.framework.model.DomainFolder targetFolder = rootFolder;
         if (folderPath != null && !folderPath.trim().isEmpty() && !folderPath.equals("/")) {
@@ -2159,47 +2157,47 @@ public class EndpointRouter {
                 if (part.isEmpty()) continue;
                 ghidra.framework.model.DomainFolder nextFolder = targetFolder.getFolder(part);
                 if (nextFolder == null) {
-                    return "{\"error\": \"Folder not found: " + escapeJson(folderPath) + "\"}";
+                    return errorJson("Folder not found: " + folderPath);
                 }
                 targetFolder = nextFolder;
             }
         }
-        
-        StringBuilder result = new StringBuilder();
-        result.append("{\"project_name\": \"").append(escapeJson(project.getName())).append("\", ");
-        result.append("\"current_folder\": \"").append(escapeJson(targetFolder.getPathname())).append("\", ");
-        result.append("\"folders\": [");
-        
+
         // List subfolders
-        ghidra.framework.model.DomainFolder[] subfolders = targetFolder.getFolders();
-        for (int i = 0; i < subfolders.length; i++) {
-            if (i > 0) result.append(", ");
-            result.append("\"").append(escapeJson(subfolders[i].getName())).append("\"");
+        var folderNames = new ArrayList<String>();
+        for (ghidra.framework.model.DomainFolder sub : targetFolder.getFolders()) {
+            folderNames.add(sub.getName());
         }
-        result.append("], ");
-        
-        result.append("\"files\": [");
-        
+
         // List files in folder
-        ghidra.framework.model.DomainFile[] files = targetFolder.getFiles();
-        boolean first = true;
-        for (ghidra.framework.model.DomainFile file : files) {
-            if (!first) result.append(", ");
-            first = false;
-            
-            result.append("{");
-            result.append("\"name\": \"").append(escapeJson(file.getName())).append("\", ");
-            result.append("\"path\": \"").append(escapeJson(file.getPathname())).append("\", ");
-            result.append("\"content_type\": \"").append(escapeJson(file.getContentType())).append("\", ");
-            result.append("\"version\": ").append(file.getVersion()).append(", ");
-            result.append("\"is_read_only\": ").append(file.isReadOnly()).append(", ");
-            result.append("\"is_versioned\": ").append(file.isVersioned());
-            result.append("}");
+        var fileList = new ArrayList<>();
+        for (ghidra.framework.model.DomainFile file : targetFolder.getFiles()) {
+            final var fname = file.getName();
+            final var fpath = file.getPathname();
+            final var ftype = file.getContentType();
+            final var fver = file.getVersion();
+            final var fro = file.isReadOnly();
+            final var fversioned = file.isVersioned();
+            fileList.add(new Object() {
+                String name = fname;
+                String path = fpath;
+                String content_type = ftype;
+                int version = fver;
+                boolean is_read_only = fro;
+                boolean is_versioned = fversioned;
+            });
         }
-        result.append("]");
-        
-        result.append("}");
-        return result.toString();
+
+        final var projName = project.getName();
+        final var currFolder = targetFolder.getPathname();
+        final var folders = folderNames;
+        final var files = fileList;
+        return new Object() {
+            String project_name = projName;
+            String current_folder = currFolder;
+            List<String> sub_folders = folders;
+            List<?> project_files = files;
+        };
     }
 
     /**
@@ -2207,55 +2205,66 @@ public class EndpointRouter {
      */
     private Object openProgramFromProject(String path) {
         if (path == null || path.trim().isEmpty()) {
-            return "{\"error\": \"Program path is required\"}";
+            return errorJson("Program path is required");
         }
-        
+
         ghidra.framework.model.Project project = getActiveTool().getProject();
         if (project == null) {
-            return "{\"error\": \"No project is currently open\"}";
+            return errorJson("No project is currently open");
         }
-        
+
         ghidra.framework.model.ProjectData projectData = project.getProjectData();
         ghidra.framework.model.DomainFile domainFile = projectData.getFile(path);
-        
+
         if (domainFile == null) {
-            return "{\"error\": \"File not found in project: " + escapeJson(path) + "\"}";
+            return errorJson("File not found in project: " + path);
         }
-        
+
         // Check if already open
         ProgramManager pm = getActiveTool().getService(ProgramManager.class);
         if (pm == null) {
-            return "{\"error\": \"ProgramManager service not available\"}";
+            return errorJson("ProgramManager service not available");
         }
-        
+
         Program[] openPrograms = pm.getAllOpenPrograms();
         for (Program prog : openPrograms) {
             if (prog.getDomainFile().getPathname().equals(path)) {
                 // Already open, just switch to it
                 pm.setCurrentProgram(prog);
-                return "{\"success\": true, \"message\": \"Program already open, switched to it\", " +
-                       "\"name\": \"" + escapeJson(prog.getName()) + "\", " +
-                       "\"path\": \"" + escapeJson(path) + "\"}";
+                final var alreadyName = prog.getName();
+                final var alreadyPath = path;
+                return new Object() {
+                    boolean success = true;
+                    String message = "Program already open, switched to it";
+                    String name = alreadyName;
+                    String prog_path = alreadyPath;
+                };
             }
         }
-        
+
         // Open the program
         try {
             Program program = (Program) domainFile.getDomainObject(this, false, false, ghidra.util.task.TaskMonitor.DUMMY);
             if (program == null) {
-                return "{\"error\": \"Failed to open program: " + escapeJson(path) + "\"}";
+                return errorJson("Failed to open program: " + path);
             }
-            
+
             // Add to tool and set as current
             pm.openProgram(program);
             pm.setCurrentProgram(program);
-            
-            return "{\"success\": true, \"message\": \"Program opened successfully\", " +
-                   "\"name\": \"" + escapeJson(program.getName()) + "\", " +
-                   "\"path\": \"" + escapeJson(path) + "\", " +
-                   "\"function_count\": " + program.getFunctionManager().getFunctionCount() + "}";
+
+            final var openedName = program.getName();
+            final var openedPath = path;
+            final var funcCount = program.getFunctionManager().getFunctionCount();
+            return new Object() {
+                boolean success = true;
+                String message = "Program opened successfully";
+                String name = openedName;
+                String prog_path = openedPath;
+                int function_count = funcCount;
+            };
         } catch (Exception e) {
-            return "{\"error\": \"Failed to open program: " + escapeJson(e.getMessage()) + "\"}";
+            return errorJson("Failed to open program: " + e.getMessage());
         }
     }
 
@@ -2366,130 +2375,104 @@ public class EndpointRouter {
     private Object getFunctionDocumentation(String functionAddress) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         Address addr = program.getAddressFactory().getAddress(functionAddress);
         if (addr == null) {
-            return "{\"error\": \"Invalid address: " + functionAddress + "\"}";
+            return errorJson("Invalid address: " + functionAddress);
         }
 
         Function func = program.getFunctionManager().getFunctionAt(addr);
         if (func == null) {
-            return "{\"error\": \"No function at address: " + functionAddress + "\"}";
+            return errorJson("No function at address: " + functionAddress);
         }
 
-        // Compute hash for matching
-        String hash = computeNormalizedFunctionHash(program, func);
-        
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"hash\": \"").append(hash).append("\", ");
-        json.append("\"source_program\": \"").append(escapeJson(program.getName())).append("\", ");
-        json.append("\"source_address\": \"").append(addr.toString()).append("\", ");
-        json.append("\"function_name\": \"").append(escapeJson(func.getName())).append("\", ");
-        
-        // Return type and calling convention
-        json.append("\"return_type\": \"").append(escapeJson(func.getReturnType().getName())).append("\", ");
-        json.append("\"calling_convention\": \"").append(func.getCallingConventionName() != null ? escapeJson(func.getCallingConventionName()) : "").append("\", ");
-        
-        // Plate comment
-        String plateComment = func.getComment();
-        json.append("\"plate_comment\": ").append(plateComment != null ? "\"" + escapeJson(plateComment) + "\"" : "null").append(", ");
-        
+        final var hash = computeNormalizedFunctionHash(program, func);
+        final var sourceProg = program.getName();
+        final var sourceAddr = addr.toString();
+        final var funcName = func.getName();
+        final var returnType = func.getReturnType().getName();
+        final var callingConvention = func.getCallingConventionName() != null ? func.getCallingConventionName() : "";
+        final var plateComment = func.getComment();
+
         // Parameters
-        json.append("\"parameters\": [");
-        Parameter[] params = func.getParameters();
-        for (int i = 0; i < params.length; i++) {
-            if (i > 0) json.append(", ");
-            Parameter p = params[i];
-            json.append("{");
-            json.append("\"ordinal\": ").append(p.getOrdinal()).append(", ");
-            json.append("\"name\": \"").append(escapeJson(p.getName())).append("\", ");
-            json.append("\"type\": \"").append(escapeJson(p.getDataType().getName())).append("\", ");
-            json.append("\"comment\": ").append(p.getComment() != null ? "\"" + escapeJson(p.getComment()) + "\"" : "null");
-            json.append("}");
+        var paramList = new ArrayList<>();
+        for (Parameter p : func.getParameters()) {
+            final var pOrdinal = p.getOrdinal();
+            final var pName = p.getName();
+            final var pType = p.getDataType().getName();
+            final var pComment = p.getComment();
+            paramList.add(new Object() {
+                int ordinal = pOrdinal;
+                String name = pName;
+                String type = pType;
+                String comment = pComment;
+            });
         }
-        json.append("], ");
-        
+
         // Local variables (from decompilation if available)
-        json.append("\"local_variables\": [");
+        var localVarList = new ArrayList<>();
         DecompileResults decompResults = decompileFunction(func, program);
-        boolean first = true;
         if (decompResults != null && decompResults.decompileCompleted()) {
             ghidra.program.model.pcode.HighFunction highFunc = decompResults.getHighFunction();
             if (highFunc != null) {
                 Iterator<ghidra.program.model.pcode.HighSymbol> symbols = highFunc.getLocalSymbolMap().getSymbols();
                 while (symbols.hasNext()) {
                     ghidra.program.model.pcode.HighSymbol sym = symbols.next();
-                    if (sym.isParameter()) continue; // Skip parameters, handled above
-                    
-                    if (!first) json.append(", ");
-                    first = false;
-                    
-                    json.append("{");
-                    json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\", ");
-                    json.append("\"type\": \"").append(escapeJson(sym.getDataType().getName())).append("\", ");
-                    // Try to get storage info for matching
+                    if (sym.isParameter()) continue;
+                    final var symName = sym.getName();
+                    final var symType = sym.getDataType().getName();
                     ghidra.program.model.pcode.HighVariable highVar = sym.getHighVariable();
-                    if (highVar != null && highVar.getRepresentative() != null) {
-                        // Use Varnode's toString() which gives address/register info
-                        json.append("\"storage\": \"").append(escapeJson(highVar.getRepresentative().toString())).append("\"");
-                    } else {
-                        json.append("\"storage\": null");
-                    }
-                    json.append("}");
+                    final var storage = (highVar != null && highVar.getRepresentative() != null)
+                            ? highVar.getRepresentative().toString()
+                            : null;
+                    localVarList.add(new Object() {
+                        String name = symName;
+                        String type = symType;
+                        String var_storage = storage;
+                    });
                 }
             }
         }
-        json.append("], ");
-        
+
         // Inline comments (EOL and PRE comments within function body)
-        json.append("\"comments\": [");
+        var commentList = new ArrayList<>();
         AddressSetView functionBody = func.getBody();
         Listing listing = program.getListing();
-        first = true;
         Address funcStart = func.getEntryPoint();
-        
         for (Address cAddr : functionBody.getAddresses(true)) {
             String eolComment = listing.getComment(ghidra.program.model.listing.CodeUnit.EOL_COMMENT, cAddr);
             String preComment = listing.getComment(ghidra.program.model.listing.CodeUnit.PRE_COMMENT, cAddr);
-            
             if (eolComment != null || preComment != null) {
-                if (!first) json.append(", ");
-                first = false;
-                
-                long relOffset = cAddr.subtract(funcStart);
-                json.append("{");
-                json.append("\"relative_offset\": ").append(relOffset).append(", ");
-                json.append("\"eol_comment\": ").append(eolComment != null ? "\"" + escapeJson(eolComment) + "\"" : "null").append(", ");
-                json.append("\"pre_comment\": ").append(preComment != null ? "\"" + escapeJson(preComment) + "\"" : "null");
-                json.append("}");
+                final var relOffset = cAddr.subtract(funcStart);
+                final var eol = eolComment;
+                final var pre = preComment;
+                commentList.add(new Object() {
+                    long relative_offset = relOffset;
+                    String eol_comment = eol;
+                    String pre_comment = pre;
+                });
             }
         }
-        json.append("], ");
-        
+
         // Labels within function
-        json.append("\"labels\": [");
-        first = true;
+        var labelList = new ArrayList<>();
         SymbolTable symTable = program.getSymbolTable();
         for (Address lAddr : functionBody.getAddresses(true)) {
             Symbol[] symbols = symTable.getSymbols(lAddr);
             for (Symbol sym : symbols) {
                 if (sym.getSymbolType() == SymbolType.LABEL && !sym.getName().equals(func.getName())) {
-                    if (!first) json.append(", ");
-                    first = false;
-                    
-                    long relOffset = lAddr.subtract(funcStart);
-                    json.append("{");
-                    json.append("\"relative_offset\": ").append(relOffset).append(", ");
-                    json.append("\"name\": \"").append(escapeJson(sym.getName())).append("\"");
-                    json.append("}");
+                    final var relOffset = lAddr.subtract(funcStart);
+                    final var symName = sym.getName();
+                    labelList.add(new Object() {
+                        long relative_offset = relOffset;
+                        String name = symName;
+                    });
                 }
             }
         }
-        json.append("], ");
-        
+
         // Completeness score
         List<String> undefinedVars = new ArrayList<>();
         for (Parameter param : func.getParameters()) {
@@ -2500,13 +2483,26 @@ public class EndpointRouter {
                 undefinedVars.add(param.getName());
             }
         }
-        
-        double completenessScore = calculateCompletenessScore(func, undefinedVars.size(), 0, 0, 0, 0, 0, 0);
-        json.append("\"completeness_score\": ").append(completenessScore);
-        
-        json.append("}");
-        return json.toString();
-        
+        final var completenessScore = calculateCompletenessScore(func, undefinedVars.size(), 0, 0, 0, 0, 0, 0);
+
+        final var params = paramList;
+        final var localVars = localVarList;
+        final var comments = commentList;
+        final var labels = labelList;
+        return new Object() {
+            String func_hash = hash;
+            String source_program = sourceProg;
+            String source_address = sourceAddr;
+            String function_name = funcName;
+            String return_type = returnType;
+            String calling_convention = callingConvention;
+            String plate_comment = plateComment;
+            List<?> parameters = params;
+            List<?> local_variables = localVars;
+            List<?> func_comments = comments;
+            List<?> func_labels = labels;
+            double doc_completeness_score = completenessScore;
+        };
     }
 
     /**
@@ -2516,7 +2512,7 @@ public class EndpointRouter {
     private Object applyFunctionDocumentation(String jsonBody) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         // Parse JSON manually (simple parsing for this format)
@@ -2525,19 +2521,19 @@ public class EndpointRouter {
         String returnType = extractJsonString(jsonBody, "return_type");
         String callingConvention = extractJsonString(jsonBody, "calling_convention");
         String plateComment = extractJsonString(jsonBody, "plate_comment");
-        
+
         if (targetAddress == null) {
-            return "{\"error\": \"target_address is required\"}";
+            return errorJson("target_address is required");
         }
 
         Address addr = program.getAddressFactory().getAddress(targetAddress);
         if (addr == null) {
-            return "{\"error\": \"Invalid target address: " + targetAddress + "\"}";
+            return errorJson("Invalid target address: " + targetAddress);
         }
 
         Function func = program.getFunctionManager().getFunctionAt(addr);
         if (func == null) {
-            return "{\"error\": \"No function at target address: " + targetAddress + "\"}";
+            return errorJson("No function at target address: " + targetAddress);
         }
 
         final AtomicBoolean success = new AtomicBoolean(false);
@@ -2613,15 +2609,21 @@ public class EndpointRouter {
                 }
             });
         } catch (Exception e) {
-            return "{\"error\": \"Failed to apply documentation: " + escapeJson(e.getMessage()) + "\"}";
+            return errorJson("Failed to apply documentation: " + e.getMessage());
         }
 
         if (success.get()) {
-            return "{\"success\": true, \"changes_applied\": " + changesApplied.get() + 
-                   ", \"function\": \"" + escapeJson(func.getName()) + "\", " +
-                   "\"address\": \"" + addr.toString() + "\"}";
+            final var funcName = func.getName();
+            final var addrStr = addr.toString();
+            final var changes = changesApplied.get();
+            return new Object() {
+                boolean success = true;
+                int changes_applied = changes;
+                String function = funcName;
+                String address = addrStr;
+            };
         } else {
-            return "{\"error\": \"" + (errorMsg.get() != null ? escapeJson(errorMsg.get()) : "Unknown error") + "\"}";
+            return errorJson(errorMsg.get() != null ? errorMsg.get() : "Unknown error");
         }
 
     }
@@ -2834,17 +2836,15 @@ public class EndpointRouter {
     /**
      * Get labels within a specific function by name
      */
-    public String getFunctionLabels(String functionName, int offset, int limit) {
+    public Object getFunctionLabels(String functionName, int offset, int limit) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "No program loaded";
+            return errorJson("No program loaded");
         }
 
-        StringBuilder sb = new StringBuilder();
         SymbolTable symbolTable = program.getSymbolTable();
         FunctionManager functionManager = program.getFunctionManager();
-        
-        // Find the function by name
+
         Function function = null;
         for (Function f : functionManager.getFunctions(true)) {
             if (f.getName().equals(functionName)) {
@@ -2852,43 +2852,41 @@ public class EndpointRouter {
                 break;
             }
         }
-        
+
         if (function == null) {
-            return "Function not found: " + functionName;
+            return errorJson("Function not found: " + functionName);
         }
 
         AddressSetView functionBody = function.getBody();
         SymbolIterator symbols = symbolTable.getSymbolIterator();
+        var list = new ArrayList<>();
         int count = 0;
         int skipped = 0;
 
         while (symbols.hasNext() && count < limit) {
             Symbol symbol = symbols.next();
-            
-            // Check if symbol is within the function's address range
-            if (symbol.getSymbolType() == SymbolType.LABEL && 
+            if (symbol.getSymbolType() == SymbolType.LABEL &&
                 functionBody.contains(symbol.getAddress())) {
-                
+
                 if (skipped < offset) {
                     skipped++;
                     continue;
                 }
-                
-                if (sb.length() > 0) {
-                    sb.append("\n");
-                }
-                sb.append("Address: ").append(symbol.getAddress().toString())
-                  .append(", Name: ").append(symbol.getName())
-                  .append(", Source: ").append(symbol.getSource().toString());
+
+                final var addr = symbol.getAddress().toString();
+                final var name = symbol.getName();
+                final var source = symbol.getSource().toString();
+                list.add(new Object() {
+                    String address = addr;
+                    String label_name = name;
+                    String label_source = source;
+                });
                 count++;
             }
         }
 
-        if (sb.length() == 0) {
-            return "No labels found in function: " + functionName;
-        }
-        
-        return sb.toString();
+        final var items = list;
+        return new Object() { List<?> labels = items; };
     }
 
     /**
@@ -2948,16 +2946,14 @@ public class EndpointRouter {
     /**
      * Get all jump target addresses from a function's disassembly
      */
-    public String getFunctionJumpTargets(String functionName, int offset, int limit) {
+    public Object getFunctionJumpTargets(String functionName, int offset, int limit) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "No program loaded";
+            return errorJson("No program loaded");
         }
 
-        StringBuilder sb = new StringBuilder();
         FunctionManager functionManager = program.getFunctionManager();
-        
-        // Find the function by name
+
         Function function = null;
         for (Function f : functionManager.getFunctions(true)) {
             if (f.getName().equals(functionName)) {
@@ -2965,33 +2961,25 @@ public class EndpointRouter {
                 break;
             }
         }
-        
+
         if (function == null) {
-            return "Function not found: " + functionName;
+            return errorJson("Function not found: " + functionName);
         }
 
         AddressSetView functionBody = function.getBody();
         Listing listing = program.getListing();
         Set<Address> jumpTargets = new HashSet<>();
-        
-        // Iterate through all instructions in the function
+
         InstructionIterator instructions = listing.getInstructions(functionBody, true);
         while (instructions.hasNext()) {
             Instruction instr = instructions.next();
-            
-            // Check if this is a jump instruction
             if (instr.getFlowType().isJump()) {
-                // Get all reference addresses from this instruction
-                Reference[] references = instr.getReferencesFrom();
-                for (Reference ref : references) {
+                for (Reference ref : instr.getReferencesFrom()) {
                     Address targetAddr = ref.getToAddress();
-                    // Only include targets within the function or program space
                     if (targetAddr != null && program.getMemory().contains(targetAddr)) {
                         jumpTargets.add(targetAddr);
                     }
                 }
-                
-                // Also check for fall-through addresses for conditional jumps
                 if (instr.getFlowType().isConditional()) {
                     Address fallThroughAddr = instr.getFallThrough();
                     if (fallThroughAddr != null) {
@@ -3001,47 +2989,36 @@ public class EndpointRouter {
             }
         }
 
-        // Convert to sorted list and apply pagination
         List<Address> sortedTargets = new ArrayList<>(jumpTargets);
         Collections.sort(sortedTargets);
-        
+
+        var list = new ArrayList<>();
         int count = 0;
         int skipped = 0;
-        
+
         for (Address target : sortedTargets) {
             if (count >= limit) break;
-            
-            if (skipped < offset) {
-                skipped++;
-                continue;
-            }
-            
-            if (sb.length() > 0) {
-                sb.append("\n");
-            }
-            
-            // Add context about what's at this address
-            String context = "";
+            if (skipped < offset) { skipped++; continue; }
+
+            final var addrStr = target.toString();
+            final String context;
             Function targetFunc = functionManager.getFunctionContaining(target);
             if (targetFunc != null) {
-                context = " (in " + targetFunc.getName() + ")";
+                context = targetFunc.getName();
             } else {
-                // Check if there's a label at this address
                 Symbol symbol = program.getSymbolTable().getPrimarySymbol(target);
-                if (symbol != null) {
-                    context = " (" + symbol.getName() + ")";
-                }
+                context = symbol != null ? symbol.getName() : null;
             }
-            
-            sb.append(target.toString()).append(context);
+
+            list.add(new Object() {
+                String address = addrStr;
+                String label = context;
+            });
             count++;
         }
 
-        if (sb.length() == 0) {
-            return "No jump targets found in function: " + functionName;
-        }
-        
-        return sb.toString();
+        final var items = list;
+        return new Object() { List<?> jump_targets = items; };
     }
 
     /**
@@ -3113,20 +3090,18 @@ public class EndpointRouter {
      * Reduces API calls and prevents user interruption hooks from triggering multiple times
      *
      * @param labels List of label objects with "address" and "name" fields
-     * @return JSON string with success status and counts
+     * @return result object with success status and counts
      */
-    public String batchCreateLabels(List<Map<String, String>> labels) {
+    public Object batchCreateLabels(List<Map<String, String>> labels) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         if (labels == null || labels.isEmpty()) {
-            return "{\"error\": \"No labels provided\"}";
+            return errorJson("No labels provided");
         }
 
-        final StringBuilder result = new StringBuilder();
-        result.append("{");
         final AtomicInteger successCount = new AtomicInteger(0);
         final AtomicInteger skipCount = new AtomicInteger(0);
         final AtomicInteger errorCount = new AtomicInteger(0);
@@ -3162,7 +3137,6 @@ public class EndpointRouter {
                                 continue;
                             }
 
-                            // Check if label already exists
                             Symbol[] existingSymbols = symbolTable.getSymbols(address);
                             boolean labelExists = false;
                             for (Symbol symbol : existingSymbols) {
@@ -3177,7 +3151,6 @@ public class EndpointRouter {
                                 continue;
                             }
 
-                            // Create the label
                             Symbol newSymbol = symbolTable.createLabel(address, labelName, SourceType.USER_DEFINED);
                             if (newSymbol != null) {
                                 successCount.incrementAndGet();
@@ -3200,27 +3173,21 @@ public class EndpointRouter {
                     program.endTransaction(tx, successCount.get() > 0);
                 }
             });
-
-            result.append("\"success\": true, ");
-            result.append("\"labels_created\": ").append(successCount.get()).append(", ");
-            result.append("\"labels_skipped\": ").append(skipCount.get()).append(", ");
-            result.append("\"labels_failed\": ").append(errorCount.get());
-
-            if (!errors.isEmpty()) {
-                result.append(", \"errors\": [");
-                for (int i = 0; i < errors.size(); i++) {
-                    if (i > 0) result.append(", ");
-                    result.append("\"").append(errors.get(i).replace("\"", "\\\"")).append("\"");
-                }
-                result.append("]");
-            }
-
         } catch (Exception e) {
-            result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
+            return errorJson(e.getMessage());
         }
 
-        result.append("}");
-        return result.toString();
+        final int created = successCount.get();
+        final int skipped = skipCount.get();
+        final int failed = errorCount.get();
+        final var errs = List.copyOf(errors);
+        return new Object() {
+            boolean success = true;
+            int labels_created = created;
+            int labels_skipped = skipped;
+            int labels_failed = failed;
+            List<String> errors = errs.isEmpty() ? null : errs;
+        };
     }
 
     /**
@@ -3228,29 +3195,33 @@ public class EndpointRouter {
      *
      * @param addressStr Memory address in hex format
      * @param labelName Optional specific label name to delete. If null/empty, deletes all labels at the address.
-     * @return Success or failure message
+     * @return result object with success status and deleted names
      */
-    public String deleteLabel(String addressStr, String labelName) {
+    public Object deleteLabel(String addressStr, String labelName) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         if (addressStr == null || addressStr.isEmpty()) {
-            return "{\"error\": \"Address is required\"}";
+            return errorJson("Address is required");
         }
 
         try {
             Address address = program.getAddressFactory().getAddress(addressStr);
             if (address == null) {
-                return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+                return errorJson("Invalid address: " + addressStr);
             }
 
             SymbolTable symbolTable = program.getSymbolTable();
             Symbol[] symbols = symbolTable.getSymbols(address);
 
             if (symbols == null || symbols.length == 0) {
-                return "{\"success\": false, \"message\": \"No symbols found at address " + addressStr + "\"}";
+                final var msg = "No symbols found at address " + addressStr;
+                return new Object() {
+                    boolean success = false;
+                    String message = msg;
+                };
             }
 
             final AtomicInteger deletedCount = new AtomicInteger(0);
@@ -3261,18 +3232,12 @@ public class EndpointRouter {
                 int tx = program.startTransaction("Delete Label");
                 try {
                     for (Symbol symbol : symbols) {
-                        // Only delete LABEL type symbols
                         if (symbol.getSymbolType() != SymbolType.LABEL) {
                             continue;
                         }
-
-                        // If a specific name was given, only delete that one
-                        if (labelName != null && !labelName.isEmpty()) {
-                            if (!symbol.getName().equals(labelName)) {
-                                continue;
-                            }
+                        if (labelName != null && !labelName.isEmpty() && !symbol.getName().equals(labelName)) {
+                            continue;
                         }
-
                         String name = symbol.getName();
                         boolean deleted = symbol.delete();
                         if (deleted) {
@@ -3289,28 +3254,19 @@ public class EndpointRouter {
                 }
             });
 
-            StringBuilder result = new StringBuilder();
-            result.append("{\"success\": ").append(deletedCount.get() > 0);
-            result.append(", \"deleted_count\": ").append(deletedCount.get());
-            result.append(", \"deleted_names\": [");
-            for (int i = 0; i < deletedNames.size(); i++) {
-                if (i > 0) result.append(", ");
-                result.append("\"").append(deletedNames.get(i).replace("\"", "\\\"")).append("\"");
-            }
-            result.append("]");
-            if (!errors.isEmpty()) {
-                result.append(", \"errors\": [");
-                for (int i = 0; i < errors.size(); i++) {
-                    if (i > 0) result.append(", ");
-                    result.append("\"").append(errors.get(i).replace("\"", "\\\"")).append("\"");
-                }
-                result.append("]");
-            }
-            result.append("}");
-            return result.toString();
+            final boolean ok = deletedCount.get() > 0;
+            final int count = deletedCount.get();
+            final var names = List.copyOf(deletedNames);
+            final var errs = List.copyOf(errors);
+            return new Object() {
+                boolean success = ok;
+                int deleted_count = count;
+                List<String> deleted_names = names;
+                List<String> errors = errs.isEmpty() ? null : errs;
+            };
 
         } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
     }
 
@@ -3319,16 +3275,16 @@ public class EndpointRouter {
      * Useful for cleaning up orphan labels after applying array types.
      *
      * @param labels List of label entries with "address" and optional "name" fields
-     * @return JSON with success status and counts
+     * @return result object with success status and counts
      */
-    public String batchDeleteLabels(List<Map<String, String>> labels) {
+    public Object batchDeleteLabels(List<Map<String, String>> labels) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         if (labels == null || labels.isEmpty()) {
-            return "{\"error\": \"No labels provided\"}";
+            return errorJson("No labels provided");
         }
 
         final AtomicInteger deletedCount = new AtomicInteger(0);
@@ -3344,7 +3300,7 @@ public class EndpointRouter {
 
                     for (Map<String, String> labelEntry : labels) {
                         String addressStr = labelEntry.get("address");
-                        String labelName = labelEntry.get("name");  // Optional
+                        String labelName = labelEntry.get("name");
 
                         if (addressStr == null || addressStr.isEmpty()) {
                             errors.add("Missing address in label entry");
@@ -3370,14 +3326,9 @@ public class EndpointRouter {
                                 if (symbol.getSymbolType() != SymbolType.LABEL) {
                                     continue;
                                 }
-
-                                // If a specific name was given, only delete that one
-                                if (labelName != null && !labelName.isEmpty()) {
-                                    if (!symbol.getName().equals(labelName)) {
-                                        continue;
-                                    }
+                                if (labelName != null && !labelName.isEmpty() && !symbol.getName().equals(labelName)) {
+                                    continue;
                                 }
-
                                 boolean deleted = symbol.delete();
                                 if (deleted) {
                                     deletedCount.incrementAndGet();
@@ -3397,40 +3348,33 @@ public class EndpointRouter {
                     program.endTransaction(tx, deletedCount.get() > 0);
                 }
             });
-
-            StringBuilder result = new StringBuilder();
-            result.append("{\"success\": true");
-            result.append(", \"labels_deleted\": ").append(deletedCount.get());
-            result.append(", \"labels_skipped\": ").append(skippedCount.get());
-            result.append(", \"errors_count\": ").append(errorCount.get());
-            if (!errors.isEmpty()) {
-                result.append(", \"errors\": [");
-                for (int i = 0; i < Math.min(errors.size(), 10); i++) {  // Limit to first 10 errors
-                    if (i > 0) result.append(", ");
-                    result.append("\"").append(errors.get(i).replace("\"", "\\\"")).append("\"");
-                }
-                result.append("]");
-            }
-            result.append("}");
-            return result.toString();
-
         } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
+
+        final int deleted = deletedCount.get();
+        final int skipped = skippedCount.get();
+        final int errCount = errorCount.get();
+        final var errs = errors.isEmpty() ? null : List.copyOf(errors.subList(0, Math.min(errors.size(), 10)));
+        return new Object() {
+            boolean success = true;
+            int labels_deleted = deleted;
+            int labels_skipped = skipped;
+            int errors_count = errCount;
+            List<String> errors = errs;
+        };
     }
 
     /**
      * Get a call graph subgraph centered on the specified function
      */
-    public String getFunctionCallGraph(String functionName, int depth, String direction, String programName) {
+    public Object getFunctionCallGraph(String functionName, int depth, String direction, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return (String) programResult[1];
+        if (program == null) return programResult[1];
 
-        StringBuilder sb = new StringBuilder();
         FunctionManager functionManager = program.getFunctionManager();
-        
-        // Find the function by name
+
         Function rootFunction = null;
         for (Function f : functionManager.getFunctions(true)) {
             if (f.getName().equals(functionName)) {
@@ -3438,40 +3382,37 @@ public class EndpointRouter {
                 break;
             }
         }
-        
+
         if (rootFunction == null) {
-            return "Function not found: " + functionName;
+            return errorJson("Function not found: " + functionName);
         }
 
         Set<String> visited = new HashSet<>();
         Map<String, Set<String>> callGraph = new HashMap<>();
-        
-        // Build call graph based on direction
+
         if ("callees".equals(direction) || "both".equals(direction)) {
             buildCallGraphCallees(rootFunction, depth, visited, callGraph, functionManager);
         }
-        
+
         if ("callers".equals(direction) || "both".equals(direction)) {
-            visited.clear(); // Reset for callers traversal
+            visited.clear();
             buildCallGraphCallers(rootFunction, depth, visited, callGraph, functionManager);
         }
 
-        // Format output as edges
+        var edges = new ArrayList<>();
         for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
-            String caller = entry.getKey();
+            final var caller = entry.getKey();
             for (String callee : entry.getValue()) {
-                if (sb.length() > 0) {
-                    sb.append("\n");
-                }
-                sb.append(caller).append(" -> ").append(callee);
+                final var calleeName = callee;
+                edges.add(new Object() {
+                    String from = caller;
+                    String to = calleeName;
+                });
             }
         }
 
-        if (sb.length() == 0) {
-            return "No call graph relationships found for function: " + functionName;
-        }
-        
-        return sb.toString();
+        final var edgeList = edges;
+        return new Object() { List<?> call_edges = edgeList; };
     }
 
     /**
@@ -3548,134 +3489,128 @@ public class EndpointRouter {
     /**
      * Get the complete call graph for the entire program
      */
-    public String getFullCallGraph(String format, int limit, String programName) {
+    public Object getFullCallGraph(String format, int limit, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return (String) programResult[1];
+        if (program == null) return programResult[1];
 
-        StringBuilder sb = new StringBuilder();
         FunctionManager functionManager = program.getFunctionManager();
         ReferenceManager refManager = program.getReferenceManager();
         Listing listing = program.getListing();
-        
+
         Map<String, Set<String>> callGraph = new HashMap<>();
         int relationshipCount = 0;
-        
-        // Build complete call graph
+
         for (Function function : functionManager.getFunctions(true)) {
-            if (relationshipCount >= limit) {
-                break;
-            }
-            
+            if (relationshipCount >= limit) break;
+
             String functionName = function.getName();
             Set<String> callees = new HashSet<>();
-            
-            // Find all functions called by this function
+
             AddressSetView functionBody = function.getBody();
             InstructionIterator instructions = listing.getInstructions(functionBody, true);
-            
+
             while (instructions.hasNext() && relationshipCount < limit) {
                 Instruction instr = instructions.next();
-                
                 if (instr.getFlowType().isCall()) {
-                    Reference[] references = refManager.getReferencesFrom(instr.getAddress());
-                    for (Reference ref : references) {
+                    for (Reference ref : refManager.getReferencesFrom(instr.getAddress())) {
                         if (ref.getReferenceType().isCall()) {
-                            Address targetAddr = ref.getToAddress();
-                            Function targetFunc = functionManager.getFunctionAt(targetAddr);
+                            Function targetFunc = functionManager.getFunctionAt(ref.getToAddress());
                             if (targetFunc != null) {
                                 callees.add(targetFunc.getName());
-                                relationshipCount++;
-                                if (relationshipCount >= limit) {
-                                    break;
-                                }
+                                if (++relationshipCount >= limit) break;
                             }
                         }
                     }
                 }
             }
-            
+
             if (!callees.isEmpty()) {
                 callGraph.put(functionName, callees);
             }
         }
 
-        // Format output based on requested format
+        if (callGraph.isEmpty()) {
+            return errorJson("No call relationships found in the program");
+        }
+
+        // Text formats: return as raw string (sent verbatim by sendResponse)
         if ("dot".equals(format)) {
+            StringBuilder sb = new StringBuilder();
             sb.append("digraph CallGraph {\n");
             sb.append("  rankdir=TB;\n");
             sb.append("  node [shape=box];\n");
             for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
                 String caller = entry.getKey().replace("\"", "\\\"");
                 for (String callee : entry.getValue()) {
-                    callee = callee.replace("\"", "\\\"");
-                    sb.append("  \"").append(caller).append("\" -> \"").append(callee).append("\";\n");
+                    sb.append("  \"").append(caller).append("\" -> \"")
+                      .append(callee.replace("\"", "\\\"")).append("\";\n");
                 }
             }
             sb.append("}");
+            return sb.toString();
         } else if ("mermaid".equals(format)) {
+            StringBuilder sb = new StringBuilder();
             sb.append("graph TD\n");
             for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
                 String caller = entry.getKey().replace(" ", "_");
                 for (String callee : entry.getValue()) {
-                    callee = callee.replace(" ", "_");
-                    sb.append("  ").append(caller).append(" --> ").append(callee).append("\n");
+                    sb.append("  ").append(caller).append(" --> ")
+                      .append(callee.replace(" ", "_")).append("\n");
                 }
             }
+            return sb.toString();
         } else if ("adjacency".equals(format)) {
+            StringBuilder sb = new StringBuilder();
             for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
-                if (sb.length() > 0) {
-                    sb.append("\n");
-                }
-                sb.append(entry.getKey()).append(": ");
-                sb.append(String.join(", ", entry.getValue()));
+                if (sb.length() > 0) sb.append("\n");
+                sb.append(entry.getKey()).append(": ").append(String.join(", ", entry.getValue()));
             }
-        } else { // Default "edges" format
+            return sb.toString();
+        } else {
+            // Default "edges" format: return structured object
+            var edges = new ArrayList<>();
             for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
-                String caller = entry.getKey();
+                final var caller = entry.getKey();
                 for (String callee : entry.getValue()) {
-                    if (sb.length() > 0) {
-                        sb.append("\n");
-                    }
-                    sb.append(caller).append(" -> ").append(callee);
+                    final var calleeName = callee;
+                    edges.add(new Object() {
+                        String from = caller;
+                        String to = calleeName;
+                    });
                 }
             }
+            final var edgeList = edges;
+            return new Object() { List<?> call_edges = edgeList; };
         }
-
-        if (sb.length() == 0) {
-            return "No call relationships found in the program";
-        }
-        
-        return sb.toString();
     }
 
     /**
      * Enhanced call graph analysis with cycle detection and path finding
      * Provides advanced graph algorithms for understanding function relationships
      */
-    public String analyzeCallGraph(String startFunction, String endFunction, String analysisType, String programName) {
+    public Object analyzeCallGraph(String startFunction, String endFunction, String analysisType, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return (String) programResult[1];
+        if (program == null) return programResult[1];
 
         try {
             FunctionManager functionManager = program.getFunctionManager();
             ReferenceManager refManager = program.getReferenceManager();
-            
-            // Build adjacency list representation of call graph
+
             Map<String, Set<String>> callGraph = new LinkedHashMap<>();
             Map<String, String> functionAddresses = new LinkedHashMap<>();
-            
+
             for (Function func : functionManager.getFunctions(true)) {
                 if (func.isThunk()) continue;
-                
+
                 String funcName = func.getName();
                 functionAddresses.put(funcName, func.getEntryPoint().toString());
                 Set<String> callees = new HashSet<>();
-                
+
                 Listing listing = program.getListing();
                 InstructionIterator instrIter = listing.getInstructions(func.getBody(), true);
-                
+
                 while (instrIter.hasNext()) {
                     Instruction instr = instrIter.next();
                     if (instr.getFlowType().isCall()) {
@@ -3689,165 +3624,158 @@ public class EndpointRouter {
                         }
                     }
                 }
-                
+
                 if (!callees.isEmpty()) {
                     callGraph.put(funcName, callees);
                 }
             }
-            
-            StringBuilder result = new StringBuilder();
-            result.append("{\n");
-            
+
             if ("cycles".equals(analysisType)) {
-                // Detect cycles in the call graph using DFS
                 List<List<String>> cycles = findCycles(callGraph);
-                
-                result.append("  \"analysis_type\": \"cycle_detection\",\n");
-                result.append("  \"cycles_found\": ").append(cycles.size()).append(",\n");
-                result.append("  \"cycles\": [\n");
-                
+                var cycleObjs = new ArrayList<>();
                 for (int i = 0; i < Math.min(cycles.size(), 20); i++) {
-                    List<String> cycle = cycles.get(i);
-                    result.append("    {");
-                    result.append("\"length\": ").append(cycle.size()).append(", ");
-                    result.append("\"path\": [");
-                    for (int j = 0; j < cycle.size(); j++) {
-                        if (j > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(cycle.get(j))).append("\"");
-                    }
-                    result.append("]}");
-                    if (i < Math.min(cycles.size(), 20) - 1) result.append(",");
-                    result.append("\n");
+                    final var path = List.copyOf(cycles.get(i));
+                    cycleObjs.add(new Object() {
+                        int length = path.size();
+                        List<String> path_nodes = path;
+                    });
                 }
-                
                 if (cycles.size() > 20) {
-                    result.append("    {\"note\": \"").append(cycles.size() - 20).append(" additional cycles omitted\"}\n");
+                    final var note = (cycles.size() - 20) + " additional cycles omitted";
+                    cycleObjs.add(new Object() { String note_message = note; });
                 }
-                result.append("  ]\n");
-                
+                final int total = cycles.size();
+                final var cycleList = cycleObjs;
+                return new Object() {
+                    String analysis_type = "cycle_detection";
+                    int cycles_found = total;
+                    List<?> cycles = cycleList;
+                };
+
             } else if ("path".equals(analysisType) && startFunction != null && endFunction != null) {
-                // Find shortest path between two functions using BFS
                 List<String> path = findShortestPath(callGraph, startFunction, endFunction);
-                
-                result.append("  \"analysis_type\": \"path_finding\",\n");
-                result.append("  \"start_function\": \"").append(escapeJson(startFunction)).append("\",\n");
-                result.append("  \"end_function\": \"").append(escapeJson(endFunction)).append("\",\n");
-                
+                final var start = startFunction;
+                final var end = endFunction;
                 if (path != null) {
-                    result.append("  \"path_found\": true,\n");
-                    result.append("  \"path_length\": ").append(path.size() - 1).append(",\n");
-                    result.append("  \"path\": [");
-                    for (int i = 0; i < path.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(path.get(i))).append("\"");
-                    }
-                    result.append("]\n");
+                    final int pathLen = path.size() - 1;
+                    final var pathList = List.copyOf(path);
+                    return new Object() {
+                        String analysis_type = "path_finding";
+                        String start_function = start;
+                        String end_function = end;
+                        boolean path_found = true;
+                        int path_length = pathLen;
+                        List<String> path_nodes = pathList;
+                    };
                 } else {
-                    result.append("  \"path_found\": false,\n");
-                    result.append("  \"message\": \"No path exists between the specified functions\"\n");
+                    return new Object() {
+                        String analysis_type = "path_finding";
+                        String start_function = start;
+                        String end_function = end;
+                        boolean path_found = false;
+                        String message = "No path exists between the specified functions";
+                    };
                 }
-                
+
             } else if ("strongly_connected".equals(analysisType)) {
-                // Find strongly connected components using Kosaraju's algorithm
                 List<Set<String>> sccs = findStronglyConnectedComponents(callGraph);
-                
-                // Filter to only non-trivial SCCs (size > 1)
                 List<Set<String>> nonTrivialSCCs = new ArrayList<>();
                 for (Set<String> scc : sccs) {
-                    if (scc.size() > 1) {
-                        nonTrivialSCCs.add(scc);
-                    }
+                    if (scc.size() > 1) nonTrivialSCCs.add(scc);
                 }
-                
-                result.append("  \"analysis_type\": \"strongly_connected_components\",\n");
-                result.append("  \"total_sccs\": ").append(sccs.size()).append(",\n");
-                result.append("  \"non_trivial_sccs\": ").append(nonTrivialSCCs.size()).append(",\n");
-                result.append("  \"components\": [\n");
-                
+                var components = new ArrayList<>();
                 for (int i = 0; i < Math.min(nonTrivialSCCs.size(), 20); i++) {
                     Set<String> scc = nonTrivialSCCs.get(i);
-                    result.append("    {");
-                    result.append("\"size\": ").append(scc.size()).append(", ");
-                    result.append("\"functions\": [");
+                    final int sz = scc.size();
+                    List<String> funcs = new ArrayList<>();
                     int j = 0;
-                    for (String func : scc) {
-                        if (j++ > 0) result.append(", ");
-                        if (j <= 10) {
-                            result.append("\"").append(escapeJson(func)).append("\"");
-                        }
+                    for (String fn : scc) {
+                        if (j++ >= 10) break;
+                        funcs.add(fn);
                     }
-                    if (scc.size() > 10) {
-                        result.append(", \"...").append(scc.size() - 10).append(" more\"");
-                    }
-                    result.append("]}");
-                    if (i < Math.min(nonTrivialSCCs.size(), 20) - 1) result.append(",");
-                    result.append("\n");
+                    if (sz > 10) funcs.add("..." + (sz - 10) + " more");
+                    final var funcList = List.copyOf(funcs);
+                    components.add(new Object() {
+                        int size = sz;
+                        List<String> functions = funcList;
+                    });
                 }
-                
-                result.append("  ]\n");
-                
+                final int totalSccs = sccs.size();
+                final int nonTrivial = nonTrivialSCCs.size();
+                final var compList = components;
+                return new Object() {
+                    String analysis_type = "strongly_connected_components";
+                    int total_sccs = totalSccs;
+                    int non_trivial_sccs = nonTrivial;
+                    List<?> components = compList;
+                };
+
             } else if ("entry_points".equals(analysisType)) {
-                // Find functions that are never called (potential entry points)
                 Set<String> allFunctions = new HashSet<>(functionAddresses.keySet());
                 Set<String> calledFunctions = new HashSet<>();
-                for (Set<String> callees : callGraph.values()) {
-                    calledFunctions.addAll(callees);
-                }
-                
+                for (Set<String> callees : callGraph.values()) calledFunctions.addAll(callees);
                 Set<String> entryPoints = new HashSet<>(allFunctions);
                 entryPoints.removeAll(calledFunctions);
-                
-                result.append("  \"analysis_type\": \"entry_point_detection\",\n");
-                result.append("  \"total_functions\": ").append(allFunctions.size()).append(",\n");
-                result.append("  \"entry_points_found\": ").append(entryPoints.size()).append(",\n");
-                result.append("  \"entry_points\": [\n");
-                
+
+                var epObjs = new ArrayList<>();
                 int idx = 0;
                 for (String ep : entryPoints) {
-                    if (idx >= 50) {
-                        result.append("    {\"note\": \"").append(entryPoints.size() - 50).append(" more entry points\"}\n");
+                    if (idx++ >= 50) {
+                        final var note = (entryPoints.size() - 50) + " more entry points";
+                        epObjs.add(new Object() { String note_message = note; });
                         break;
                     }
-                    result.append("    {\"name\": \"").append(escapeJson(ep)).append("\", ");
-                    result.append("\"address\": \"").append(functionAddresses.getOrDefault(ep, "unknown")).append("\"}");
-                    if (idx < Math.min(entryPoints.size(), 50) - 1) result.append(",");
-                    result.append("\n");
-                    idx++;
+                    final var name = ep;
+                    final var addr = functionAddresses.getOrDefault(ep, "unknown");
+                    epObjs.add(new Object() {
+                        String function_name = name;
+                        String address = addr;
+                    });
                 }
-                
-                result.append("  ]\n");
-                
+                final int totalFuncs = allFunctions.size();
+                final int epCount = entryPoints.size();
+                final var epList = epObjs;
+                return new Object() {
+                    String analysis_type = "entry_point_detection";
+                    int total_functions = totalFuncs;
+                    int entry_points_found = epCount;
+                    List<?> entry_points = epList;
+                };
+
             } else if ("leaf_functions".equals(analysisType)) {
-                // Find functions that don't call any other functions
                 Set<String> leafFunctions = new HashSet<>(functionAddresses.keySet());
                 leafFunctions.removeAll(callGraph.keySet());
-                
-                result.append("  \"analysis_type\": \"leaf_function_detection\",\n");
-                result.append("  \"leaf_functions_found\": ").append(leafFunctions.size()).append(",\n");
-                result.append("  \"leaf_functions\": [\n");
-                
+
+                var lfObjs = new ArrayList<>();
                 int idx = 0;
                 for (String lf : leafFunctions) {
-                    if (idx >= 50) {
-                        result.append("    {\"note\": \"").append(leafFunctions.size() - 50).append(" more leaf functions\"}\n");
+                    if (idx++ >= 50) {
+                        final var note = (leafFunctions.size() - 50) + " more leaf functions";
+                        lfObjs.add(new Object() { String note_message = note; });
                         break;
                     }
-                    result.append("    {\"name\": \"").append(escapeJson(lf)).append("\", ");
-                    result.append("\"address\": \"").append(functionAddresses.getOrDefault(lf, "unknown")).append("\"}");
-                    if (idx < Math.min(leafFunctions.size(), 50) - 1) result.append(",");
-                    result.append("\n");
-                    idx++;
+                    final var name = lf;
+                    final var addr = functionAddresses.getOrDefault(lf, "unknown");
+                    lfObjs.add(new Object() {
+                        String function_name = name;
+                        String address = addr;
+                    });
                 }
-                
-                result.append("  ]\n");
-                
+                final int lfCount = leafFunctions.size();
+                final var lfList = lfObjs;
+                return new Object() {
+                    String analysis_type = "leaf_function_detection";
+                    int leaf_functions_found = lfCount;
+                    List<?> leaf_functions = lfList;
+                };
+
             } else {
                 // Default: summary statistics
                 int totalEdges = 0;
                 int maxOutDegree = 0;
                 String maxOutDegreeFunc = "";
                 Map<String, Integer> inDegree = new HashMap<>();
-                
+
                 for (Map.Entry<String, Set<String>> entry : callGraph.entrySet()) {
                     totalEdges += entry.getValue().size();
                     if (entry.getValue().size() > maxOutDegree) {
@@ -3858,7 +3786,7 @@ public class EndpointRouter {
                         inDegree.put(callee, inDegree.getOrDefault(callee, 0) + 1);
                     }
                 }
-                
+
                 int maxInDegree = 0;
                 String maxInDegreeFunc = "";
                 for (Map.Entry<String, Integer> entry : inDegree.entrySet()) {
@@ -3867,23 +3795,34 @@ public class EndpointRouter {
                         maxInDegreeFunc = entry.getKey();
                     }
                 }
-                
-                result.append("  \"analysis_type\": \"summary\",\n");
-                result.append("  \"total_functions\": ").append(functionAddresses.size()).append(",\n");
-                result.append("  \"functions_with_calls\": ").append(callGraph.size()).append(",\n");
-                result.append("  \"total_call_edges\": ").append(totalEdges).append(",\n");
-                result.append("  \"max_out_degree\": {\"function\": \"").append(escapeJson(maxOutDegreeFunc));
-                result.append("\", \"calls\": ").append(maxOutDegree).append("},\n");
-                result.append("  \"max_in_degree\": {\"function\": \"").append(escapeJson(maxInDegreeFunc));
-                result.append("\", \"called_by\": ").append(maxInDegree).append("},\n");
-                result.append("  \"available_analyses\": [\"cycles\", \"path\", \"strongly_connected\", \"entry_points\", \"leaf_functions\"]\n");
+
+                final int totFuncs = functionAddresses.size();
+                final int funcsWithCalls = callGraph.size();
+                final int totEdges = totalEdges;
+                final var maxOutFunc = maxOutDegreeFunc;
+                final int maxOut = maxOutDegree;
+                final var maxInFunc = maxInDegreeFunc;
+                final int maxIn = maxInDegree;
+                return new Object() {
+                    String analysis_type = "summary";
+                    int total_functions = totFuncs;
+                    int functions_with_calls = funcsWithCalls;
+                    int total_call_edges = totEdges;
+                    Object max_out_degree = new Object() {
+                        String function = maxOutFunc;
+                        int calls = maxOut;
+                    };
+                    Object max_in_degree = new Object() {
+                        String function = maxInFunc;
+                        int called_by = maxIn;
+                    };
+                    List<String> available_analyses = List.of(
+                        "cycles", "path", "strongly_connected", "entry_points", "leaf_functions");
+                };
             }
-            
-            result.append("}");
-            return result.toString();
-            
+
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return errorJson(e.getMessage());
         }
     }
     
@@ -4043,40 +3982,41 @@ public class EndpointRouter {
         }
     }
 
-    /** Escape special characters in JSON string values (for manual JSON building). Uses Gson. */
-    private Object escapeJsonString(String str) {
-        if (str == null) return "";
-        String quoted = JsonHelper.toJson(str);
-        return quoted.length() > 2 ? quoted.substring(1, quoted.length() - 1) : "";
-    }
-
     /**
      * Check if the plugin is running and accessible
      */
     private Object checkConnection() {
         Program program = getCurrentProgram();
-        if (program == null) {
-            return "Connected: GhidraMCP plugin running, but no program loaded";
-        }
-        return "Connected: GhidraMCP plugin running with program '" + program.getName() + "'";
+        String programName = program != null ? program.getName() : null;
+        boolean loaded = program != null;
+        return new Object() {
+            boolean connected = true;
+            boolean program_loaded = loaded;
+            String program_name = programName;
+        };
     }
 
     /**
      * Get version information about the plugin and Ghidra (v1.7.0)
      */
     private Object getVersion() {
-        StringBuilder version = new StringBuilder();
-        version.append("{\n");
-        version.append("  \"plugin_version\": \"").append(VersionInfo.getVersion()).append("\",\n");
-        version.append("  \"plugin_name\": \"").append(VersionInfo.getAppName()).append("\",\n");
-        version.append("  \"build_timestamp\": \"").append(VersionInfo.getBuildTimestamp()).append("\",\n");
-        version.append("  \"build_number\": \"").append(VersionInfo.getBuildNumber()).append("\",\n");
-        version.append("  \"full_version\": \"").append(VersionInfo.getFullVersion()).append("\",\n");
-        version.append("  \"ghidra_version\": \"12.0.2\",\n");
-        version.append("  \"java_version\": \"").append(System.getProperty("java.version")).append("\",\n");
-        version.append("  \"endpoint_count\": ").append(VersionInfo.getEndpointCount()).append("\n");
-        version.append("}");
-        return version.toString();
+        String pluginVersion = VersionInfo.getVersion();
+        String pluginName = VersionInfo.getAppName();
+        String buildTimestamp = VersionInfo.getBuildTimestamp();
+        String buildNumber = VersionInfo.getBuildNumber();
+        String fullVersion = VersionInfo.getFullVersion();
+        String javaVersion = System.getProperty("java.version");
+        int endpointCount = VersionInfo.getEndpointCount();
+        return new Object() {
+            String plugin_version = pluginVersion;
+            String plugin_name = pluginName;
+            String build_timestamp = buildTimestamp;
+            String build_number = buildNumber;
+            String full_version = fullVersion;
+            String ghidra_version = "12.0.2";
+            String java_version = javaVersion;
+            int endpoint_count = endpointCount;
+        };
     }
 
     /**
@@ -4085,38 +4025,44 @@ public class EndpointRouter {
     private Object getMetadata() {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "No program loaded";
+            return errorJson("No program loaded");
         }
 
-        StringBuilder metadata = new StringBuilder();
-        metadata.append("Program Name: ").append(program.getName()).append("\n");
-        metadata.append("Executable Path: ").append(program.getExecutablePath()).append("\n");
-        metadata.append("Architecture: ").append(program.getLanguage().getProcessor().toString()).append("\n");
-        metadata.append("Compiler: ").append(program.getCompilerSpec().getCompilerSpecID()).append("\n");
-        metadata.append("Language: ").append(program.getLanguage().getLanguageID()).append("\n");
-        metadata.append("Endian: ").append(program.getLanguage().isBigEndian() ? "Big" : "Little").append("\n");
-        metadata.append("Address Size: ").append(program.getAddressFactory().getDefaultAddressSpace().getSize()).append(" bits\n");
-        metadata.append("Base Address: ").append(program.getImageBase()).append("\n");
-        
-        // Memory information
+        String programName = program.getName();
+        String executablePath = program.getExecutablePath();
+        String architecture = program.getLanguage().getProcessor().toString();
+        String compiler = program.getCompilerSpec().getCompilerSpecID().toString();
+        String language = program.getLanguage().getLanguageID().toString();
+        String endian = program.getLanguage().isBigEndian() ? "Big" : "Little";
+        int addressSize = program.getAddressFactory().getDefaultAddressSpace().getSize();
+        String baseAddress = program.getImageBase().toString();
+
         long totalSize = 0;
         int blockCount = 0;
         for (MemoryBlock block : program.getMemory().getBlocks()) {
             totalSize += block.getSize();
             blockCount++;
         }
-        metadata.append("Memory Blocks: ").append(blockCount).append("\n");
-        metadata.append("Total Memory Size: ").append(totalSize).append(" bytes\n");
-        
-        // Function count
-        int functionCount = program.getFunctionManager().getFunctionCount();
-        metadata.append("Function Count: ").append(functionCount).append("\n");
-        
-        // Symbol count
-        int symbolCount = program.getSymbolTable().getNumSymbols();
-        metadata.append("Symbol Count: ").append(symbolCount).append("\n");
+        final long totalMemorySize = totalSize;
+        final int memoryBlocks = blockCount;
 
-        return metadata.toString();
+        int functionCount = program.getFunctionManager().getFunctionCount();
+        int symbolCount = program.getSymbolTable().getNumSymbols();
+
+        return new Object() {
+            String program_name = programName;
+            String executable_path = executablePath;
+            String arch = architecture;
+            String comp = compiler;
+            String lang = language;
+            String endianness = endian;
+            int address_size_bits = addressSize;
+            String base_address = baseAddress;
+            int memory_block_count = memoryBlocks;
+            long total_memory_size_bytes = totalMemorySize;
+            int function_count = functionCount;
+            int symbol_count = symbolCount;
+        };
     }
 
     /**
@@ -4124,14 +4070,13 @@ public class EndpointRouter {
      */
     private Object convertNumber(String text, int size) {
         if (text == null || text.isEmpty()) {
-            return "Error: No number provided";
+            return errorJson("No number provided");
         }
 
         try {
             long value;
             String inputType;
-            
-            // Determine input format and parse
+
             if (text.startsWith("0x") || text.startsWith("0X")) {
                 value = Long.parseUnsignedLong(text.substring(2), 16);
                 inputType = "hexadecimal";
@@ -4146,43 +4091,53 @@ public class EndpointRouter {
                 inputType = "decimal";
             }
 
-            StringBuilder result = new StringBuilder();
-            result.append("Input: ").append(text).append(" (").append(inputType).append(")\n");
-            result.append("Size: ").append(size).append(" bytes\n\n");
-            
-            // Handle different sizes with proper masking
             long mask = (size == 8) ? -1L : (1L << (size * 8)) - 1L;
             long maskedValue = value & mask;
-            
-            result.append("Decimal (unsigned): ").append(Long.toUnsignedString(maskedValue)).append("\n");
-            
-            // Signed representation for appropriate sizes
+
+            String decimalUnsigned = Long.toUnsignedString(maskedValue);
+            String hexValue = "0x" + Long.toHexString(maskedValue).toUpperCase();
+            String binaryValue = "0b" + Long.toBinaryString(maskedValue);
+            String octalValue = "0" + Long.toOctalString(maskedValue);
+            String hexPadded = "0x" + String.format(String.format("%%0%dX", size * 2), maskedValue);
+
+            Long decimalSigned = null;
             if (size <= 8) {
                 long signedValue = maskedValue;
                 if (size < 8) {
-                    // Sign extend for smaller sizes
                     long signBit = 1L << (size * 8 - 1);
                     if ((maskedValue & signBit) != 0) {
                         signedValue = maskedValue | (~mask);
                     }
                 }
-                result.append("Decimal (signed): ").append(signedValue).append("\n");
+                decimalSigned = signedValue;
             }
-            
-            result.append("Hexadecimal: 0x").append(Long.toHexString(maskedValue).toUpperCase()).append("\n");
-            result.append("Binary: 0b").append(Long.toBinaryString(maskedValue)).append("\n");
-            result.append("Octal: 0").append(Long.toOctalString(maskedValue)).append("\n");
-            
-            // Add size-specific hex representation
-            String hexFormat = String.format("%%0%dX", size * 2);
-            result.append("Hex (").append(size).append(" bytes): 0x").append(String.format(hexFormat, maskedValue)).append("\n");
 
-            return result.toString();
+            final String finalInput = text;
+            final String finalInputType = inputType;
+            final int finalSize = size;
+            final String finalDecimalUnsigned = decimalUnsigned;
+            final Long finalDecimalSigned = decimalSigned;
+            final String finalHex = hexValue;
+            final String finalBinary = binaryValue;
+            final String finalOctal = octalValue;
+            final String finalHexPadded = hexPadded;
+
+            return new Object() {
+                String input = finalInput;
+                String input_type = finalInputType;
+                int size_bytes = finalSize;
+                String decimal_unsigned = finalDecimalUnsigned;
+                Long decimal_signed = finalDecimalSigned;
+                String hexadecimal = finalHex;
+                String binary = finalBinary;
+                String octal = finalOctal;
+                String hex_padded = finalHexPadded;
+            };
 
         } catch (NumberFormatException e) {
-            return "Error: Invalid number format: " + text;
+            return errorJson("Invalid number format: " + text);
         } catch (Exception e) {
-            return "Error converting number: " + e.getMessage();
+            return errorJson("Error converting number: " + e.getMessage());
         }
     }
 
@@ -4214,52 +4169,58 @@ public class EndpointRouter {
      */
     private Object validateDataType(String addressStr, String typeName) throws Exception {
         Program program = getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
-        if (typeName == null || typeName.isEmpty()) return "Type name is required";
+        if (program == null) return errorJson("No program loaded");
+        if (addressStr == null || addressStr.isEmpty()) return errorJson("Address is required");
+        if (typeName == null || typeName.isEmpty()) return errorJson("Type name is required");
 
         Address addr = program.getAddressFactory().getAddress(addressStr);
         DataTypeManager dtm = program.getDataTypeManager();
         DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
 
         if (dataType == null) {
-            return "Data type not found: " + typeName;
+            return errorJson("Data type not found: " + typeName);
         }
 
-        StringBuilder result = new StringBuilder();
-        result.append("Validation for type '").append(typeName).append("' at address ").append(addressStr).append(":\n\n");
-
-        // Check if memory is available
         Memory memory = program.getMemory();
         int typeSize = dataType.getLength();
         Address endAddr = addr.add(typeSize - 1);
 
-        if (!memory.contains(addr) || !memory.contains(endAddr)) {
-            result.append("❌ Memory range not available\n");
-            result.append("   Required: ").append(addr).append(" - ").append(endAddr).append("\n");
-            return result.toString();
+        boolean memoryAvailable = memory.contains(addr) && memory.contains(endAddr);
+        if (!memoryAvailable) {
+            final String rangeStart = addr.toString();
+            final String rangeEnd = endAddr.toString();
+            return new Object() {
+                String address = addressStr;
+                String type_name = typeName;
+                boolean memory_available = false;
+                String required_range = rangeStart + " - " + rangeEnd;
+            };
         }
 
-        result.append("✅ Memory range available\n");
-        result.append("   Range: ").append(addr).append(" - ").append(endAddr).append(" (").append(typeSize).append(" bytes)\n");
-
-        // Check alignment
         long alignment = dataType.getAlignment();
-        if (alignment > 1 && addr.getOffset() % alignment != 0) {
-            result.append("⚠️  Alignment warning: Address not aligned to ").append(alignment).append("-byte boundary\n");
-        } else {
-            result.append("✅ Proper alignment\n");
-        }
+        boolean aligned = alignment <= 1 || addr.getOffset() % alignment == 0;
+        String alignmentWarning = aligned ? null
+                : "Address not aligned to " + alignment + "-byte boundary";
 
-        // Check if there's existing data
         Data existingData = program.getListing().getDefinedDataAt(addr);
-        if (existingData != null) {
-            result.append("⚠️  Existing data: ").append(existingData.getDataType().getName()).append("\n");
-        } else {
-            result.append("✅ No conflicting data\n");
-        }
+        String conflictingType = existingData != null ? existingData.getDataType().getName() : null;
 
-        return result.toString();
+        final String rangeStr = addr + " - " + endAddr;
+        final boolean hasConflict = conflictingType != null;
+        final String conflictType = conflictingType;
+        final String alignWarn = alignmentWarning;
+
+        return new Object() {
+            String address = addressStr;
+            String type_name = typeName;
+            boolean memory_available = true;
+            String range = rangeStr;
+            int size_bytes = typeSize;
+            boolean properly_aligned = aligned;
+            String alignment_warning = alignWarn;
+            boolean has_conflicting_data = hasConflict;
+            String conflicting_data_type = conflictType;
+        };
     }
 
     /**
@@ -4269,40 +4230,36 @@ public class EndpointRouter {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) {
-            return "{\"error\":\"" + escapeJson((String) programResult[1]) + "\"}";
+            return programResult[1];
         }
 
         Address address = program.getAddressFactory().getAddress(addressStr);
         if (address == null) {
-            return "{\"error\":\"Invalid address: " + addressStr + "\"}";
+            return errorJson("Invalid address: " + addressStr);
         }
 
         Memory memory = program.getMemory();
         byte[] bytes = new byte[length];
-        
         int bytesRead = memory.getBytes(address, bytes);
-        
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"address\":\"").append(address.toString()).append("\",");
-        json.append("\"length\":").append(bytesRead).append(",");
-        json.append("\"data\":[");
-        
+
+        int[] dataInts = new int[bytesRead];
+        StringBuilder hexBuilder = new StringBuilder();
         for (int i = 0; i < bytesRead; i++) {
-            if (i > 0) json.append(",");
-            json.append(bytes[i] & 0xFF);
+            dataInts[i] = bytes[i] & 0xFF;
+            hexBuilder.append(String.format("%02x", dataInts[i]));
         }
-        
-        json.append("],");
-        json.append("\"hex\":\"");
-        for (int i = 0; i < bytesRead; i++) {
-            json.append(String.format("%02x", bytes[i] & 0xFF));
-        }
-        json.append("\"");
-        json.append("}");
-        
-        return json.toString();
-        
+
+        final String addrStr = address.toString();
+        final int finalBytesRead = bytesRead;
+        final int[] finalData = dataInts;
+        final String hexStr = hexBuilder.toString();
+
+        return new Object() {
+            String addr = addrStr;
+            int read_length = finalBytesRead;
+            int[] data = finalData;
+            String hex = hexStr;
+        };
     }
     
     /**
@@ -4336,12 +4293,12 @@ public class EndpointRouter {
      */
     private Object moveDataTypeToCategory(String typeName, String categoryPath) {
         Program program = getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (typeName == null || typeName.isEmpty()) return "Type name is required";
-        if (categoryPath == null || categoryPath.isEmpty()) return "Category path is required";
+        if (program == null) return errorJson("No program loaded");
+        if (typeName == null || typeName.isEmpty()) return errorJson("Type name is required");
+        if (categoryPath == null || categoryPath.isEmpty()) return errorJson("Category path is required");
 
-        AtomicBoolean success = new AtomicBoolean(false);
-        StringBuilder result = new StringBuilder();
+        AtomicBoolean txSuccess = new AtomicBoolean(false);
+        AtomicReference<Object> result = new AtomicReference<>();
 
         try {
             SwingUtilities.invokeAndWait(() -> {
@@ -4351,31 +4308,32 @@ public class EndpointRouter {
                     DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
 
                     if (dataType == null) {
-                        result.append("Data type not found: ").append(typeName);
+                        result.set(errorJson("Data type not found: " + typeName));
                         return;
                     }
 
                     CategoryPath catPath = new CategoryPath(categoryPath);
-                    Category category = dtm.createCategory(catPath);
-                    
-                    // Move the data type
+                    dtm.createCategory(catPath);
                     dataType.setCategoryPath(catPath);
-                    
-                    result.append("Successfully moved data type '").append(typeName)
-                          .append("' to category '").append(categoryPath).append("'");
-                    success.set(true);
+                    txSuccess.set(true);
+
+                    result.set(new Object() {
+                        boolean success = true;
+                        String type_name = typeName;
+                        String category = categoryPath;
+                    });
 
                 } catch (Exception e) {
-                    result.append("Error moving data type: ").append(e.getMessage());
+                    result.set(errorJson("Error moving data type: " + e.getMessage()));
                 } finally {
-                    program.endTransaction(tx, success.get());
+                    program.endTransaction(tx, txSuccess.get());
                 }
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            result.append("Failed to execute data type move on Swing thread: ").append(e.getMessage());
+            result.set(errorJson("Failed to execute data type move on Swing thread: " + e.getMessage()));
         }
 
-        return result.toString();
+        return result.get();
     }
 
     /**
@@ -4412,41 +4370,36 @@ public class EndpointRouter {
      */
     private Object createFunctionSignature(String name, String returnType, String parametersJson) {
         Program program = getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (name == null || name.isEmpty()) return "Function name is required";
-        if (returnType == null || returnType.isEmpty()) return "Return type is required";
+        if (program == null) return errorJson("No program loaded");
+        if (name == null || name.isEmpty()) return errorJson("Function name is required");
+        if (returnType == null || returnType.isEmpty()) return errorJson("Return type is required");
 
-        AtomicBoolean success = new AtomicBoolean(false);
-        StringBuilder result = new StringBuilder();
+        AtomicBoolean txSuccess = new AtomicBoolean(false);
+        AtomicReference<Object> result = new AtomicReference<>();
+        AtomicReference<String> paramWarning = new AtomicReference<>();
 
         try {
             SwingUtilities.invokeAndWait(() -> {
                 int tx = program.startTransaction("Create function signature");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    
-                    // Resolve return type
+
                     DataType returnDataType = resolveDataType(dtm, returnType);
                     if (returnDataType == null) {
-                        result.append("Return type not found: ").append(returnType);
+                        result.set(errorJson("Return type not found: " + returnType));
                         return;
                     }
 
-                    // Create function definition
                     FunctionDefinitionDataType funcDef = new FunctionDefinitionDataType(name);
                     funcDef.setReturnType(returnDataType);
 
-                    // Parse parameters if provided
                     if (parametersJson != null && !parametersJson.isEmpty()) {
                         try {
-                            // Simple JSON parsing for parameters
                             String[] paramPairs = parametersJson.replace("[", "").replace("]", "")
                                                                .replace("{", "").replace("}", "")
                                                                .split(",");
-                            
                             for (String paramPair : paramPairs) {
                                 if (paramPair.trim().isEmpty()) continue;
-                                
                                 String[] parts = paramPair.split(":");
                                 if (parts.length >= 2) {
                                     String paramType = parts[1].replace("\"", "").trim();
@@ -4459,27 +4412,33 @@ public class EndpointRouter {
                                 }
                             }
                         } catch (Exception e) {
-                            // If JSON parsing fails, continue without parameters
-                            result.append("Warning: Could not parse parameters, continuing without them. ");
+                            paramWarning.set("Could not parse parameters, created without them");
                         }
                     }
 
                     DataType addedFuncDef = dtm.addDataType(funcDef, DataTypeConflictHandler.REPLACE_HANDLER);
-                    
-                    result.append("Successfully created function signature: ").append(addedFuncDef.getName());
-                    success.set(true);
+                    txSuccess.set(true);
+
+                    String addedName = addedFuncDef.getName();
+                    String warning = paramWarning.get();
+                    result.set(new Object() {
+                        boolean success = true;
+                        String function_name = addedName;
+                        String return_type = returnType;
+                        String parameter_warning = warning;
+                    });
 
                 } catch (Exception e) {
-                    result.append("Error creating function signature: ").append(e.getMessage());
+                    result.set(errorJson("Error creating function signature: " + e.getMessage()));
                 } finally {
-                    program.endTransaction(tx, success.get());
+                    program.endTransaction(tx, txSuccess.get());
                 }
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            result.append("Failed to execute function signature creation on Swing thread: ").append(e.getMessage());
+            result.set(errorJson("Failed to execute function signature creation on Swing thread: " + e.getMessage()));
         }
 
-        return result.toString();
+        return result.get();
     }
 
     // ==========================================================================
@@ -4487,17 +4446,6 @@ public class EndpointRouter {
     // ==========================================================================
 
 
-    /**
-     * Helper to escape strings for JSON
-     */
-    private Object escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
-    }
 
     /**
      * 6. APPLY_DATA_CLASSIFICATION - Atomic type application
@@ -4506,15 +4454,15 @@ public class EndpointRouter {
                                            String name, String comment,
                                            Object typeDefinitionObj) throws Exception {
         Program program = getCurrentProgram();
-        if (program == null) return "{\"error\": \"No program loaded\"}";
+        if (program == null) return errorJson("No program loaded");
 
-        final StringBuilder resultJson = new StringBuilder();
         final AtomicReference<String> typeApplied = new AtomicReference<>("none");
         final List<String> operations = new ArrayList<>();
+        final AtomicReference<Object> errorResult = new AtomicReference<>();
 
         Address addr = program.getAddressFactory().getAddress(addressStr);
         if (addr == null) {
-            return "{\"error\": \"Invalid address: " + escapeJson(addressStr) + "\"}";
+            return errorJson("Invalid address: " + addressStr);
         }
 
         // Parse type_definition from the object
@@ -4526,9 +4474,9 @@ public class EndpointRouter {
             typeDef = null;
         } else {
             // Received something unexpected - log it for debugging
-            return "{\"error\": \"type_definition must be a JSON object/dict, got: " +
-                   escapeJson(typeDefinitionObj.getClass().getSimpleName()) +
-                   " with value: " + escapeJson(String.valueOf(typeDefinitionObj)) + "\"}";
+            return errorJson("type_definition must be a JSON object/dict, got: " +
+                   typeDefinitionObj.getClass().getSimpleName() +
+                   " with value: " + typeDefinitionObj);
         }
 
         final String finalClassification = classification;
@@ -4711,32 +4659,24 @@ public class EndpointRouter {
                 success = true;
 
             } catch (Exception e) {
-                resultJson.append("{\"error\": \"").append(escapeJson(e.getMessage())).append("\"}");
+                errorResult.set(errorJson(e.getMessage()));
             } finally {
                 program.endTransaction(txId, success);
             }
         });
 
-        // Build result JSON if no error
-        if (resultJson.length() == 0) {
-            resultJson.append("{");
-            resultJson.append("\"success\": true,");
-            resultJson.append("\"address\": \"").append(escapeJson(addressStr)).append("\",");
-            resultJson.append("\"classification\": \"").append(escapeJson(classification)).append("\",");
-            if (name != null) {
-                resultJson.append("\"name\": \"").append(escapeJson(name)).append("\",");
-            }
-            resultJson.append("\"type_applied\": \"").append(escapeJson(typeApplied.get())).append("\",");
-            resultJson.append("\"operations_performed\": [");
-            for (int i = 0; i < operations.size(); i++) {
-                resultJson.append("\"").append(escapeJson(operations.get(i))).append("\"");
-                if (i < operations.size() - 1) resultJson.append(",");
-            }
-            resultJson.append("]");
-            resultJson.append("}");
+        if (errorResult.get() != null) {
+            return errorResult.get();
         }
 
-        return resultJson.toString();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("address", addressStr);
+        result.put("classification", classification);
+        if (name != null) result.put("name", name);
+        result.put("type_applied", typeApplied.get());
+        result.put("operations_performed", operations);
+        return result;
 
     }
 
@@ -4750,10 +4690,10 @@ public class EndpointRouter {
     private Object suggestFieldNames(String structAddressStr, int structSize) {
         // Validate input parameters
         if (structSize < 0 || structSize > MAX_FIELD_OFFSET) {
-            return "{\"error\": \"structSize must be between 0 and " + MAX_FIELD_OFFSET + "\"}";
+            return errorJson("structSize must be between 0 and " + MAX_FIELD_OFFSET);
         }
 
-        final AtomicReference<String> result = new AtomicReference<>();
+        final AtomicReference<Object> result = new AtomicReference<>();
 
         // CRITICAL FIX #1: Thread safety - wrap in SwingUtilities.invokeAndWait
         try {
@@ -4761,13 +4701,13 @@ public class EndpointRouter {
                 try {
                     Program program = getCurrentProgram();
                     if (program == null) {
-                        result.set("{\"error\": \"No program loaded\"}");
+                        result.set(errorJson("No program loaded"));
                         return;
                     }
 
                     Address addr = program.getAddressFactory().getAddress(structAddressStr);
                     if (addr == null) {
-                        result.set("{\"error\": \"Invalid address: " + structAddressStr + "\"}");
+                        result.set(errorJson("Invalid address: " + structAddressStr));
                         return;
                     }
 
@@ -4778,7 +4718,7 @@ public class EndpointRouter {
                     DataType dataType = (data != null) ? data.getDataType() : null;
 
                     if (dataType == null || !(dataType instanceof Structure)) {
-                        result.set("{\"error\": \"No structure data type found at " + structAddressStr + "\"}");
+                        result.set(errorJson("No structure data type found at " + structAddressStr));
                         return;
                     }
 
@@ -4787,62 +4727,48 @@ public class EndpointRouter {
                     // MAJOR FIX #5: Validate structure size
                     DataTypeComponent[] components = struct.getComponents();
                     if (components.length > MAX_STRUCT_FIELDS) {
-                        result.set("{\"error\": \"Structure too large: " + components.length +
-                                   " fields (max " + MAX_STRUCT_FIELDS + ")\"}");
+                        result.set(errorJson("Structure too large: " + components.length +
+                                   " fields (max " + MAX_STRUCT_FIELDS + ")"));
                         return;
                     }
 
-                    StringBuilder json = new StringBuilder();
-                    json.append("{");
-                    json.append("\"struct_address\": \"").append(structAddressStr).append("\",");
-                    json.append("\"struct_name\": \"").append(escapeJson(struct.getName())).append("\",");
-                    json.append("\"struct_size\": ").append(struct.getLength()).append(",");
-                    json.append("\"suggestions\": [");
-
-                    boolean first = true;
+                    List<Map<String, Object>> suggestions = new ArrayList<>();
                     for (DataTypeComponent component : components) {
-                        if (!first) json.append(",");
-                        first = false;
-
-                        json.append("{");
-                        json.append("\"offset\": ").append(component.getOffset()).append(",");
-                        json.append("\"current_name\": \"").append(escapeJson(component.getFieldName())).append("\",");
-                        json.append("\"field_type\": \"").append(escapeJson(component.getDataType().getName())).append("\",");
-
                         // Generate suggestions based on type and patterns
-                        List<String> suggestions = generateFieldNameSuggestions(component);
+                        List<String> suggestedNames = generateFieldNameSuggestions(component);
 
                         // Ensure we always have fallback suggestions
-                        if (suggestions.isEmpty()) {
-                            suggestions.add(component.getFieldName() + "Value");
-                            suggestions.add(component.getFieldName() + "Data");
+                        if (suggestedNames.isEmpty()) {
+                            suggestedNames.add(component.getFieldName() + "Value");
+                            suggestedNames.add(component.getFieldName() + "Data");
                         }
 
-                        json.append("\"suggested_names\": [");
-                        for (int i = 0; i < suggestions.size(); i++) {
-                            if (i > 0) json.append(",");
-                            json.append("\"").append(escapeJson(suggestions.get(i))).append("\"");
-                        }
-                        json.append("],");
-
-                        json.append("\"confidence\": \"medium\"");  // Placeholder confidence level
-                        json.append("}");
+                        Map<String, Object> fieldSuggestion = new LinkedHashMap<>();
+                        fieldSuggestion.put("offset", component.getOffset());
+                        fieldSuggestion.put("current_name", component.getFieldName());
+                        fieldSuggestion.put("field_type", component.getDataType().getName());
+                        fieldSuggestion.put("suggested_names", suggestedNames);
+                        fieldSuggestion.put("confidence", "medium");
+                        suggestions.add(fieldSuggestion);
                     }
 
-                    json.append("]");
-                    json.append("}");
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("struct_address", structAddressStr);
+                    response.put("struct_name", struct.getName());
+                    response.put("struct_size", struct.getLength());
+                    response.put("suggestions", suggestions);
 
                     Msg.info(this, "Generated suggestions for " + components.length + " fields");
-                    result.set(json.toString());
+                    result.set(response);
 
                 } catch (Exception e) {
                     Msg.error(this, "Error in suggestFieldNames", e);
-                    result.set("{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                    result.set(errorJson(e.getMessage()));
                 }
             });
         } catch (InvocationTargetException | InterruptedException e) {
             Msg.error(this, "Thread synchronization error in suggestFieldNames", e);
-            return "{\"error\": \"Thread synchronization error: " + escapeJson(e.getMessage()) + "\"}";
+            return errorJson("Thread synchronization error: " + e.getMessage());
         }
 
         return result.get();
@@ -4895,11 +4821,11 @@ public class EndpointRouter {
      */
     private Object inspectMemoryContent(String addressStr, int length, boolean detectStrings) throws Exception {
         Program program = getCurrentProgram();
-        if (program == null) return "{\"error\": \"No program loaded\"}";
+        if (program == null) return errorJson("No program loaded");
 
         Address addr = program.getAddressFactory().getAddress(addressStr);
         if (addr == null) {
-            return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+            return errorJson("Invalid address: " + addressStr);
         }
 
         Memory memory = program.getMemory();
@@ -4983,32 +4909,20 @@ public class EndpointRouter {
             stringLength = endIdx;
         }
 
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{");
-        result.append("\"address\": \"").append(addressStr).append("\",");
-        result.append("\"bytes_read\": ").append(bytesRead).append(",");
-        result.append("\"hex_dump\": \"").append(hexDump.toString().trim()).append("\",");
-        result.append("\"ascii_repr\": \"").append(asciiRepr.toString().trim()).append("\",");
-        result.append("\"printable_count\": ").append(printableCount).append(",");
-        result.append("\"printable_ratio\": ").append(String.format("%.2f", printableRatio)).append(",");
-        result.append("\"null_terminator_at\": ").append(nullTerminatorIndex).append(",");
-        result.append("\"max_consecutive_printable\": ").append(maxConsecutivePrintable).append(",");
-        result.append("\"is_likely_string\": ").append(likelyString).append(",");
-
-        if (detectedString != null) {
-            result.append("\"detected_string\": \"").append(escapeJson(detectedString)).append("\",");
-            result.append("\"suggested_type\": \"char[").append(stringLength).append("]\",");
-            result.append("\"string_length\": ").append(stringLength);
-        } else {
-            result.append("\"detected_string\": null,");
-            result.append("\"suggested_type\": null,");
-            result.append("\"string_length\": 0");
-        }
-
-        result.append("}");
-
-        return result.toString();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("address", addressStr);
+        result.put("bytes_read", bytesRead);
+        result.put("hex_dump", hexDump.toString().trim());
+        result.put("ascii_repr", asciiRepr.toString().trim());
+        result.put("printable_count", printableCount);
+        result.put("printable_ratio", Double.parseDouble(String.format("%.2f", printableRatio)));
+        result.put("null_terminator_at", nullTerminatorIndex);
+        result.put("max_consecutive_printable", maxConsecutivePrintable);
+        result.put("is_likely_string", likelyString);
+        result.put("detected_string", detectedString);
+        result.put("suggested_type", detectedString != null ? "char[" + stringLength + "]" : null);
+        result.put("string_length", detectedString != null ? stringLength : 0);
+        return result;
     }
 
     // ============================================================================
@@ -5021,23 +4935,16 @@ public class EndpointRouter {
     private Object detectCryptoConstants() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "Error: No program loaded";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
-        result.append("[\n");
-
-        // This is a placeholder implementation
-        // Full implementation would search for known crypto constants like:
-        // - AES S-boxes (0x63, 0x7c, 0x77, 0x7b, 0xf2, ...)
-        // - SHA constants (0x67452301, 0xefcdab89, ...)
-        // - DES constants, RC4 initialization vectors, etc.
-
-        result.append("  {\"algorithm\": \"Crypto Detection\", \"status\": \"Not yet implemented\", ");
-        result.append("\"note\": \"This endpoint requires advanced pattern matching against known crypto constants\"}\n");
-        result.append("]");
-
-        return result.toString();
+        // Placeholder implementation - full implementation would search for known crypto constants
+        // like AES S-boxes, SHA constants, DES constants, RC4 initialization vectors, etc.
+        Map<String, Object> placeholder = new LinkedHashMap<>();
+        placeholder.put("algorithm", "Crypto Detection");
+        placeholder.put("status", "Not yet implemented");
+        placeholder.put("note", "This endpoint requires advanced pattern matching against known crypto constants");
+        return List.of(placeholder);
     }
 
     /**
@@ -5047,11 +4954,11 @@ public class EndpointRouter {
     private Object findSimilarFunctions(String targetFunction, double threshold) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "Error: No program loaded";
+            return errorJson("No program loaded");
         }
 
         if (targetFunction == null || targetFunction.trim().isEmpty()) {
-            return "Error: Target function name is required";
+            return errorJson("Target function name is required");
         }
 
         FunctionManager functionManager = program.getFunctionManager();
@@ -5066,23 +4973,23 @@ public class EndpointRouter {
         }
         
         if (targetFunc == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(targetFunction) + "\"}";
+            return errorJson("Function not found: " + targetFunction);
         }
-        
+
         // Calculate metrics for target function
         BasicBlockModel blockModel = new BasicBlockModel(program);
         FunctionMetrics targetMetrics = calculateFunctionMetrics(targetFunc, blockModel, program);
-        
+
         // Find similar functions
         List<Map<String, Object>> similarFunctions = new ArrayList<>();
-        
+
         for (Function func : functionManager.getFunctions(true)) {
             if (func.getName().equals(targetFunction)) continue;
             if (func.isThunk()) continue;
-            
+
             FunctionMetrics funcMetrics = calculateFunctionMetrics(func, blockModel, program);
             double similarity = calculateSimilarity(targetMetrics, funcMetrics);
-            
+
             if (similarity >= threshold) {
                 Map<String, Object> match = new LinkedHashMap<>();
                 match.put("name", func.getName());
@@ -5095,48 +5002,28 @@ public class EndpointRouter {
                 similarFunctions.add(match);
             }
         }
-        
+
         // Sort by similarity descending
         similarFunctions.sort((a, b) -> Double.compare((Double)b.get("similarity"), (Double)a.get("similarity")));
-        
+
         // Limit results
         if (similarFunctions.size() > 50) {
             similarFunctions = similarFunctions.subList(0, 50);
         }
-        
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"target_function\": \"").append(escapeJson(targetFunction)).append("\",\n");
-        result.append("  \"target_metrics\": {\n");
-        result.append("    \"basic_blocks\": ").append(targetMetrics.basicBlockCount).append(",\n");
-        result.append("    \"instructions\": ").append(targetMetrics.instructionCount).append(",\n");
-        result.append("    \"calls\": ").append(targetMetrics.callCount).append(",\n");
-        result.append("    \"complexity\": ").append(targetMetrics.cyclomaticComplexity).append("\n");
-        result.append("  },\n");
-        result.append("  \"threshold\": ").append(threshold).append(",\n");
-        result.append("  \"matches_found\": ").append(similarFunctions.size()).append(",\n");
-        result.append("  \"similar_functions\": [\n");
-        
-        for (int i = 0; i < similarFunctions.size(); i++) {
-            Map<String, Object> match = similarFunctions.get(i);
-            result.append("    {");
-            result.append("\"name\": \"").append(escapeJson((String)match.get("name"))).append("\", ");
-            result.append("\"address\": \"").append(match.get("address")).append("\", ");
-            result.append("\"similarity\": ").append(match.get("similarity")).append(", ");
-            result.append("\"basic_blocks\": ").append(match.get("basic_blocks")).append(", ");
-            result.append("\"instructions\": ").append(match.get("instructions")).append(", ");
-            result.append("\"calls\": ").append(match.get("calls")).append(", ");
-            result.append("\"complexity\": ").append(match.get("complexity"));
-            result.append("}");
-            if (i < similarFunctions.size() - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        Map<String, Object> targetMetricsMap = new LinkedHashMap<>();
+        targetMetricsMap.put("basic_blocks", targetMetrics.basicBlockCount);
+        targetMetricsMap.put("instructions", targetMetrics.instructionCount);
+        targetMetricsMap.put("calls", targetMetrics.callCount);
+        targetMetricsMap.put("complexity", targetMetrics.cyclomaticComplexity);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("target_function", targetFunction);
+        result.put("target_metrics", targetMetricsMap);
+        result.put("threshold", threshold);
+        result.put("matches_found", similarFunctions.size());
+        result.put("similar_functions", similarFunctions);
+        return result;
     }
     
     /**
@@ -5241,16 +5128,16 @@ public class EndpointRouter {
     private Object analyzeControlFlow(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         if (functionName == null || functionName.trim().isEmpty()) {
-            return "{\"error\": \"Function name is required\"}";
+            return errorJson("Function name is required");
         }
 
         FunctionManager functionManager = program.getFunctionManager();
         Function func = null;
-        
+
         // Find the function by name
         for (Function f : functionManager.getFunctions(true)) {
             if (f.getName().equals(functionName)) {
@@ -5258,9 +5145,9 @@ public class EndpointRouter {
                 break;
             }
         }
-        
+
         if (func == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
+            return errorJson("Function not found: " + functionName);
         }
         
         BasicBlockModel blockModel = new BasicBlockModel(program);
@@ -5357,8 +5244,7 @@ public class EndpointRouter {
         // Calculate cyclomatic complexity: M = E - N + 2P
         int cyclomaticComplexity = edgeCount - basicBlockCount + 2;
         if (cyclomaticComplexity < 1) cyclomaticComplexity = 1;
-        
-        // Complexity rating
+
         String complexityRating;
         if (cyclomaticComplexity <= 5) {
             complexityRating = "low";
@@ -5371,48 +5257,34 @@ public class EndpointRouter {
         } else {
             complexityRating = "extreme";
         }
-        
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"function_name\": \"").append(escapeJson(functionName)).append("\",\n");
-        result.append("  \"entry_point\": \"").append(func.getEntryPoint().toString()).append("\",\n");
-        result.append("  \"size_bytes\": ").append(func.getBody().getNumAddresses()).append(",\n");
-        result.append("  \"metrics\": {\n");
-        result.append("    \"cyclomatic_complexity\": ").append(cyclomaticComplexity).append(",\n");
-        result.append("    \"complexity_rating\": \"").append(complexityRating).append("\",\n");
-        result.append("    \"basic_blocks\": ").append(basicBlockCount).append(",\n");
-        result.append("    \"edges\": ").append(edgeCount).append(",\n");
-        result.append("    \"instructions\": ").append(instructionCount).append(",\n");
-        result.append("    \"conditional_branches\": ").append(conditionalBranches).append(",\n");
-        result.append("    \"unconditional_jumps\": ").append(unconditionalJumps).append(",\n");
-        result.append("    \"loops_detected\": ").append(loops).append(",\n");
-        result.append("    \"calls\": ").append(callCount).append(",\n");
-        result.append("    \"returns\": ").append(returnCount).append("\n");
-        result.append("  },\n");
-        result.append("  \"basic_block_details\": [\n");
-        
-        for (int i = 0; i < Math.min(blocks.size(), 100); i++) {
-            Map<String, Object> block = blocks.get(i);
-            result.append("    {");
-            result.append("\"address\": \"").append(block.get("address")).append("\", ");
-            result.append("\"size\": ").append(block.get("size")).append(", ");
-            result.append("\"type\": \"").append(block.get("type")).append("\", ");
-            result.append("\"successors\": ").append(block.get("successors")).append(", ");
-            result.append("\"is_loop_header\": ").append(block.get("is_loop_header"));
-            result.append("}");
-            if (i < Math.min(blocks.size(), 100) - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        if (blocks.size() > 100) {
-            result.append("    {\"note\": \"").append(blocks.size() - 100).append(" additional blocks truncated\"}\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        List<Map<String, Object>> blockDetails = blocks.subList(0, Math.min(blocks.size(), 100));
+        if (blocks.size() > 100) {
+            Map<String, Object> truncNote = new LinkedHashMap<>();
+            truncNote.put("note", (blocks.size() - 100) + " additional blocks truncated");
+            blockDetails = new ArrayList<>(blockDetails);
+            blockDetails.add(truncNote);
+        }
+
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("cyclomatic_complexity", cyclomaticComplexity);
+        metrics.put("complexity_rating", complexityRating);
+        metrics.put("basic_blocks", basicBlockCount);
+        metrics.put("edges", edgeCount);
+        metrics.put("instructions", instructionCount);
+        metrics.put("conditional_branches", conditionalBranches);
+        metrics.put("unconditional_jumps", unconditionalJumps);
+        metrics.put("loops_detected", loops);
+        metrics.put("calls", callCount);
+        metrics.put("returns", returnCount);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("function_name", functionName);
+        result.put("entry_point", func.getEntryPoint().toString());
+        result.put("size_bytes", func.getBody().getNumAddresses());
+        result.put("metrics", metrics);
+        result.put("basic_block_details", blockDetails);
+        return result;
     }
 
     /**
@@ -5422,7 +5294,7 @@ public class EndpointRouter {
     private Object findAntiAnalysisTechniques() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         // Define patterns to search for
@@ -5535,13 +5407,7 @@ public class EndpointRouter {
             }
         }
         
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"total_findings\": ").append(findings.size()).append(",\n");
-        result.append("  \"summary\": {\n");
-        
-        // Count by category
+        // Count by category and severity
         Map<String, Integer> categoryCounts = new LinkedHashMap<>();
         Map<String, Integer> severityCounts = new LinkedHashMap<>();
         for (Map<String, Object> finding : findings) {
@@ -5550,52 +5416,24 @@ public class EndpointRouter {
             categoryCounts.put(cat, categoryCounts.getOrDefault(cat, 0) + 1);
             severityCounts.put(sev, severityCounts.getOrDefault(sev, 0) + 1);
         }
-        
-        result.append("    \"by_category\": {");
-        int catIdx = 0;
-        for (Map.Entry<String, Integer> entry : categoryCounts.entrySet()) {
-            if (catIdx++ > 0) result.append(", ");
-            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-        }
-        result.append("},\n");
-        
-        result.append("    \"by_severity\": {");
-        int sevIdx = 0;
-        for (Map.Entry<String, Integer> entry : severityCounts.entrySet()) {
-            if (sevIdx++ > 0) result.append(", ");
-            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-        }
-        result.append("}\n");
-        result.append("  },\n");
-        
-        result.append("  \"findings\": [\n");
-        for (int i = 0; i < Math.min(findings.size(), 100); i++) {
-            Map<String, Object> finding = findings.get(i);
-            result.append("    {");
-            result.append("\"category\": \"").append(finding.get("category")).append("\", ");
-            result.append("\"technique\": \"").append(escapeJson((String)finding.get("technique"))).append("\", ");
-            result.append("\"address\": \"").append(finding.get("address")).append("\", ");
-            result.append("\"function\": \"").append(escapeJson((String)finding.get("function"))).append("\", ");
-            result.append("\"severity\": \"").append(finding.get("severity")).append("\"");
-            if (finding.containsKey("instruction")) {
-                result.append(", \"instruction\": \"").append(escapeJson((String)finding.get("instruction"))).append("\"");
-            }
-            if (finding.containsKey("description")) {
-                result.append(", \"description\": \"").append(escapeJson((String)finding.get("description"))).append("\"");
-            }
-            result.append("}");
-            if (i < Math.min(findings.size(), 100) - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        if (findings.size() > 100) {
-            result.append("    {\"note\": \"").append(findings.size() - 100).append(" additional findings truncated\"}\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        List<Map<String, Object>> findingsList = findings.subList(0, Math.min(findings.size(), 100));
+        if (findings.size() > 100) {
+            Map<String, Object> truncNote = new LinkedHashMap<>();
+            truncNote.put("note", (findings.size() - 100) + " additional findings truncated");
+            findingsList = new ArrayList<>(findingsList);
+            findingsList.add(truncNote);
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("by_category", categoryCounts);
+        summary.put("by_severity", severityCounts);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total_findings", findings.size());
+        result.put("summary", summary);
+        result.put("findings", findingsList);
+        return result;
     }
     
     /**
@@ -5619,16 +5457,15 @@ public class EndpointRouter {
     private Object batchDecompileFunctions(String functionsParam) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "Error: No program loaded";
+            return errorJson("No program loaded");
         }
 
         if (functionsParam == null || functionsParam.trim().isEmpty()) {
-            return "Error: Functions parameter is required";
+            return errorJson("Functions parameter is required");
         }
 
         String[] functionNames = functionsParam.split(",");
-        StringBuilder result = new StringBuilder();
-        result.append("{");
+        Map<String, String> result = new LinkedHashMap<>();
 
         FunctionManager funcManager = program.getFunctionManager();
         final int MAX_FUNCTIONS = 20; // Limit to prevent overload
@@ -5636,9 +5473,6 @@ public class EndpointRouter {
         for (int i = 0; i < functionNames.length && i < MAX_FUNCTIONS; i++) {
             String funcName = functionNames[i].trim();
             if (funcName.isEmpty()) continue;
-
-            if (i > 0) result.append(", ");
-            result.append("\"").append(escapeJson(funcName)).append("\": ");
 
             // Find function by name
             Function function = null;
@@ -5654,7 +5488,7 @@ public class EndpointRouter {
             }
 
             if (function == null) {
-                result.append("\"Error: Function not found\"");
+                result.put(funcName, "Error: Function not found");
                 continue;
             }
 
@@ -5665,20 +5499,18 @@ public class EndpointRouter {
                 DecompileResults decompResults = decompiler.decompileFunction(function, 30, null);
 
                 if (decompResults != null && decompResults.decompileCompleted()) {
-                    String decompCode = decompResults.getDecompiledFunction().getC();
-                    result.append("\"").append(escapeJson(decompCode)).append("\"");
+                    result.put(funcName, decompResults.getDecompiledFunction().getC());
                 } else {
-                    result.append("\"Error: Decompilation failed\"");
+                    result.put(funcName, "Error: Decompilation failed");
                 }
 
                 decompiler.dispose();
             } catch (Exception e) {
-                result.append("\"Error: ").append(escapeJson(e.getMessage())).append("\"");
+                result.put(funcName, "Error: " + e.getMessage());
             }
         }
 
-        result.append("}");
-        return result.toString();
+        return result;
     }
 
     /**
@@ -5687,25 +5519,20 @@ public class EndpointRouter {
     private Object findDeadCode(String functionName) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "Error: No program loaded";
+            return errorJson("No program loaded");
         }
 
         if (functionName == null || functionName.trim().isEmpty()) {
-            return "Error: Function name is required";
+            return errorJson("Function name is required");
         }
 
-        final StringBuilder result = new StringBuilder();
-        result.append("[\n");
-
-        // Placeholder implementation
-        // Full implementation would analyze control flow to find unreachable blocks
-
-        result.append("  {\"function_name\": \"").append(escapeJson(functionName)).append("\", ");
-        result.append("\"status\": \"Not yet implemented\", ");
-        result.append("\"note\": \"This endpoint requires reachability analysis via control flow graph\"}\n");
-        result.append("]");
-
-        return result.toString();
+        // Placeholder implementation - full implementation would analyze control flow
+        // to find unreachable blocks via reachability analysis on the control flow graph
+        Map<String, Object> placeholder = new LinkedHashMap<>();
+        placeholder.put("function_name", functionName);
+        placeholder.put("status", "Not yet implemented");
+        placeholder.put("note", "This endpoint requires reachability analysis via control flow graph");
+        return List.of(placeholder);
     }
 
     /**
@@ -5714,25 +5541,16 @@ public class EndpointRouter {
     private Object autoDecryptStrings() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "Error: No program loaded";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
-        result.append("[\n");
-
-        // Placeholder implementation
-        // Full implementation would detect and decrypt:
-        // - XOR-encoded strings
-        // - Base64-encoded strings
-        // - ROT13 encoding
-        // - Stack strings
-        // - RC4/AES encrypted strings
-
-        result.append("  {\"method\": \"String Decryption\", \"status\": \"Not yet implemented\", ");
-        result.append("\"note\": \"This endpoint requires pattern detection and decryption of various encoding schemes\"}\n");
-        result.append("]");
-
-        return result.toString();
+        // Placeholder implementation - full implementation would detect and decrypt
+        // XOR-encoded strings, Base64-encoded strings, ROT13, stack strings, RC4/AES encrypted strings
+        Map<String, Object> placeholder = new LinkedHashMap<>();
+        placeholder.put("method", "String Decryption");
+        placeholder.put("status", "Not yet implemented");
+        placeholder.put("note", "This endpoint requires pattern detection and decryption of various encoding schemes");
+        return List.of(placeholder);
     }
 
     /**
@@ -5742,7 +5560,7 @@ public class EndpointRouter {
     private Object analyzeAPICallChains() throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         // Define threat patterns as API call sequences
@@ -5893,55 +5711,21 @@ public class EndpointRouter {
             if (sevCompare != 0) return sevCompare;
             return Double.compare((Double)b.get("confidence"), (Double)a.get("confidence"));
         });
-        
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"total_patterns_detected\": ").append(detectedPatterns.size()).append(",\n");
-        result.append("  \"severity_summary\": {\n");
-        
+
         // Count by severity
         Map<String, Integer> sevCounts = new LinkedHashMap<>();
         for (Map<String, Object> det : detectedPatterns) {
             String sev = (String) det.get("severity");
             sevCounts.put(sev, sevCounts.getOrDefault(sev, 0) + 1);
         }
-        
-        int sevIdx = 0;
-        for (Map.Entry<String, Integer> entry : sevCounts.entrySet()) {
-            if (sevIdx++ > 0) result.append(",\n");
-            result.append("    \"").append(entry.getKey()).append("\": ").append(entry.getValue());
-        }
-        result.append("\n  },\n");
-        
-        result.append("  \"detected_patterns\": [\n");
-        for (int i = 0; i < Math.min(detectedPatterns.size(), 50); i++) {
-            Map<String, Object> det = detectedPatterns.get(i);
-            result.append("    {\n");
-            result.append("      \"pattern_id\": \"").append(det.get("pattern_id")).append("\",\n");
-            result.append("      \"pattern_name\": \"").append(escapeJson((String)det.get("pattern_name"))).append("\",\n");
-            result.append("      \"severity\": \"").append(det.get("severity")).append("\",\n");
-            result.append("      \"function\": \"").append(escapeJson((String)det.get("function"))).append("\",\n");
-            result.append("      \"address\": \"").append(det.get("address")).append("\",\n");
-            result.append("      \"confidence\": ").append(det.get("confidence")).append(",\n");
-            result.append("      \"matched_apis\": [");
-            @SuppressWarnings("unchecked")
-            List<String> matchedAPIs = (List<String>) det.get("matched_apis");
-            for (int j = 0; j < matchedAPIs.size(); j++) {
-                if (j > 0) result.append(", ");
-                result.append("\"").append(escapeJson(matchedAPIs.get(j))).append("\"");
-            }
-            result.append("],\n");
-            result.append("      \"description\": \"").append(escapeJson((String)det.get("description"))).append("\"\n");
-            result.append("    }");
-            if (i < Math.min(detectedPatterns.size(), 50) - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        List<Map<String, Object>> patternList = detectedPatterns.subList(0, Math.min(detectedPatterns.size(), 50));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total_patterns_detected", detectedPatterns.size());
+        result.put("severity_summary", sevCounts);
+        result.put("detected_patterns", patternList);
+        return result;
     }
     
     /**
@@ -6039,48 +5823,25 @@ public class EndpointRouter {
         // Sort by confidence descending
         iocs.sort((a, b) -> Double.compare((Double)b.get("confidence"), (Double)a.get("confidence")));
         
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"total_iocs\": ").append(iocs.size()).append(",\n");
-        
         // Summary by type
         Map<String, Integer> typeCounts = new LinkedHashMap<>();
         for (Map<String, Object> ioc : iocs) {
             String type = (String) ioc.get("type");
             typeCounts.put(type, typeCounts.getOrDefault(type, 0) + 1);
         }
-        
-        result.append("  \"by_type\": {");
-        int typeIdx = 0;
-        for (Map.Entry<String, Integer> entry : typeCounts.entrySet()) {
-            if (typeIdx++ > 0) result.append(", ");
-            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-        }
-        result.append("},\n");
-        
-        result.append("  \"iocs\": [\n");
-        for (int i = 0; i < Math.min(iocs.size(), 100); i++) {
-            Map<String, Object> ioc = iocs.get(i);
-            result.append("    {");
-            result.append("\"type\": \"").append(ioc.get("type")).append("\", ");
-            result.append("\"value\": \"").append(escapeJson((String)ioc.get("value"))).append("\", ");
-            result.append("\"address\": \"").append(ioc.get("address")).append("\", ");
-            result.append("\"function_context\": \"").append(escapeJson((String)ioc.get("function_context"))).append("\", ");
-            result.append("\"confidence\": ").append(ioc.get("confidence"));
-            result.append("}");
-            if (i < Math.min(iocs.size(), 100) - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        if (iocs.size() > 100) {
-            result.append("    {\"note\": \"").append(iocs.size() - 100).append(" additional IOCs truncated\"}\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        List<Object> iocList = new ArrayList<>(iocs.subList(0, Math.min(iocs.size(), 100)));
+        if (iocs.size() > 100) {
+            Map<String, Object> note = new LinkedHashMap<>();
+            note.put("note", (iocs.size() - 100) + " additional IOCs truncated");
+            iocList.add(note);
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("total_iocs", iocs.size());
+        response.put("by_type", typeCounts);
+        response.put("iocs", iocList);
+        return response;
     }
     
     /**
@@ -6282,56 +6043,25 @@ public class EndpointRouter {
             return (Integer)b.get("indicator_count") - (Integer)a.get("indicator_count");
         });
         
-        // Build JSON response
-        StringBuilder result = new StringBuilder();
-        result.append("{\n");
-        result.append("  \"total_behaviors_detected\": ").append(behaviors.size()).append(",\n");
-        
         // Summary by behavior type
         Map<String, Integer> behaviorCounts = new LinkedHashMap<>();
         for (Map<String, Object> behavior : behaviors) {
             String type = (String) behavior.get("behavior_type");
             behaviorCounts.put(type, behaviorCounts.getOrDefault(type, 0) + 1);
         }
-        
-        result.append("  \"by_behavior_type\": {");
-        int typeIdx = 0;
-        for (Map.Entry<String, Integer> entry : behaviorCounts.entrySet()) {
-            if (typeIdx++ > 0) result.append(", ");
-            result.append("\"").append(entry.getKey()).append("\": ").append(entry.getValue());
-        }
-        result.append("},\n");
-        
-        result.append("  \"behaviors\": [\n");
-        for (int i = 0; i < Math.min(behaviors.size(), 100); i++) {
-            Map<String, Object> behavior = behaviors.get(i);
-            result.append("    {\n");
-            result.append("      \"behavior_type\": \"").append(behavior.get("behavior_type")).append("\",\n");
-            result.append("      \"severity\": \"").append(behavior.get("severity")).append("\",\n");
-            result.append("      \"function\": \"").append(escapeJson((String)behavior.get("function"))).append("\",\n");
-            result.append("      \"address\": \"").append(behavior.get("address")).append("\",\n");
-            result.append("      \"indicator_count\": ").append(behavior.get("indicator_count")).append(",\n");
-            result.append("      \"indicators\": [");
-            @SuppressWarnings("unchecked")
-            List<String> indicators = (List<String>) behavior.get("indicators");
-            for (int j = 0; j < indicators.size(); j++) {
-                if (j > 0) result.append(", ");
-                result.append("\"").append(escapeJson(indicators.get(j))).append("\"");
-            }
-            result.append("]\n");
-            result.append("    }");
-            if (i < Math.min(behaviors.size(), 100) - 1) result.append(",");
-            result.append("\n");
-        }
-        
-        if (behaviors.size() > 100) {
-            result.append("    {\"note\": \"").append(behaviors.size() - 100).append(" additional behaviors truncated\"}\n");
-        }
-        
-        result.append("  ]\n");
-        result.append("}");
 
-        return result.toString();
+        List<Object> behaviorList = new ArrayList<>(behaviors.subList(0, Math.min(behaviors.size(), 100)));
+        if (behaviors.size() > 100) {
+            Map<String, Object> note = new LinkedHashMap<>();
+            note.put("note", (behaviors.size() - 100) + " additional behaviors truncated");
+            behaviorList.add(note);
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("total_behaviors_detected", behaviors.size());
+        response.put("by_behavior_type", behaviorCounts);
+        response.put("behaviors", behaviorList);
+        return response;
     }
     
     /**
@@ -6456,65 +6186,24 @@ public class EndpointRouter {
      * v1.5.0: Get valid Ghidra data type strings
      */
     private Object getValidDataTypes(String category) {
-        Program program = getCurrentProgram();
-        if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
-        }
-
-        final StringBuilder result = new StringBuilder();
-        final AtomicReference<String> errorMsg = new AtomicReference<>(null);
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                try {
-                    result.append("{");
-                    result.append("\"builtin_types\": [");
-
-                    // Common builtin types
-                    String[] builtinTypes = {
-                        "void", "byte", "char", "short", "int", "long", "longlong",
-                        "float", "double", "pointer", "bool",
-                        "undefined", "undefined1", "undefined2", "undefined4", "undefined8",
-                        "uchar", "ushort", "uint", "ulong", "ulonglong",
-                        "sbyte", "sword", "sdword", "sqword",
-                        "word", "dword", "qword"
-                    };
-
-                    for (int i = 0; i < builtinTypes.length; i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(builtinTypes[i]).append("\"");
-                    }
-
-                    result.append("], ");
-                    result.append("\"windows_types\": [");
-
-                    String[] windowsTypes = {
-                        "BOOL", "BOOLEAN", "BYTE", "CHAR", "DWORD", "QWORD", "WORD",
-                        "HANDLE", "HMODULE", "HWND", "LPVOID", "PVOID",
-                        "LPCSTR", "LPSTR", "LPCWSTR", "LPWSTR",
-                        "SIZE_T", "ULONG", "USHORT"
-                    };
-
-                    for (int i = 0; i < windowsTypes.length; i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(windowsTypes[i]).append("\"");
-                    }
-
-                    result.append("]");
-                    result.append("}");
-                } catch (Exception e) {
-                    errorMsg.set(e.getMessage());
-                }
-            });
-
-            if (errorMsg.get() != null) {
-                return "{\"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
-            }
-        } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
-        }
-
-        return result.toString();
+        List<String> builtinTypes = Arrays.asList(
+            "void", "byte", "char", "short", "int", "long", "longlong",
+            "float", "double", "pointer", "bool",
+            "undefined", "undefined1", "undefined2", "undefined4", "undefined8",
+            "uchar", "ushort", "uint", "ulong", "ulonglong",
+            "sbyte", "sword", "sdword", "sqword",
+            "word", "dword", "qword"
+        );
+        List<String> windowsTypes = Arrays.asList(
+            "BOOL", "BOOLEAN", "BYTE", "CHAR", "DWORD", "QWORD", "WORD",
+            "HANDLE", "HMODULE", "HWND", "LPVOID", "PVOID",
+            "LPCSTR", "LPSTR", "LPCWSTR", "LPWSTR",
+            "SIZE_T", "ULONG", "USHORT"
+        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("builtin_types", builtinTypes);
+        response.put("windows_types", windowsTypes);
+        return response;
     }
 
     /**
@@ -6523,10 +6212,10 @@ public class EndpointRouter {
     private Object analyzeFunctionCompleteness(String functionAddress) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
+        final AtomicReference<Map<String, Object>> resultRef = new AtomicReference<>(null);
         final AtomicReference<String> errorMsg = new AtomicReference<>(null);
 
         try {
@@ -6544,29 +6233,13 @@ public class EndpointRouter {
                         return;
                     }
 
-                    result.append("{");
-                    result.append("\"function_name\": \"").append(func.getName()).append("\", ");
-                    result.append("\"has_custom_name\": ").append(!func.getName().startsWith("FUN_")).append(", ");
-                    result.append("\"has_prototype\": ").append(func.getSignature() != null).append(", ");
-                    result.append("\"has_calling_convention\": ").append(func.getCallingConvention() != null).append(", ");
-
                     // Enhanced plate comment validation
                     String plateComment = func.getComment();
                     boolean hasPlateComment = plateComment != null && !plateComment.isEmpty();
-                    result.append("\"has_plate_comment\": ").append(hasPlateComment).append(", ");
-
-                    // Validate plate comment structure and content
                     List<String> plateCommentIssues = new ArrayList<>();
                     if (hasPlateComment) {
                         validatePlateCommentStructure(plateComment, plateCommentIssues);
                     }
-
-                    result.append("\"plate_comment_issues\": [");
-                    for (int i = 0; i < plateCommentIssues.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(plateCommentIssues.get(i))).append("\"");
-                    }
-                    result.append("], ");
 
                     // Check for undefined variables (both names and types)
                     // PRIORITY 1 FIX: Use decompilation-based variable detection to avoid phantom variables
@@ -6641,15 +6314,6 @@ public class EndpointRouter {
                         }
                     }
 
-                    result.append("\"decompilation_available\": ").append(decompilationAvailable).append(", ");
-
-                    result.append("\"undefined_variables\": [");
-                    for (int i = 0; i < undefinedVars.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(undefinedVars.get(i)).append("\"");
-                    }
-                    result.append("], ");
-
                     // Check Hungarian notation compliance
                     // PRIORITY 1 FIX: Use same decompilation-based detection for consistency
                     List<String> hungarianViolations = new ArrayList<>();
@@ -6672,30 +6336,16 @@ public class EndpointRouter {
                         }
                     }
 
-                    result.append("\"hungarian_notation_violations\": [");
-                    for (int i = 0; i < hungarianViolations.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(hungarianViolations.get(i))).append("\"");
-                    }
-                    result.append("], ");
-
                     // Enhanced validation: Check parameter type quality
                     List<String> typeQualityIssues = new ArrayList<>();
                     validateParameterTypeQuality(func, typeQualityIssues);
-
-                    result.append("\"type_quality_issues\": [");
-                    for (int i = 0; i < typeQualityIssues.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(typeQualityIssues.get(i))).append("\"");
-                    }
-                    result.append("], ");
 
                     // NEW: Check for unrenamed DAT_* globals and undocumented Ordinal calls in decompiled code
                     List<String> unrenamedGlobals = new ArrayList<>();
                     List<String> undocumentedOrdinals = new ArrayList<>();
                     int inlineCommentCount = 0;
                     int codeLineCount = 0;
-                    
+
                     if (decompilationAvailable && decompResults != null) {
                         String decompiledCode = decompResults.getDecompiledFunction().getC();
                         if (decompiledCode != null) {
@@ -6750,7 +6400,7 @@ public class EndpointRouter {
                                     inlineCommentCount++;
                                 }
                             }
-                            
+
                             // Find DAT_* references (unrenamed globals)
                             java.util.regex.Pattern datPattern = java.util.regex.Pattern.compile("DAT_[0-9a-fA-F]+");
                             java.util.regex.Matcher datMatcher = datPattern.matcher(decompiledCode);
@@ -6759,7 +6409,7 @@ public class EndpointRouter {
                                 foundDats.add(datMatcher.group());
                             }
                             unrenamedGlobals.addAll(foundDats);
-                            
+
                             // Find Ordinal_XXXXX calls without nearby comments
                             java.util.regex.Pattern ordinalPattern = java.util.regex.Pattern.compile("Ordinal_\\d+");
                             java.util.regex.Matcher ordinalMatcher = ordinalPattern.matcher(decompiledCode);
@@ -6780,58 +6430,50 @@ public class EndpointRouter {
                             undocumentedOrdinals.addAll(foundOrdinals);
                         }
                     }
-                    
-                    result.append("\"unrenamed_globals\": [");
-                    for (int i = 0; i < unrenamedGlobals.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(unrenamedGlobals.get(i))).append("\"");
-                    }
-                    result.append("], ");
-                    
-                    result.append("\"undocumented_ordinals\": [");
-                    for (int i = 0; i < undocumentedOrdinals.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(undocumentedOrdinals.get(i))).append("\"");
-                    }
-                    result.append("], ");
-                    
-                    result.append("\"inline_comment_count\": ").append(inlineCommentCount).append(", ");
-                    result.append("\"code_line_count\": ").append(codeLineCount).append(", ");
-                    
+
                     // Calculate comment density (comments per 10 lines of code)
                     double commentDensity = codeLineCount > 0 ? (inlineCommentCount * 10.0 / codeLineCount) : 0;
-                    result.append("\"comment_density\": ").append(String.format("%.2f", commentDensity)).append(", ");
 
                     double completenessScore = calculateCompletenessScore(func, undefinedVars.size(), plateCommentIssues.size(), hungarianViolations.size(), typeQualityIssues.size(), unrenamedGlobals.size(), undocumentedOrdinals.size(), commentDensity);
-                    result.append("\"completeness_score\": ").append(completenessScore).append(", ");
 
                     // Generate workflow-aligned recommendations
                     List<String> recommendations = generateWorkflowRecommendations(
-                        func, undefinedVars, plateCommentIssues, hungarianViolations, typeQualityIssues, 
+                        func, undefinedVars, plateCommentIssues, hungarianViolations, typeQualityIssues,
                         unrenamedGlobals, undocumentedOrdinals, commentDensity, completenessScore
                     );
 
-                    result.append("\"recommendations\": [");
-                    for (int i = 0; i < recommendations.size(); i++) {
-                        if (i > 0) result.append(", ");
-                        result.append("\"").append(escapeJson(recommendations.get(i))).append("\"");
-                    }
-                    result.append("]");
-
-                    result.append("}");
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("function_name", func.getName());
+                    r.put("has_custom_name", !func.getName().startsWith("FUN_"));
+                    r.put("has_prototype", func.getSignature() != null);
+                    r.put("has_calling_convention", func.getCallingConvention() != null);
+                    r.put("has_plate_comment", hasPlateComment);
+                    r.put("plate_comment_issues", plateCommentIssues);
+                    r.put("decompilation_available", decompilationAvailable);
+                    r.put("undefined_variables", undefinedVars);
+                    r.put("hungarian_notation_violations", hungarianViolations);
+                    r.put("type_quality_issues", typeQualityIssues);
+                    r.put("unrenamed_globals", unrenamedGlobals);
+                    r.put("undocumented_ordinals", undocumentedOrdinals);
+                    r.put("inline_comment_count", inlineCommentCount);
+                    r.put("code_line_count", codeLineCount);
+                    r.put("comment_density", Double.parseDouble(String.format("%.2f", commentDensity)));
+                    r.put("completeness_score", completenessScore);
+                    r.put("recommendations", recommendations);
+                    resultRef.set(r);
                 } catch (Exception e) {
                     errorMsg.set(e.getMessage());
                 }
             });
 
             if (errorMsg.get() != null) {
-                return "{\"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
+                return errorJson(errorMsg.get());
             }
         } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
 
-        return result.toString();
+        return resultRef.get();
     }
 
     /**
@@ -7225,20 +6867,23 @@ public class EndpointRouter {
      */
     private Object batchSetVariableTypesOptimized(String functionAddress, Map<String, String> variableTypes) {
         if (variableTypes == null || variableTypes.isEmpty()) {
-            return "{\"success\": true, \"method\": \"optimized\", \"variables_typed\": 0, \"variables_failed\": 0}";
+            return new Object() {
+                boolean success = true;
+                String method = "optimized";
+                int variables_typed = 0;
+                int variables_failed = 0;
+            };
         }
 
         final AtomicInteger variablesTyped = new AtomicInteger(0);
         final AtomicInteger variablesFailed = new AtomicInteger(0);
         final List<String> errors = new ArrayList<>();
 
-        // Call setLocalVariableType for each variable with small delay between calls
         for (Map.Entry<String, String> entry : variableTypes.entrySet()) {
             String varName = entry.getKey();
             String newType = entry.getValue();
 
             try {
-                // Call the working setLocalVariableType method
                 String result = (String) setLocalVariableType(functionAddress, varName, newType);
 
                 if (result.toLowerCase().contains("success")) {
@@ -7260,25 +6905,16 @@ public class EndpointRouter {
             }
         }
 
-        // Build response
-        StringBuilder result = new StringBuilder();
-        result.append("{");
-        result.append("\"success\": ").append(variablesFailed.get() == 0 && variablesTyped.get() > 0).append(", ");
-        result.append("\"method\": \"optimized\", ");
-        result.append("\"variables_typed\": ").append(variablesTyped.get()).append(", ");
-        result.append("\"variables_failed\": ").append(variablesFailed.get());
-
-        if (!errors.isEmpty()) {
-            result.append(", \"errors\": [");
-            for (int i = 0; i < errors.size(); i++) {
-                if (i > 0) result.append(", ");
-                result.append("\"").append(errors.get(i).replace("\"", "\\\"")).append("\"");
-            }
-            result.append("]");
-        }
-
-        result.append("}");
-        return result.toString();
+        int typed = variablesTyped.get();
+        int failed = variablesFailed.get();
+        List<String> errorsCopy = new ArrayList<>(errors);
+        return new Object() {
+            boolean success = failed == 0 && typed > 0;
+            String method = "optimized";
+            int variables_typed = typed;
+            int variables_failed = failed;
+            List<String> errors = errorsCopy.isEmpty() ? null : errorsCopy;
+        };
     }
 
 
@@ -7288,45 +6924,39 @@ public class EndpointRouter {
     private Object validateFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
-        final AtomicReference<String> errorMsg = new AtomicReference<>(null);
+        final AtomicReference<String> validationError = new AtomicReference<>(null);
+        final AtomicReference<List<String>> warningsRef = new AtomicReference<>(null);
+        final AtomicReference<String> exceptionMsg = new AtomicReference<>(null);
 
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
-                    result.append("{\"valid\": ");
-
                     Address addr = program.getAddressFactory().getAddress(functionAddress);
                     if (addr == null) {
-                        result.append("false, \"error\": \"Invalid address: ").append(functionAddress).append("\"");
+                        validationError.set("Invalid address: " + functionAddress);
                         return;
                     }
 
                     Function func = program.getFunctionManager().getFunctionAt(addr);
                     if (func == null) {
-                        result.append("false, \"error\": \"No function at address: ").append(functionAddress).append("\"");
+                        validationError.set("No function at address: " + functionAddress);
                         return;
                     }
 
-                    // Basic validation - check if prototype string is parseable
                     if (prototype == null || prototype.trim().isEmpty()) {
-                        result.append("false, \"error\": \"Empty prototype\"");
+                        validationError.set("Empty prototype");
                         return;
                     }
 
-                    // Check for common issues
-                    List<String> warnings = new ArrayList<>();
-
-                    // Check for return type
                     if (!prototype.contains("(")) {
-                        result.append("false, \"error\": \"Invalid prototype format - missing parentheses\"");
+                        validationError.set("Invalid prototype format - missing parentheses");
                         return;
                     }
 
-                    // Validate calling convention if provided
+                    List<String> warnings = new ArrayList<>();
                     if (callingConvention != null && !callingConvention.isEmpty()) {
                         String[] validConventions = {"__cdecl", "__stdcall", "__fastcall", "__thiscall", "default"};
                         boolean validConv = false;
@@ -7340,30 +6970,29 @@ public class EndpointRouter {
                             warnings.add("Unknown calling convention: " + callingConvention);
                         }
                     }
-
-                    result.append("true");
-                    if (!warnings.isEmpty()) {
-                        result.append(", \"warnings\": [");
-                        for (int i = 0; i < warnings.size(); i++) {
-                            if (i > 0) result.append(", ");
-                            result.append("\"").append(warnings.get(i).replace("\"", "\\\"")).append("\"");
-                        }
-                        result.append("]");
-                    }
+                    if (!warnings.isEmpty()) warningsRef.set(warnings);
                 } catch (Exception e) {
-                    errorMsg.set(e.getMessage());
+                    exceptionMsg.set(e.getMessage());
                 }
             });
 
-            if (errorMsg.get() != null) {
-                return "{\"valid\": false, \"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
+            if (exceptionMsg.get() != null) {
+                return new Object() { boolean valid = false; String error = exceptionMsg.get(); };
             }
         } catch (Exception e) {
-            return "{\"valid\": false, \"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return new Object() { boolean valid = false; String error = e.getMessage(); };
         }
 
-        result.append("}");
-        return result.toString();
+        if (validationError.get() != null) {
+            String err = validationError.get();
+            return new Object() { boolean valid = false; String error = err; };
+        }
+
+        List<String> warningList = warningsRef.get();
+        return new Object() {
+            boolean valid = true;
+            List<String> warnings = warningList;
+        };
     }
 
     /**
@@ -7372,37 +7001,40 @@ public class EndpointRouter {
     private Object validateDataTypeExists(String typeName) {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
-        final AtomicReference<String> errorMsg = new AtomicReference<>(null);
+        final AtomicReference<DataType> dtRef = new AtomicReference<>(null);
+        final AtomicReference<String> exceptionMsg = new AtomicReference<>(null);
 
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    DataType dt = dtm.getDataType(typeName);
-
-                    result.append("{\"exists\": ").append(dt != null);
-                    if (dt != null) {
-                        result.append(", \"category\": \"").append(dt.getCategoryPath().getPath()).append("\"");
-                        result.append(", \"size\": ").append(dt.getLength());
-                    }
-                    result.append("}");
+                    dtRef.set(dtm.getDataType(typeName));
                 } catch (Exception e) {
-                    errorMsg.set(e.getMessage());
+                    exceptionMsg.set(e.getMessage());
                 }
             });
 
-            if (errorMsg.get() != null) {
-                return "{\"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
+            if (exceptionMsg.get() != null) {
+                return errorJson(exceptionMsg.get());
             }
         } catch (Exception e) {
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
 
-        return result.toString();
+        DataType dt = dtRef.get();
+        if (dt != null) {
+            String dtCategory = dt.getCategoryPath().getPath();
+            int dtSize = dt.getLength();
+            return new Object() {
+                boolean exists = true;
+                String category = dtCategory;
+                int size = dtSize;
+            };
+        }
+        return new Object() { boolean exists = false; };
     }
 
 
@@ -7433,8 +7065,10 @@ public class EndpointRouter {
             return "{\"error\": \"start_address parameter required\"}";
         }
 
-        final StringBuilder result = new StringBuilder();
         final AtomicReference<String> errorMsg = new AtomicReference<>();
+        final AtomicReference<String> startAddrRef = new AtomicReference<>();
+        final AtomicReference<String> endAddrRef = new AtomicReference<>();
+        final AtomicLong bytesDisassembled = new AtomicLong();
 
         try {
             Msg.debug(this, "disassembleBytes: Starting disassembly at " + startAddress +
@@ -7446,23 +7080,19 @@ public class EndpointRouter {
                 boolean success = false;
 
                 try {
-                    // Parse start address
                     Address start = program.getAddressFactory().getAddress(startAddress);
                     if (start == null) {
                         errorMsg.set("Invalid start address: " + startAddress);
                         return;
                     }
 
-                    // Determine end address
                     Address end;
                     if (endAddress != null && !endAddress.isEmpty()) {
-                        // Use explicit end address (exclusive)
                         end = program.getAddressFactory().getAddress(endAddress);
                         if (end == null) {
                             errorMsg.set("Invalid end address: " + endAddress);
                             return;
                         }
-                        // Make end address inclusive for AddressSet
                         try {
                             end = end.subtract(1);
                         } catch (Exception e) {
@@ -7470,7 +7100,6 @@ public class EndpointRouter {
                             return;
                         }
                     } else if (length != null && length > 0) {
-                        // Use length to calculate end address
                         try {
                             end = start.add(length - 1);
                         } catch (Exception e) {
@@ -7478,25 +7107,15 @@ public class EndpointRouter {
                             return;
                         }
                     } else {
-                        // Auto-detect length (scan until we hit existing code/data)
                         Listing listing = program.getListing();
                         Address current = start;
-                        int maxBytes = 100; // Safety limit
+                        int maxBytes = 100;
                         int count = 0;
 
                         while (count < maxBytes) {
                             CodeUnit cu = listing.getCodeUnitAt(current);
-
-                            // Stop if we hit an existing instruction
-                            if (cu instanceof Instruction) {
-                                break;
-                            }
-
-                            // Stop if we hit defined data
-                            if (cu instanceof Data && ((Data) cu).isDefined()) {
-                                break;
-                            }
-
+                            if (cu instanceof Instruction) break;
+                            if (cu instanceof Data && ((Data) cu).isDefined()) break;
                             count++;
                             try {
                                 current = current.add(1);
@@ -7510,7 +7129,6 @@ public class EndpointRouter {
                             return;
                         }
 
-                        // end is now one past the last undefined byte
                         try {
                             end = current.subtract(1);
                         } catch (Exception e) {
@@ -7518,28 +7136,19 @@ public class EndpointRouter {
                         }
                     }
 
-                    // Create address set
                     AddressSet addressSet = new AddressSet(start, end);
                     long numBytes = addressSet.getNumAddresses();
 
-                    // Execute disassembly
                     ghidra.app.cmd.disassemble.DisassembleCommand cmd =
                         new ghidra.app.cmd.disassemble.DisassembleCommand(addressSet, null, restrictToExecuteMemory);
-
-                    // Prevent auto-analysis cascade
                     cmd.setSeedContext(null);
                     cmd.setInitialContext(null);
 
                     if (cmd.applyTo(program, ghidra.util.task.TaskMonitor.DUMMY)) {
-                        // Success - build result
                         Msg.debug(this, "disassembleBytes: Successfully disassembled " + numBytes + " byte(s) from " + start + " to " + end);
-                        result.append("{");
-                        result.append("\"success\": true, ");
-                        result.append("\"start_address\": \"").append(start).append("\", ");
-                        result.append("\"end_address\": \"").append(end).append("\", ");
-                        result.append("\"bytes_disassembled\": ").append(numBytes).append(", ");
-                        result.append("\"message\": \"Successfully disassembled ").append(numBytes).append(" byte(s)\"");
-                        result.append("}");
+                        startAddrRef.set(start.toString());
+                        endAddrRef.set(end.toString());
+                        bytesDisassembled.set(numBytes);
                         success = true;
                     } else {
                         errorMsg.set("Disassembly failed: " + cmd.getStatusMsg());
@@ -7559,17 +7168,25 @@ public class EndpointRouter {
 
             if (errorMsg.get() != null) {
                 Msg.error(this, "disassembleBytes: Returning error response - " + errorMsg.get());
-                return "{\"error\": \"" + errorMsg.get().replace("\"", "\\\"") + "\"}";
+                return errorJson(errorMsg.get());
             }
         } catch (Throwable e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             Msg.error(this, "disassembleBytes: Exception in outer try block", e);
-            return "{\"error\": \"" + msg.replace("\"", "\\\"") + "\"}";
+            return errorJson(msg);
         }
 
-        String response = result.toString();
-        Msg.debug(this, "disassembleBytes: Returning success response, length=" + response.length());
-        return response;
+        String startStr = startAddrRef.get();
+        String endStr = endAddrRef.get();
+        long numBytes = bytesDisassembled.get();
+        Msg.debug(this, "disassembleBytes: Returning success response");
+        return new Object() {
+            boolean success = true;
+            String start_address = startStr;
+            String end_address = endStr;
+            long bytes_disassembled = numBytes;
+            String message = "Successfully disassembled " + numBytes + " byte(s)";
+        };
     }
 
 
@@ -7637,28 +7254,27 @@ public class EndpointRouter {
             for (String dir : searchDirs) {
                 if (dir != null) searched.append(dir).append(", ");
             }
-            return "{\"success\": false, \"error\": \"Script '" + escapeJsonString(filename) +
-                   "' not found. Searched: " + escapeJsonString(searched.toString()) + "\"}";
+            String searchedStr = searched.toString();
+            return new Object() {
+                boolean success = false;
+                String error = "Script '" + filename + "' not found. Searched: " + searchedStr;
+            };
         }
 
-        // Execute the script via the existing execution method
         long startTime = System.currentTimeMillis();
         String output = (String) runGhidraScript(scriptFile.getAbsolutePath(), scriptArgs);
         double executionTime = (System.currentTimeMillis() - startTime) / 1000.0;
 
         boolean succeeded = output.contains("SCRIPT COMPLETED SUCCESSFULLY");
-
-        // Build JSON response
-        StringBuilder response = new StringBuilder();
-        response.append("{");
-        response.append("\"success\": ").append(succeeded).append(", ");
-        response.append("\"script_name\": \"").append(escapeJsonString(scriptName)).append("\", ");
-        response.append("\"script_path\": \"").append(escapeJsonString(scriptFile.getAbsolutePath())).append("\", ");
-        response.append("\"execution_time_seconds\": ").append(String.format("%.2f", executionTime)).append(", ");
-        response.append("\"console_output\": \"").append(escapeJsonString(output)).append("\"");
-        response.append("}");
-
-        return response.toString();
+        String scriptPath = scriptFile.getAbsolutePath();
+        String execTimeStr = String.format("%.2f", executionTime);
+        return new Object() {
+            boolean success = succeeded;
+            String script_name = scriptName;
+            String script_path = scriptPath;
+            String execution_time_seconds = execTimeStr;
+            String console_output = output;
+        };
 
     }
 
@@ -7673,13 +7289,13 @@ public class EndpointRouter {
     private Object setBookmark(String addressStr, String category, String comment) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"success\": false, \"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
         if (addressStr == null || addressStr.isEmpty()) {
-            return "{\"success\": false, \"error\": \"Address is required\"}";
+            return new Object() { boolean success = false; String error = "Address is required"; };
         }
         if (category == null || category.isEmpty()) {
-            category = "Note";  // Default category
+            category = "Note";
         }
         if (comment == null) {
             comment = "";
@@ -7687,29 +7303,29 @@ public class EndpointRouter {
 
         Address addr = program.getAddressFactory().getAddress(addressStr);
         if (addr == null) {
-            return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+            return new Object() { boolean success = false; String error = "Invalid address: " + addressStr; };
         }
 
         BookmarkManager bookmarkManager = program.getBookmarkManager();
         final String finalCategory = category;
         final String finalComment = comment;
+        final String addrStr = addr.toString();
 
         int transactionId = program.startTransaction("Set bookmark at " + addressStr);
         try {
-            // Check if bookmark already exists at this address with this category
             Bookmark existing = bookmarkManager.getBookmark(addr, BookmarkType.NOTE, finalCategory);
             if (existing != null) {
-                // Remove existing to update
                 bookmarkManager.removeBookmark(existing);
             }
-
-            // Create new bookmark
             bookmarkManager.setBookmark(addr, BookmarkType.NOTE, finalCategory, finalComment);
             program.endTransaction(transactionId, true);
 
-            return "{\"success\": true, \"address\": \"" + escapeJsonString(addr.toString()) +
-                   "\", \"category\": \"" + escapeJsonString(finalCategory) +
-                   "\", \"comment\": \"" + escapeJsonString(finalComment) + "\"}";
+            return new Object() {
+                boolean success = true;
+                String address = addrStr;
+                String category = finalCategory;
+                String comment = finalComment;
+            };
 
         } catch (Exception e) {
             program.endTransaction(transactionId, false);
@@ -7724,23 +7340,22 @@ public class EndpointRouter {
     private Object listBookmarks(String category, String addressStr) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"success\": false, \"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
 
         BookmarkManager bookmarkManager = program.getBookmarkManager();
-        List<Map<String, String>> bookmarks = new ArrayList<>();
+        List<Map<String, Object>> bookmarks = new ArrayList<>();
 
-        // If specific address provided, get bookmarks at that address
         if (addressStr != null && !addressStr.isEmpty()) {
             Address addr = program.getAddressFactory().getAddress(addressStr);
             if (addr == null) {
-                return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+                return new Object() { boolean success = false; String error = "Invalid address: " + addressStr; };
             }
 
             Bookmark[] bms = bookmarkManager.getBookmarks(addr);
             for (Bookmark bm : bms) {
                 if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
-                    Map<String, String> bmMap = new HashMap<>();
+                    Map<String, Object> bmMap = new LinkedHashMap<>();
                     bmMap.put("address", bm.getAddress().toString());
                     bmMap.put("category", bm.getCategory());
                     bmMap.put("comment", bm.getComment());
@@ -7749,14 +7364,13 @@ public class EndpointRouter {
                 }
             }
         } else {
-            // Iterate all bookmarks
             BookmarkType[] types = bookmarkManager.getBookmarkTypes();
             for (BookmarkType type : types) {
                 Iterator<Bookmark> iter = bookmarkManager.getBookmarksIterator(type.getTypeString());
                 while (iter.hasNext()) {
                     Bookmark bm = iter.next();
                     if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
-                        Map<String, String> bmMap = new HashMap<>();
+                        Map<String, Object> bmMap = new LinkedHashMap<>();
                         bmMap.put("address", bm.getAddress().toString());
                         bmMap.put("category", bm.getCategory());
                         bmMap.put("comment", bm.getComment());
@@ -7767,22 +7381,13 @@ public class EndpointRouter {
             }
         }
 
-        // Build JSON response
-        StringBuilder response = new StringBuilder();
-        response.append("{\"success\": true, \"bookmarks\": [");
-        for (int i = 0; i < bookmarks.size(); i++) {
-            if (i > 0) response.append(", ");
-            Map<String, String> bm = bookmarks.get(i);
-            response.append("{");
-            response.append("\"address\": \"").append(escapeJsonString(bm.get("address"))).append("\", ");
-            response.append("\"category\": \"").append(escapeJsonString(bm.get("category"))).append("\", ");
-            response.append("\"comment\": \"").append(escapeJsonString(bm.get("comment"))).append("\", ");
-            response.append("\"type\": \"").append(escapeJsonString(bm.get("type"))).append("\"");
-            response.append("}");
-        }
-        response.append("], \"count\": ").append(bookmarks.size()).append("}");
-
-        return response.toString();
+        List<Map<String, Object>> bmList = bookmarks;
+        int bmCount = bookmarks.size();
+        return new Object() {
+            boolean success = true;
+            List<Map<String, Object>> bookmarks = bmList;
+            int count = bmCount;
+        };
 
     }
 
@@ -7792,15 +7397,15 @@ public class EndpointRouter {
     private Object deleteBookmark(String addressStr, String category) throws Exception {
         Program program = getCurrentProgram();
         if (program == null) {
-            return "{\"success\": false, \"error\": \"No program loaded\"}";
+            return errorJson("No program loaded");
         }
         if (addressStr == null || addressStr.isEmpty()) {
-            return "{\"success\": false, \"error\": \"Address is required\"}";
+            return new Object() { boolean success = false; String error = "Address is required"; };
         }
 
         Address addr = program.getAddressFactory().getAddress(addressStr);
         if (addr == null) {
-            return "{\"success\": false, \"error\": \"Invalid address: " + escapeJsonString(addressStr) + "\"}";
+            return new Object() { boolean success = false; String error = "Invalid address: " + addressStr; };
         }
 
         BookmarkManager bookmarkManager = program.getBookmarkManager();
@@ -7808,9 +7413,9 @@ public class EndpointRouter {
         int transactionId = program.startTransaction("Delete bookmark at " + addressStr);
         try {
             int deleted = 0;
-            Bookmark[] bookmarks = bookmarkManager.getBookmarks(addr);
+            Bookmark[] bmarks = bookmarkManager.getBookmarks(addr);
 
-            for (Bookmark bm : bookmarks) {
+            for (Bookmark bm : bmarks) {
                 if (category == null || category.isEmpty() || bm.getCategory().equals(category)) {
                     bookmarkManager.removeBookmark(bm);
                     deleted++;
@@ -7818,7 +7423,13 @@ public class EndpointRouter {
             }
 
             program.endTransaction(transactionId, true);
-            return "{\"success\": true, \"deleted\": " + deleted + ", \"address\": \"" + escapeJsonString(addr.toString()) + "\"}";
+            String addrStr = addr.toString();
+            int deletedCount = deleted;
+            return new Object() {
+                boolean success = true;
+                int deleted = deletedCount;
+                String address = addrStr;
+            };
 
         } catch (Exception e) {
             program.endTransaction(transactionId, false);
@@ -7836,7 +7447,7 @@ public class EndpointRouter {
     private Object listExternalLocations(int offset, int limit, String programName) {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return (String) programResult[1];
+        if (program == null) return programResult[1];
 
         ExternalManager extMgr = program.getExternalManager();
         List<String> lines = new ArrayList<>();
@@ -7856,7 +7467,7 @@ public class EndpointRouter {
             }
         } catch (Exception e) {
             Msg.error(this, "Error listing external locations: " + e.getMessage());
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
 
         return paginateList(lines, offset, limit);
@@ -7869,48 +7480,56 @@ public class EndpointRouter {
     private Object getExternalLocationDetails(String address, String dllName, String programName) throws Exception {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
-        if (program == null) return (String) programResult[1];
+        if (program == null) return programResult[1];
 
         Address addr = program.getAddressFactory().getAddress(address);
         ExternalManager extMgr = program.getExternalManager();
 
-        StringBuilder result = new StringBuilder();
-        result.append("{");
-        result.append("\"address\": \"").append(address).append("\", ");
+        String foundLabel = null;
+        String foundDll = null;
 
         if (dllName != null && !dllName.isEmpty()) {
             ExternalLocationIterator iter = extMgr.getExternalLocations(dllName);
             while (iter.hasNext()) {
                 ExternalLocation extLoc = iter.next();
                 if (extLoc.getAddress().equals(addr)) {
-                    result.append("\"dll_name\": \"").append(dllName).append("\", ");
-                    result.append("\"label\": \"").append(escapeJson(extLoc.getLabel())).append("\", ");
-                    result.append("\"address\": \"").append(addr).append("\"");
+                    foundLabel = extLoc.getLabel();
+                    foundDll = dllName;
                     break;
                 }
             }
-            if (!result.toString().contains("label")) {
-                result.append("\"error\": \"External location not found in DLL\"");
-            }
         } else {
-            // Try to find it in any DLL
             String[] libNames = extMgr.getExternalLibraryNames();
+            outer:
             for (String libName : libNames) {
                 ExternalLocationIterator iter = extMgr.getExternalLocations(libName);
                 while (iter.hasNext()) {
                     ExternalLocation extLoc = iter.next();
                     if (extLoc.getAddress().equals(addr)) {
-                        result.append("\"dll_name\": \"").append(libName).append("\", ");
-                        result.append("\"label\": \"").append(escapeJson(extLoc.getLabel())).append("\", ");
-                        result.append("\"address\": \"").append(addr).append("\"");
-                        break;
+                        foundLabel = extLoc.getLabel();
+                        foundDll = libName;
+                        break outer;
                     }
                 }
-                if (result.toString().contains("label")) break;
             }
         }
-        result.append("}");
-        return result.toString();
+
+        if (foundLabel == null) {
+            String errAddr = address;
+            String errMsg = dllName != null && !dllName.isEmpty()
+                ? "External location not found in DLL"
+                : "External location not found at address " + errAddr;
+            return new Object() { String address = errAddr; String error = errMsg; };
+        }
+
+        String resultLabel = foundLabel;
+        String resultDll = foundDll;
+        String resultAddr = address;
+        return new Object() {
+            String address = resultAddr;
+            String dll_name = resultDll;
+            String label = resultLabel;
+        };
     }
     
 
@@ -7919,7 +7538,7 @@ public class EndpointRouter {
      */
     private Object renameExternalLocation(String address, String newName) {
         Program program = getCurrentProgram();
-        if (program == null) return "No program loaded";
+        if (program == null) return errorJson("No program loaded");
 
         try {
             Address addr = program.getAddressFactory().getAddress(address);
@@ -7942,7 +7561,6 @@ public class EndpointRouter {
                             SwingUtilities.invokeAndWait(() -> {
                                 int tx = program.startTransaction("Rename external location");
                                 try {
-                                    // Get the external library namespace for this external location
                                     Namespace extLibNamespace = extMgr.getExternalLibrary(finalLibName);
                                     finalExtLoc.setName(extLibNamespace, newName, SourceType.USER_DEFINED);
                                     success.set(true);
@@ -7961,20 +7579,24 @@ public class EndpointRouter {
                         }
 
                         if (success.get()) {
-                            return "{\"success\": true, \"old_name\": \"" + escapeJson(oldName) +
-                                   "\", \"new_name\": \"" + escapeJson(newName) +
-                                   "\", \"dll\": \"" + finalLibName + "\"}";
+                            String resultDll = finalLibName;
+                            return new Object() {
+                                boolean success = true;
+                                String old_name = oldName;
+                                String new_name = newName;
+                                String dll = resultDll;
+                            };
                         } else {
-                            return "{\"error\": \"" + (errorMsg.get() != null ? errorMsg.get().replace("\"", "\\\"") : "Unknown error") + "\"}";
+                            return errorJson(errorMsg.get() != null ? errorMsg.get() : "Unknown error");
                         }
                     }
                 }
             }
 
-            return "{\"error\": \"External location not found at address " + address + "\"}";
+            return errorJson("External location not found at address " + address);
         } catch (Exception e) {
             Msg.error(this, "Exception in renameExternalLocation: " + e.getMessage());
-            return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            return errorJson(e.getMessage());
         }
     }
 
@@ -7987,28 +7609,22 @@ public class EndpointRouter {
      * Returns documented/undocumented function counts for each program.
      */
     private Object compareProgramsDocumentation() {
-        StringBuilder result = new StringBuilder();
-        result.append("{\"programs\": [");
-
         try {
             PluginTool tool = this.getActiveTool();
             if (tool == null) {
-                return "{\"error\": \"Tool not available\"}";
+                return errorJson("Tool not available");
             }
 
             ProgramManager programManager = getActiveTool().getService(ProgramManager.class);
             if (programManager == null) {
-                return "{\"error\": \"ProgramManager not available\"}";
+                return errorJson("ProgramManager not available");
             }
 
             Program[] allPrograms = programManager.getAllOpenPrograms();
             Program currentProgram = programManager.getCurrentProgram();
 
-            boolean first = true;
+            List<Map<String, Object>> programs = new ArrayList<>();
             for (Program prog : allPrograms) {
-                if (!first) result.append(", ");
-                first = false;
-
                 int documented = 0;
                 int undocumented = 0;
                 int total = 0;
@@ -8025,24 +7641,27 @@ public class EndpointRouter {
 
                 double docPercent = total > 0 ? (documented * 100.0 / total) : 0;
 
-                result.append("{");
-                result.append("\"name\": \"").append(escapeJson(prog.getName())).append("\", ");
-                result.append("\"path\": \"").append(escapeJson(prog.getDomainFile().getPathname())).append("\", ");
-                result.append("\"is_current\": ").append(prog == currentProgram).append(", ");
-                result.append("\"total_functions\": ").append(total).append(", ");
-                result.append("\"documented\": ").append(documented).append(", ");
-                result.append("\"undocumented\": ").append(undocumented).append(", ");
-                result.append("\"documentation_percent\": ").append(String.format("%.1f", docPercent));
-                result.append("}");
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("name", prog.getName());
+                entry.put("path", prog.getDomainFile().getPathname());
+                entry.put("is_current", prog == currentProgram);
+                entry.put("total_functions", total);
+                entry.put("documented", documented);
+                entry.put("undocumented", undocumented);
+                entry.put("documentation_percent", Double.parseDouble(String.format("%.1f", docPercent)));
+                programs.add(entry);
             }
 
-            result.append("], \"count\": ").append(allPrograms.length).append("}");
+            List<Map<String, Object>> programList = programs;
+            int progCount = allPrograms.length;
+            return new Object() {
+                List<Map<String, Object>> programs = programList;
+                int count = progCount;
+            };
 
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return errorJson(e.getMessage());
         }
-
-        return result.toString();
     }
 
     /**
@@ -8051,60 +7670,48 @@ public class EndpointRouter {
      */
     private Object findUndocumentedByString(String stringAddress, String programName) {
         if (stringAddress == null || stringAddress.isEmpty()) {
-            return "{\"error\": \"String address is required\"}";
+            return errorJson("String address is required");
         }
 
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) {
-            return "{\"error\": \"" + escapeJson((String) programResult[1]) + "\"}";
+            return programResult[1];
         }
-
-        StringBuilder result = new StringBuilder();
-        result.append("{\"string_address\": \"").append(stringAddress).append("\", ");
-        result.append("\"undocumented_functions\": [");
 
         try {
             Address addr = program.getAddressFactory().getAddress(stringAddress);
             if (addr == null) {
-                return "{\"error\": \"Invalid address format: " + stringAddress + "\"}";
+                return errorJson("Invalid address format: " + stringAddress);
             }
 
             ReferenceManager refMgr = program.getReferenceManager();
             FunctionManager funcMgr = program.getFunctionManager();
 
-            // Get references to this address
             ReferenceIterator refIter = refMgr.getReferencesTo(addr);
 
-            Set<String> seenFunctions = new java.util.HashSet<>();
-            boolean first = true;
-            int undocCount = 0;
+            Set<String> seenFunctions = new HashSet<>();
+            List<Map<String, String>> undocumentedFunctions = new ArrayList<>();
             int docCount = 0;
 
             while (refIter.hasNext()) {
                 Reference ref = refIter.next();
                 Address fromAddr = ref.getFromAddress();
 
-                // Find the function containing this reference
                 Function func = funcMgr.getFunctionContaining(fromAddr);
                 if (func != null) {
                     String funcName = func.getName();
 
-                    // Only add each function once
                     if (!seenFunctions.contains(funcName)) {
                         seenFunctions.add(funcName);
 
                         if (funcName.startsWith("FUN_") || funcName.startsWith("thunk_FUN_")) {
-                            if (!first) result.append(", ");
-                            first = false;
-                            undocCount++;
-
-                            result.append("{");
-                            result.append("\"name\": \"").append(escapeJson(funcName)).append("\", ");
-                            result.append("\"address\": \"").append(func.getEntryPoint().toString()).append("\", ");
-                            result.append("\"ref_address\": \"").append(fromAddr.toString()).append("\", ");
-                            result.append("\"ref_type\": \"").append(ref.getReferenceType().getName()).append("\"");
-                            result.append("}");
+                            Map<String, String> entry = new LinkedHashMap<>();
+                            entry.put("name", funcName);
+                            entry.put("address", func.getEntryPoint().toString());
+                            entry.put("ref_address", fromAddr.toString());
+                            entry.put("ref_type", ref.getReferenceType().getName());
+                            undocumentedFunctions.add(entry);
                         } else {
                             docCount++;
                         }
@@ -8112,17 +7719,22 @@ public class EndpointRouter {
                 }
             }
 
-            result.append("], ");
-            result.append("\"undocumented_count\": ").append(undocCount).append(", ");
-            result.append("\"documented_count\": ").append(docCount).append(", ");
-            result.append("\"total_referencing_functions\": ").append(seenFunctions.size());
-            result.append("}");
+            String strAddr = stringAddress;
+            List<Map<String, String>> undocList = undocumentedFunctions;
+            int undocCount = undocumentedFunctions.size();
+            int documentedCount = docCount;
+            int totalCount = seenFunctions.size();
+            return new Object() {
+                String string_address = strAddr;
+                List<Map<String, String>> undocumented_functions = undocList;
+                int undocumented_count = undocCount;
+                int documented_count = documentedCount;
+                int total_referencing_functions = totalCount;
+            };
 
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return errorJson(e.getMessage());
         }
-
-        return result.toString();
     }
 
     /**
@@ -8134,28 +7746,22 @@ public class EndpointRouter {
         Object[] programResult = getProgramOrError(programName);
         Program program = (Program) programResult[0];
         if (program == null) {
-            return "{\"error\": \"" + escapeJson((String) programResult[1]) + "\"}";
+            return programResult[1];
         }
 
-        StringBuilder result = new StringBuilder();
-        result.append("{\"pattern\": \"").append(escapeJson(pattern)).append("\", ");
-        result.append("\"anchors\": [");
-
+        String finalPattern = pattern;
         try {
             Listing listing = program.getListing();
             ReferenceManager refMgr = program.getReferenceManager();
             FunctionManager funcMgr = program.getFunctionManager();
 
-            int anchorCount = 0;
+            List<Map<String, Object>> anchors = new ArrayList<>();
             int totalUndocumented = 0;
-            boolean firstAnchor = true;
 
-            // Iterate through all defined strings in the program
             DataIterator dataIter = listing.getDefinedData(true);
             while (dataIter.hasNext()) {
                 Data data = dataIter.next();
 
-                // Check if this is a string type
                 if (data.getDataType() instanceof StringDataType ||
                     data.getDataType().getName().toLowerCase().contains("string")) {
 
@@ -8163,14 +7769,14 @@ public class EndpointRouter {
                     if (value instanceof String) {
                         String strValue = (String) value;
 
-                        // Check if string matches the pattern
-                        if (strValue.toLowerCase().contains(pattern.toLowerCase())) {
+                        if (strValue.toLowerCase().contains(finalPattern.toLowerCase())) {
                             Address strAddr = data.getAddress();
 
-                            // Find FUN_* functions referencing this string
                             ReferenceIterator refIter = refMgr.getReferencesTo(strAddr);
-                            Set<String> undocFuncs = new java.util.LinkedHashSet<>();
-                            Set<String> docFuncs = new java.util.LinkedHashSet<>();
+                            List<Map<String, String>> undocFuncList = new ArrayList<>();
+                            List<String> docFuncList = new ArrayList<>();
+                            Set<String> seenUndoc = new LinkedHashSet<>();
+                            Set<String> seenDoc = new LinkedHashSet<>();
 
                             while (refIter.hasNext()) {
                                 Reference ref = refIter.next();
@@ -8178,63 +7784,52 @@ public class EndpointRouter {
                                 if (func != null) {
                                     String funcName = func.getName();
                                     if (funcName.startsWith("FUN_") || funcName.startsWith("thunk_FUN_")) {
-                                        undocFuncs.add(funcName + "@" + func.getEntryPoint().toString());
+                                        String key = funcName + "@" + func.getEntryPoint().toString();
+                                        if (seenUndoc.add(key)) {
+                                            Map<String, String> fe = new LinkedHashMap<>();
+                                            fe.put("name", funcName);
+                                            fe.put("address", func.getEntryPoint().toString());
+                                            undocFuncList.add(fe);
+                                        }
                                     } else {
-                                        docFuncs.add(funcName);
+                                        if (seenDoc.add(funcName)) {
+                                            docFuncList.add(funcName);
+                                        }
                                     }
                                 }
                             }
 
-                            // Only include strings that have at least one referencing function
-                            if (!undocFuncs.isEmpty() || !docFuncs.isEmpty()) {
-                                if (!firstAnchor) result.append(", ");
-                                firstAnchor = false;
-                                anchorCount++;
-                                totalUndocumented += undocFuncs.size();
+                            if (!undocFuncList.isEmpty() || !docFuncList.isEmpty()) {
+                                totalUndocumented += undocFuncList.size();
 
-                                result.append("{");
-                                result.append("\"string\": \"").append(escapeJson(strValue)).append("\", ");
-                                result.append("\"address\": \"").append(strAddr.toString()).append("\", ");
-                                result.append("\"undocumented\": [");
-
-                                boolean firstFunc = true;
-                                for (String funcInfo : undocFuncs) {
-                                    if (!firstFunc) result.append(", ");
-                                    firstFunc = false;
-                                    String[] parts = funcInfo.split("@");
-                                    result.append("{\"name\": \"").append(parts[0]).append("\", ");
-                                    result.append("\"address\": \"").append(parts[1]).append("\"}");
-                                }
-
-                                result.append("], \"documented\": [");
-
-                                firstFunc = true;
-                                for (String funcName : docFuncs) {
-                                    if (!firstFunc) result.append(", ");
-                                    firstFunc = false;
-                                    result.append("\"").append(escapeJson(funcName)).append("\"");
-                                }
-
-                                result.append("], ");
-                                result.append("\"undocumented_count\": ").append(undocFuncs.size()).append(", ");
-                                result.append("\"documented_count\": ").append(docFuncs.size());
-                                result.append("}");
+                                Map<String, Object> anchor = new LinkedHashMap<>();
+                                anchor.put("string", strValue);
+                                anchor.put("address", strAddr.toString());
+                                anchor.put("undocumented", undocFuncList);
+                                anchor.put("documented", docFuncList);
+                                anchor.put("undocumented_count", undocFuncList.size());
+                                anchor.put("documented_count", docFuncList.size());
+                                anchors.add(anchor);
                             }
                         }
                     }
                 }
             }
 
-            result.append("], ");
-            result.append("\"total_anchors\": ").append(anchorCount).append(", ");
-            result.append("\"total_undocumented_functions\": ").append(totalUndocumented);
-            result.append("}");
+            List<Map<String, Object>> anchorList = anchors;
+            int anchorCount = anchors.size();
+            int totalUndoc = totalUndocumented;
+            String patternStr = finalPattern;
+            return new Object() {
+                String pattern = patternStr;
+                List<Map<String, Object>> anchors = anchorList;
+                int total_anchors = anchorCount;
+                int total_undocumented_functions = totalUndoc;
+            };
 
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return errorJson(e.getMessage());
         }
-
-        return result.toString();
     }
 
     // ==================== SERVER LIFECYCLE ====================
