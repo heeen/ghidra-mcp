@@ -3,6 +3,7 @@ package com.xebyte;
 import com.xebyte.core.ServerManager;
 
 import ghidra.app.plugin.PluginCategoryNames;
+import ghidra.framework.main.ApplicationLevelPlugin;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
@@ -18,10 +19,10 @@ import java.io.IOException;
     shortDescription = "GhidraMCP - MCP server plugin",
     description = "GhidraMCP - Exposes program data via Unix domain socket HTTP server " +
                   "for MCP bridge and AI tool integration. " +
-                  "Supports multiple CodeBrowser windows and Ghidra instances. " +
+                  "Loads in both Project Window and CodeBrowser. " +
                   "See https://github.com/bethington/ghidra-mcp for documentation."
 )
-public class GhidraMCPPlugin extends Plugin {
+public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);

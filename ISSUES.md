@@ -126,28 +126,11 @@ interfere with OSGi bundle resolution for imported packages.
 
 ---
 
-## 11. Instance not discoverable until a program is opened in CodeBrowser
+## 11. ~~Instance not discoverable until a program is opened in CodeBrowser~~ **FIXED**
 
-**Status**: Open.
-
-**Problem**: When Ghidra GUI is running with a project open but no program is opened
-in the CodeBrowser, `list_instances` does not show the instance. It only appears once a
-program is opened (e.g., by double-clicking a binary in the project window).
-
-**Reproduction**:
-1. Start Ghidra GUI, open a project (e.g., `ghidra_v407.gpr`)
-2. Do NOT open any program in CodeBrowser
-3. Call `list_instances` via MCP → instance is **not listed**
-4. Open a program in CodeBrowser
-5. Call `list_instances` again → instance now appears
-
-**Expected**: The instance should be discoverable as soon as the project is open, even
-if no program is loaded in CodeBrowser. The `programs` list can be empty, but the
-instance socket should be created and visible for `connect_instance`.
-
-**Likely cause**: The MCP plugin/script only starts the HTTP/UDS server when a
-CodeBrowser tool window is opened (which requires opening a program), not when the
-project manager starts.
+**Fix**: Made `GhidraMCPPlugin` implement `ApplicationLevelPlugin` (marker interface).
+The FrontEndTool now auto-loads the plugin when the project window opens, starting the
+MCP server before any program is opened in CodeBrowser.
 
 ---
 
