@@ -24,7 +24,7 @@ from functools import lru_cache, wraps
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8089/"
+DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8089"
 
 # Enhanced configuration and state management
 # HTTP request timeout (30s chosen for slow decompilation operations)
@@ -831,6 +831,7 @@ def cached_request(
 
             return result
 
+        wrapper.cache = cache  # Expose for cache invalidation (e.g., instance switch)
         return wrapper
 
     return decorator
@@ -1229,12 +1230,62 @@ def list_instances() -> str:
     List all running Ghidra instances discovered via Unix domain sockets.
 
     Returns JSON with each instance's project name, PID, open programs, and socket path.
+    Also shows which instance is currently connected.
     Useful for multi-instance setups where multiple Ghidra processes are running.
     """
     instances = discover_instances()
     if not instances:
         return json.dumps({"instances": [], "note": "No UDS instances found. Falling back to TCP."})
+    active = get_active_socket()
+    for inst in instances:
+        inst["connected"] = (inst["socket"] == active)
     return json.dumps({"instances": instances}, indent=2)
+
+
+@mcp.tool()
+def connect_instance(project: str) -> str:
+    """
+    Switch the MCP bridge to a different Ghidra instance by project name.
+
+    Use list_instances() first to see available instances and their project names.
+    After connecting, all subsequent MCP tool calls will be routed to the selected instance.
+
+    Args:
+        project: Project name (or substring) to connect to (e.g., "test-project")
+
+    Returns:
+        JSON with connection result
+    """
+    global _active_socket
+    instances = discover_instances()
+    if not instances:
+        return json.dumps({"error": "No running Ghidra instances found"})
+
+    # Exact match first, then substring
+    match = None
+    for inst in instances:
+        if inst.get("project", "") == project:
+            match = inst
+            break
+    if not match:
+        for inst in instances:
+            if project.lower() in inst.get("project", "").lower():
+                match = inst
+                break
+    if not match:
+        available = [inst.get("project", "unknown") for inst in instances]
+        return json.dumps({"error": f"No instance matching '{project}'", "available": available})
+
+    _active_socket = match["socket"]
+    # Invalidate request cache since we switched instances
+    if hasattr(safe_get, "cache"):
+        safe_get.cache.clear()
+    return json.dumps({
+        "connected": True,
+        "project": match.get("project"),
+        "socket": match["socket"],
+        "pid": match.get("pid"),
+    })
 
 
 @mcp.tool()
