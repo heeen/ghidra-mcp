@@ -16,6 +16,7 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
@@ -46,24 +47,27 @@ public class MutationService extends BaseService {
      * Find a function by name and rename it.
      * Endpoint: /rename_function
      */
-    public String renameFunction(String oldName, String newName) {
+    public Response renameFunction(String oldName, String newName) {
         Program program = resolveProgram(null);
         if (program == null) return programNotFoundError(null);
-        if (oldName == null || oldName.isEmpty()) return "Error: Old function name is required";
-        if (newName == null || newName.isEmpty()) return "Error: New function name is required";
+        if (oldName == null || oldName.isEmpty()) return Response.err("Old function name is required");
+        if (newName == null || newName.isEmpty()) return Response.err("New function name is required");
 
         try {
             return threadingStrategy.executeWrite(program, "Rename function", () -> {
                 for (Function func : program.getFunctionManager().getFunctions(true)) {
                     if (func.getName().equals(oldName)) {
                         func.setName(newName, SourceType.USER_DEFINED);
-                        return "Success: Renamed function '" + oldName + "' to '" + newName + "'";
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Renamed function '" + oldName + "' to '" + newName + "'");
+                        return Response.ok(result);
                     }
                 }
-                return "Error: Function '" + oldName + "' not found";
+                return Response.err("Function '" + oldName + "' not found");
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -71,14 +75,14 @@ public class MutationService extends BaseService {
      * Find a function at or containing an address and rename it.
      * Endpoint: /rename_function_by_address
      */
-    public String renameFunctionByAddress(String addressStr, String newName) {
+    public Response renameFunctionByAddress(String addressStr, String newName) {
         Program program = resolveProgram(null);
         if (program == null) return programNotFoundError(null);
-        if (addressStr == null || addressStr.isEmpty()) return "Error: Function address is required";
-        if (newName == null || newName.isEmpty()) return "Error: New function name is required";
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("Function address is required");
+        if (newName == null || newName.isEmpty()) return Response.err("New function name is required");
 
         Address addr = parseAddress(program, addressStr);
-        if (addr == null) return "Error: Invalid address: " + addressStr;
+        if (addr == null) return Response.err("Invalid address: " + addressStr);
 
         try {
             return threadingStrategy.executeWrite(program, "Rename function by address", () -> {
@@ -87,15 +91,18 @@ public class MutationService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "Error: No function found at address: " + addressStr;
+                    return Response.err("No function found at address: " + addressStr);
                 }
 
                 String oldName = func.getName();
                 func.setName(newName, SourceType.USER_DEFINED);
-                return "Success: Renamed function '" + oldName + "' to '" + newName + "'";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "success");
+                result.put("message", "Renamed function '" + oldName + "' to '" + newName + "'");
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -103,22 +110,25 @@ public class MutationService extends BaseService {
      * Save the current program's domain file.
      * Endpoint: /save_program
      */
-    public String saveCurrentProgram() {
+    public Response saveCurrentProgram() {
         Program program = resolveProgram(null);
-        if (program == null) return "{\"error\": \"No program loaded\"}";
+        if (program == null) return programNotFoundError(null);
 
         try {
             return threadingStrategy.executeWrite(program, "Save program", () -> {
                 ghidra.framework.model.DomainFile df = program.getDomainFile();
                 if (df == null) {
-                    return "{\"error\": \"Program has no domain file\"}";
+                    return Response.err("Program has no domain file");
                 }
                 df.save(TaskMonitor.DUMMY);
-                return "{\"success\": true, \"program\": \"" + escapeJson(program.getName()) +
-                       "\", \"message\": \"Program saved successfully\"}";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("program", program.getName());
+                result.put("message", "Program saved successfully");
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -126,16 +136,16 @@ public class MutationService extends BaseService {
      * Remove a function at the given address.
      * Endpoint: /delete_function
      */
-    public String deleteFunctionAtAddress(String addressStr) {
+    public Response deleteFunctionAtAddress(String addressStr) {
         Program program = resolveProgram(null);
-        if (program == null) return "{\"error\": \"No program loaded\"}";
-        if (addressStr == null || addressStr.isEmpty()) return "{\"error\": \"address parameter required\"}";
+        if (program == null) return programNotFoundError(null);
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("address parameter required");
 
         Address addr = parseAddress(program, addressStr);
-        if (addr == null) return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+        if (addr == null) return Response.err("Invalid address: " + addressStr);
 
         Function func = program.getFunctionManager().getFunctionAt(addr);
-        if (func == null) return "{\"error\": \"No function found at address " + addressStr + "\"}";
+        if (func == null) return Response.err("No function found at address " + addressStr);
 
         String funcName = func.getName();
         long bodySize = func.getBody().getNumAddresses();
@@ -143,16 +153,16 @@ public class MutationService extends BaseService {
         try {
             return threadingStrategy.executeWrite(program, "Delete function at address", () -> {
                 program.getFunctionManager().removeFunction(addr);
-                return "{" +
-                    "\"success\": true, " +
-                    "\"address\": \"" + addr + "\", " +
-                    "\"deleted_function\": \"" + escapeJson(funcName) + "\", " +
-                    "\"body_size\": " + bodySize + ", " +
-                    "\"message\": \"Function '" + escapeJson(funcName) + "' deleted at " + addr + "\"" +
-                    "}";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("address", addr.toString());
+                result.put("deleted_function", funcName);
+                result.put("body_size", bodySize);
+                result.put("message", "Function '" + funcName + "' deleted at " + addr);
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -160,17 +170,17 @@ public class MutationService extends BaseService {
      * Create a function at the given address, optionally disassembling first.
      * Endpoint: /create_function
      */
-    public String createFunctionAtAddress(String addressStr, String name, boolean disassembleFirst) {
+    public Response createFunctionAtAddress(String addressStr, String name, boolean disassembleFirst) {
         Program program = resolveProgram(null);
-        if (program == null) return "{\"error\": \"No program loaded\"}";
-        if (addressStr == null || addressStr.isEmpty()) return "{\"error\": \"address parameter required\"}";
+        if (program == null) return programNotFoundError(null);
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("address parameter required");
 
         Address addr = parseAddress(program, addressStr);
-        if (addr == null) return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+        if (addr == null) return Response.err("Invalid address: " + addressStr);
 
         Function existing = program.getFunctionManager().getFunctionAt(addr);
         if (existing != null) {
-            return "{\"error\": \"Function already exists at " + addressStr + ": " + existing.getName() + "\"}";
+            return Response.err("Function already exists at " + addressStr + ": " + existing.getName());
         }
 
         try {
@@ -182,8 +192,8 @@ public class MutationService extends BaseService {
                         ghidra.app.cmd.disassemble.DisassembleCommand disCmd =
                             new ghidra.app.cmd.disassemble.DisassembleCommand(addrSet, null, true);
                         if (!disCmd.applyTo(program, TaskMonitor.DUMMY)) {
-                            return "{\"error\": \"Failed to disassemble at " + addressStr +
-                                   ": " + disCmd.getStatusMsg() + "\"}";
+                            return Response.err("Failed to disassemble at " + addressStr +
+                                   ": " + disCmd.getStatusMsg());
                         }
                     }
                 }
@@ -191,32 +201,31 @@ public class MutationService extends BaseService {
                 ghidra.app.cmd.function.CreateFunctionCmd cmd =
                     new ghidra.app.cmd.function.CreateFunctionCmd(addr);
                 if (!cmd.applyTo(program, TaskMonitor.DUMMY)) {
-                    return "{\"error\": \"Failed to create function at " + addressStr +
-                           ": " + cmd.getStatusMsg() + "\"}";
+                    return Response.err("Failed to create function at " + addressStr +
+                           ": " + cmd.getStatusMsg());
                 }
 
                 Function func = program.getFunctionManager().getFunctionAt(addr);
                 if (func == null) {
-                    return "{\"error\": \"Function creation reported success but function not found at " +
-                           addressStr + "\"}";
+                    return Response.err("Function creation reported success but function not found at " +
+                           addressStr);
                 }
 
                 if (name != null && !name.isEmpty()) {
                     func.setName(name, SourceType.USER_DEFINED);
                 }
 
-                String funcName = func.getName();
-                return "{" +
-                    "\"success\": true, " +
-                    "\"address\": \"" + addr + "\", " +
-                    "\"function_name\": \"" + escapeJson(funcName) + "\", " +
-                    "\"entry_point\": \"" + func.getEntryPoint() + "\", " +
-                    "\"body_size\": " + func.getBody().getNumAddresses() + ", " +
-                    "\"message\": \"Function created successfully at " + addr + "\"" +
-                    "}";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("address", addr.toString());
+                result.put("function_name", func.getName());
+                result.put("entry_point", func.getEntryPoint().toString());
+                result.put("body_size", func.getBody().getNumAddresses());
+                result.put("message", "Function created successfully at " + addr);
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -228,17 +237,17 @@ public class MutationService extends BaseService {
      * Create an uninitialized memory block.
      * Endpoint: /create_memory_block
      */
-    public String createMemoryBlock(String name, String addressStr, long size,
+    public Response createMemoryBlock(String name, String addressStr, long size,
                                     boolean read, boolean write, boolean execute,
                                     boolean isVolatile, String comment) {
         Program program = resolveProgram(null);
-        if (program == null) return "{\"error\": \"No program loaded\"}";
-        if (name == null || name.isEmpty()) return "{\"error\": \"name parameter required\"}";
-        if (addressStr == null || addressStr.isEmpty()) return "{\"error\": \"address parameter required\"}";
-        if (size <= 0) return "{\"error\": \"size must be positive\"}";
+        if (program == null) return programNotFoundError(null);
+        if (name == null || name.isEmpty()) return Response.err("name parameter required");
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("address parameter required");
+        if (size <= 0) return Response.err("size must be positive");
 
         Address addr = parseAddress(program, addressStr);
-        if (addr == null) return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+        if (addr == null) return Response.err("Invalid address: " + addressStr);
 
         try {
             return threadingStrategy.executeWrite(program, "Create memory block", () -> {
@@ -253,20 +262,20 @@ public class MutationService extends BaseService {
                     block.setComment(comment);
                 }
 
-                return "{" +
-                    "\"success\": true, " +
-                    "\"name\": \"" + escapeJson(name) + "\", " +
-                    "\"start\": \"" + block.getStart() + "\", " +
-                    "\"end\": \"" + block.getEnd() + "\", " +
-                    "\"size\": " + block.getSize() + ", " +
-                    "\"permissions\": \"" + (read ? "r" : "-") + (write ? "w" : "-") +
-                        (execute ? "x" : "-") + "\", " +
-                    "\"volatile\": " + isVolatile + ", " +
-                    "\"message\": \"Memory block '" + escapeJson(name) + "' created at " + addr + "\"" +
-                    "}";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("name", name);
+                result.put("start", block.getStart().toString());
+                result.put("end", block.getEnd().toString());
+                result.put("size", block.getSize());
+                result.put("permissions",
+                    (read ? "r" : "-") + (write ? "w" : "-") + (execute ? "x" : "-"));
+                result.put("volatile", isVolatile);
+                result.put("message", "Memory block '" + name + "' created at " + addr);
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -278,93 +287,91 @@ public class MutationService extends BaseService {
      * Rename the primary symbol at an address, or create a label if none exists.
      * Endpoint: /rename_data
      */
-    public String renameData(String addressStr, String newName) {
+    public Response renameData(String addressStr, String newName) {
         Program program = resolveProgram(null);
-        if (program == null) return "Error: No program loaded";
-        if (addressStr == null || addressStr.isEmpty()) return "Error: Address is required";
-        if (newName == null || newName.isEmpty()) return "Error: New name is required";
+        if (program == null) return programNotFoundError(null);
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("Address is required");
+        if (newName == null || newName.isEmpty()) return Response.err("New name is required");
 
         Address addr = parseAddress(program, addressStr);
-        if (addr == null) return "Error: Invalid address: " + addressStr;
+        if (addr == null) return Response.err("Invalid address: " + addressStr);
 
         try {
             return threadingStrategy.executeWrite(program, "Rename data", () -> {
                 SymbolTable symTable = program.getSymbolTable();
                 Symbol symbol = symTable.getPrimarySymbol(addr);
 
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "success");
                 if (symbol != null) {
                     symbol.setName(newName, SourceType.USER_DEFINED);
-                    return "Success: Renamed data at " + addressStr + " to '" + newName + "'";
+                    result.put("message", "Renamed data at " + addressStr + " to '" + newName + "'");
                 } else {
                     symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
-                    return "Success: Created label '" + newName + "' at " + addressStr;
+                    result.put("message", "Created label '" + newName + "' at " + addressStr);
                 }
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
     /**
-     * Delegate to {@link #renameData} and wrap the result in JSON format.
+     * Delegate to {@link #renameData} and return the result directly.
      * Endpoint: /rename_or_label
      */
-    public String renameOrLabel(String addressStr, String newName) {
-        if (addressStr == null || addressStr.isEmpty()) return "{\"error\": \"Address is required\"}";
-        if (newName == null || newName.isEmpty()) return "{\"error\": \"Name is required\"}";
+    public Response renameOrLabel(String addressStr, String newName) {
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("Address is required");
+        if (newName == null || newName.isEmpty()) return Response.err("Name is required");
 
-        String result = renameData(addressStr, newName);
-
-        if (result.startsWith("Success:")) {
-            return "{\"success\": true, \"message\": \"" + escapeJson(result) + "\"}";
-        } else if (result.startsWith("Error:")) {
-            return "{\"error\": \"" + escapeJson(result.substring(7).trim()) + "\"}";
-        }
-        return "{\"result\": \"" + escapeJson(result) + "\"}";
+        return renameData(addressStr, newName);
     }
 
     /**
      * Read-only check: determine what exists at an address and suggest a rename operation.
      * Endpoint: /can_rename_at_address
      */
-    public String canRenameAtAddress(String addressStr) {
+    public Response canRenameAtAddress(String addressStr) {
         Program program = resolveProgram(null);
-        if (program == null) return "{\"error\": \"No program loaded\"}";
+        if (program == null) return programNotFoundError(null);
 
         try {
             Address addr = parseAddress(program, addressStr);
-            if (addr == null) return "{\"can_rename\": false, \"error\": \"Invalid address\"}";
+            if (addr == null) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("can_rename", false);
+                result.put("error", "Invalid address");
+                return Response.ok(result);
+            }
 
-            StringBuilder result = new StringBuilder();
-            result.append("{\"can_rename\": true");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("can_rename", true);
 
             Function func = program.getFunctionManager().getFunctionAt(addr);
             if (func != null) {
-                result.append(", \"type\": \"function\"");
-                result.append(", \"suggested_operation\": \"rename_function\"");
-                result.append(", \"current_name\": \"").append(escapeJson(func.getName())).append("\"");
-                result.append("}");
-                return result.toString();
+                result.put("type", "function");
+                result.put("suggested_operation", "rename_function");
+                result.put("current_name", func.getName());
+                return Response.ok(result);
             }
 
             Data data = program.getListing().getDefinedDataAt(addr);
             if (data != null) {
-                result.append(", \"type\": \"defined_data\"");
-                result.append(", \"suggested_operation\": \"rename_data\"");
+                result.put("type", "defined_data");
+                result.put("suggested_operation", "rename_data");
                 Symbol symbol = program.getSymbolTable().getPrimarySymbol(addr);
                 if (symbol != null) {
-                    result.append(", \"current_name\": \"").append(escapeJson(symbol.getName())).append("\"");
+                    result.put("current_name", symbol.getName());
                 }
-                result.append("}");
-                return result.toString();
+                return Response.ok(result);
             }
 
-            result.append(", \"type\": \"undefined\"");
-            result.append(", \"suggested_operation\": \"create_label\"");
-            result.append("}");
-            return result.toString();
+            result.put("type", "undefined");
+            result.put("suggested_operation", "create_label");
+            return Response.ok(result);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -376,12 +383,12 @@ public class MutationService extends BaseService {
      * Rename a parameter or local variable in a function (found by name).
      * Endpoint: /rename_variable
      */
-    public String renameVariable(String functionName, String oldName, String newName) {
+    public Response renameVariable(String functionName, String oldName, String newName) {
         Program program = resolveProgram(null);
-        if (program == null) return "Error: No program loaded";
-        if (functionName == null || functionName.isEmpty()) return "Error: Function name is required";
-        if (oldName == null || oldName.isEmpty()) return "Error: Old variable name is required";
-        if (newName == null || newName.isEmpty()) return "Error: New variable name is required";
+        if (program == null) return programNotFoundError(null);
+        if (functionName == null || functionName.isEmpty()) return Response.err("Function name is required");
+        if (oldName == null || oldName.isEmpty()) return Response.err("Old variable name is required");
+        if (newName == null || newName.isEmpty()) return Response.err("New variable name is required");
 
         Function func = null;
         for (Function f : program.getFunctionManager().getFunctions(true)) {
@@ -391,7 +398,7 @@ public class MutationService extends BaseService {
             }
         }
 
-        if (func == null) return "Error: Function '" + functionName + "' not found";
+        if (func == null) return Response.err("Function '" + functionName + "' not found");
 
         final Function targetFunc = func;
 
@@ -400,21 +407,27 @@ public class MutationService extends BaseService {
                 for (Parameter param : targetFunc.getParameters()) {
                     if (param.getName().equals(oldName)) {
                         param.setName(newName, SourceType.USER_DEFINED);
-                        return "Success: Renamed parameter '" + oldName + "' to '" + newName + "'";
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Renamed parameter '" + oldName + "' to '" + newName + "'");
+                        return Response.ok(result);
                     }
                 }
 
                 for (Variable var : targetFunc.getLocalVariables()) {
                     if (var.getName().equals(oldName)) {
                         var.setName(newName, SourceType.USER_DEFINED);
-                        return "Success: Renamed local variable '" + oldName + "' to '" + newName + "'";
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Renamed local variable '" + oldName + "' to '" + newName + "'");
+                        return Response.ok(result);
                     }
                 }
 
-                return "Error: Variable '" + oldName + "' not found in function '" + functionName + "'";
+                return Response.err("Variable '" + oldName + "' not found in function '" + functionName + "'");
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -425,14 +438,14 @@ public class MutationService extends BaseService {
      * @param functionAddress  Entry point address of the function
      * @param renames          Pre-parsed map of old name to new name
      */
-    public String batchRenameVariables(String functionAddress, Map<String, String> renames) {
+    public Response batchRenameVariables(String functionAddress, Map<String, String> renames) {
         Program program = resolveProgram(null);
-        if (program == null) return "Error: No program loaded";
-        if (functionAddress == null || functionAddress.isEmpty()) return "Error: Function address is required";
-        if (renames == null || renames.isEmpty()) return "Error: Renames map is required";
+        if (program == null) return programNotFoundError(null);
+        if (functionAddress == null || functionAddress.isEmpty()) return Response.err("Function address is required");
+        if (renames == null || renames.isEmpty()) return Response.err("Renames map is required");
 
         Address addr = parseAddress(program, functionAddress);
-        if (addr == null) return "Error: Invalid address: " + functionAddress;
+        if (addr == null) return Response.err("Invalid address: " + functionAddress);
 
         try {
             return threadingStrategy.executeWrite(program, "Batch rename variables", () -> {
@@ -441,7 +454,7 @@ public class MutationService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "{\"error\": \"No function found at address: " + functionAddress + "\"}";
+                    return Response.err("No function found at address: " + functionAddress);
                 }
 
                 int renamed = 0;
@@ -493,25 +506,17 @@ public class MutationService extends BaseService {
                     }
                 }
 
-                StringBuilder sb = new StringBuilder();
-                sb.append("{\"success\": ").append(failed == 0).append(", ");
-                sb.append("\"renamed\": ").append(renamed).append(", ");
-                sb.append("\"failed\": ").append(failed);
-
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", failed == 0);
+                result.put("renamed", renamed);
+                result.put("failed", failed);
                 if (!errors.isEmpty()) {
-                    sb.append(", \"errors\": [");
-                    for (int i = 0; i < errors.size(); i++) {
-                        if (i > 0) sb.append(", ");
-                        sb.append("\"").append(escapeJson(errors.get(i))).append("\"");
-                    }
-                    sb.append("]");
+                    result.put("errors", errors);
                 }
-
-                sb.append("}");
-                return sb.toString();
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -523,14 +528,14 @@ public class MutationService extends BaseService {
      * Parse and apply a function signature, then optionally set the calling convention.
      * Endpoint: /set_function_prototype
      */
-    public String setFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
+    public Response setFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
         Program program = resolveProgram(null);
-        if (program == null) return "Error: No program loaded";
-        if (functionAddress == null || functionAddress.isEmpty()) return "Error: Function address is required";
-        if (prototype == null || prototype.isEmpty()) return "Error: Prototype is required";
+        if (program == null) return programNotFoundError(null);
+        if (functionAddress == null || functionAddress.isEmpty()) return Response.err("Function address is required");
+        if (prototype == null || prototype.isEmpty()) return Response.err("Prototype is required");
 
         Address addr = parseAddress(program, functionAddress);
-        if (addr == null) return "Error: Invalid address: " + functionAddress;
+        if (addr == null) return Response.err("Invalid address: " + functionAddress);
 
         try {
             return threadingStrategy.executeWrite(program, "Set function prototype", () -> {
@@ -539,7 +544,7 @@ public class MutationService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "Error: No function found at address: " + functionAddress;
+                    return Response.err("No function found at address: " + functionAddress);
                 }
 
                 DataTypeManager dtm = program.getDataTypeManager();
@@ -553,21 +558,27 @@ public class MutationService extends BaseService {
                         func.getEntryPoint(), sig, SourceType.USER_DEFINED);
 
                 if (!cmd.applyTo(program, monitor)) {
-                    return "Error: Failed to apply signature - " + cmd.getStatusMsg();
+                    return Response.err("Failed to apply signature - " + cmd.getStatusMsg());
                 }
 
                 if (callingConvention != null && !callingConvention.isEmpty()) {
                     try {
                         func.setCallingConvention(callingConvention);
                     } catch (Exception e) {
-                        return "Success: Signature set, but calling convention failed: " + e.getMessage();
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Signature set, but calling convention failed: " + e.getMessage());
+                        return Response.ok(result);
                     }
                 }
 
-                return "Success: Function prototype set for " + func.getName();
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "success");
+                result.put("message", "Function prototype set for " + func.getName());
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -575,15 +586,15 @@ public class MutationService extends BaseService {
      * Change the data type of a parameter or local variable.
      * Endpoint: /set_local_variable_type
      */
-    public String setLocalVariableType(String functionAddress, String variableName, String newType) {
+    public Response setLocalVariableType(String functionAddress, String variableName, String newType) {
         Program program = resolveProgram(null);
-        if (program == null) return "Error: No program loaded";
-        if (functionAddress == null || functionAddress.isEmpty()) return "Error: Function address is required";
-        if (variableName == null || variableName.isEmpty()) return "Error: Variable name is required";
-        if (newType == null || newType.isEmpty()) return "Error: New type is required";
+        if (program == null) return programNotFoundError(null);
+        if (functionAddress == null || functionAddress.isEmpty()) return Response.err("Function address is required");
+        if (variableName == null || variableName.isEmpty()) return Response.err("Variable name is required");
+        if (newType == null || newType.isEmpty()) return Response.err("New type is required");
 
         Address addr = parseAddress(program, functionAddress);
-        if (addr == null) return "Error: Invalid address: " + functionAddress;
+        if (addr == null) return Response.err("Invalid address: " + functionAddress);
 
         try {
             return threadingStrategy.executeWrite(program, "Set variable type", () -> {
@@ -592,32 +603,38 @@ public class MutationService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "Error: No function found at address: " + functionAddress;
+                    return Response.err("No function found at address: " + functionAddress);
                 }
 
                 DataType dataType = findDataType(program.getDataTypeManager(), newType);
                 if (dataType == null) {
-                    return "Error: Data type not found: " + newType;
+                    return Response.err("Data type not found: " + newType);
                 }
 
                 for (Parameter param : func.getParameters()) {
                     if (param.getName().equals(variableName)) {
                         param.setDataType(dataType, SourceType.USER_DEFINED);
-                        return "Success: Set type of parameter '" + variableName + "' to '" + newType + "'";
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Set type of parameter '" + variableName + "' to '" + newType + "'");
+                        return Response.ok(result);
                     }
                 }
 
                 for (Variable var : func.getLocalVariables()) {
                     if (var.getName().equals(variableName)) {
                         var.setDataType(dataType, SourceType.USER_DEFINED);
-                        return "Success: Set type of local '" + variableName + "' to '" + newType + "'";
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("status", "success");
+                        result.put("message", "Set type of local '" + variableName + "' to '" + newType + "'");
+                        return Response.ok(result);
                     }
                 }
 
-                return "Error: Variable '" + variableName + "' not found in function";
+                return Response.err("Variable '" + variableName + "' not found in function");
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -630,7 +647,6 @@ public class MutationService extends BaseService {
      * Handles pointer types (names ending with {@code *}) recursively.
      */
     private DataType findDataType(DataTypeManager dtm, String typeName) {
-        // Exact match in program's data type manager
         Iterator<DataType> iter = dtm.getAllDataTypes();
         while (iter.hasNext()) {
             DataType dt = iter.next();
@@ -639,7 +655,6 @@ public class MutationService extends BaseService {
             }
         }
 
-        // Try built-in types (exact then case-insensitive)
         DataTypeManager builtIn = BuiltInDataTypeManager.getDataTypeManager();
         iter = builtIn.getAllDataTypes();
         while (iter.hasNext()) {
@@ -649,7 +664,6 @@ public class MutationService extends BaseService {
             }
         }
 
-        // Common aliases
         switch (typeName.toLowerCase()) {
             case "int":    return new IntegerDataType();
             case "uint":   return new UnsignedIntegerDataType();
@@ -671,7 +685,6 @@ public class MutationService extends BaseService {
             default:       break;
         }
 
-        // Pointer types (e.g. "int *" or "SomeStruct*")
         if (typeName.endsWith("*")) {
             String baseTypeName = typeName.substring(0, typeName.length() - 1).trim();
             DataType baseType = findDataType(dtm, baseTypeName);

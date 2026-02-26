@@ -16,6 +16,7 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.*;
@@ -40,20 +41,17 @@ public class AnalysisService extends BaseService {
     /**
      * Search memory for hex byte patterns with wildcards (??)
      */
-    public String searchBytePatterns(String pattern, String mask) {
+    public Response searchBytePatterns(String pattern, String mask) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
         }
 
         if (pattern == null || pattern.trim().isEmpty()) {
-            return "{\"error\": \"Pattern is required\"}";
+            return Response.err("Pattern is required");
         }
 
         try {
-            StringBuilder result = new StringBuilder();
-            result.append("[");
-
             // Parse hex pattern (e.g., "E8 ?? ?? ?? ??" or "E8????????")
             String cleanPattern = pattern.trim().toUpperCase().replaceAll("\\s+", "");
 
@@ -67,18 +65,17 @@ public class AnalysisService extends BaseService {
                 if (cleanPattern.charAt(i) == '?' ||
                     (i + 1 < cleanPattern.length() && cleanPattern.charAt(i + 1) == '?')) {
                     patternBytes[byteIndex] = 0;
-                    maskBytes[byteIndex] = 0; // Don't check this byte
+                    maskBytes[byteIndex] = 0;
                 } else {
                     String hexByte = cleanPattern.substring(i, Math.min(i + 2, cleanPattern.length()));
                     patternBytes[byteIndex] = (byte) Integer.parseInt(hexByte, 16);
-                    maskBytes[byteIndex] = (byte) 0xFF; // Check this byte
+                    maskBytes[byteIndex] = (byte) 0xFF;
                 }
                 byteIndex++;
             }
 
-            // Search memory for pattern
             Memory memory = program.getMemory();
-            int matchCount = 0;
+            List<Object> matches = new ArrayList<>();
             final int MAX_MATCHES = 1000;
 
             for (MemoryBlock block : memory.getBlocks()) {
@@ -95,47 +92,44 @@ public class AnalysisService extends BaseService {
                 }
 
                 for (int i = 0; i <= blockData.length - patternBytes.length; i++) {
-                    boolean matches = true;
+                    boolean found = true;
                     for (int j = 0; j < patternBytes.length; j++) {
                         if (maskBytes[j] != 0 && blockData[i + j] != patternBytes[j]) {
-                            matches = false;
+                            found = false;
                             break;
                         }
                     }
 
-                    if (matches) {
-                        if (matchCount > 0) result.append(",");
+                    if (found) {
                         Address matchAddr = blockStart.add(i);
-                        result.append("{\"address\": \"").append(matchAddr.toString()).append("\"}");
-                        matchCount++;
+                        matches.add(Map.of("address", matchAddr.toString()));
 
-                        if (matchCount >= MAX_MATCHES) {
-                            result.append(",{\"note\": \"Limited to ").append(MAX_MATCHES).append(" matches\"}");
+                        if (matches.size() >= MAX_MATCHES) {
+                            matches.add(Map.of("note", "Limited to " + MAX_MATCHES + " matches"));
                             break;
                         }
                     }
                 }
 
-                if (matchCount >= MAX_MATCHES) break;
+                if (matches.size() >= MAX_MATCHES) break;
             }
 
-            if (matchCount == 0) {
-                result.append("{\"note\": \"No matches found\"}");
+            if (matches.isEmpty()) {
+                matches.add(Map.of("note", "No matches found"));
             }
 
-            result.append("]");
-            return result.toString();
+            return Response.ok(matches);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
     /**
      * Analyze a data region comprehensively
      */
-    public String analyzeDataRegion(String startAddressStr, int maxScanBytes,
-                                    boolean includeXrefMap, boolean includeAssemblyPatterns,
-                                    boolean includeBoundaryDetection) {
+    public Response analyzeDataRegion(String startAddressStr, int maxScanBytes,
+                                      boolean includeXrefMap, boolean includeAssemblyPatterns,
+                                      boolean includeBoundaryDetection) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
@@ -144,7 +138,7 @@ public class AnalysisService extends BaseService {
         try {
             Address startAddr = program.getAddressFactory().getAddress(startAddressStr);
             if (startAddr == null) {
-                return "{\"error\": \"Invalid address: " + startAddressStr + "\"}";
+                return Response.err("Invalid address: " + startAddressStr);
             }
 
             ReferenceManager refMgr = program.getReferenceManager();
@@ -153,30 +147,28 @@ public class AnalysisService extends BaseService {
             Address endAddr = startAddr;
             Set<String> uniqueXrefs = new HashSet<>();
             int byteCount = 0;
-            StringBuilder xrefMapJson = new StringBuilder();
-            xrefMapJson.append("\"xref_map\": {");
-            boolean firstXrefEntry = true;
+            Map<String, List<String>> xrefMap = includeXrefMap ? new LinkedHashMap<>() : null;
 
             for (int i = 0; i < maxScanBytes; i++) {
                 Address scanAddr = startAddr.add(i);
 
-                // Check for boundary
                 if (includeBoundaryDetection) {
                     Symbol[] symbols = program.getSymbolTable().getSymbols(scanAddr);
                     if (symbols.length > 0 && i > 0) {
+                        boolean hitBoundary = false;
                         for (Symbol sym : symbols) {
                             String name = sym.getName();
                             if (!name.startsWith("DAT_") && !name.equals(startAddr.toString())) {
                                 endAddr = scanAddr.subtract(1);
                                 byteCount = i;
+                                hitBoundary = true;
                                 break;
                             }
                         }
-                        if (byteCount > 0) break;
+                        if (hitBoundary) break;
                     }
                 }
 
-                // Get xrefs
                 ReferenceIterator refIter = refMgr.getReferencesTo(scanAddr);
                 List<String> refsAtThisByte = new ArrayList<>();
 
@@ -188,21 +180,12 @@ public class AnalysisService extends BaseService {
                 }
 
                 if (includeXrefMap && !refsAtThisByte.isEmpty()) {
-                    if (!firstXrefEntry) xrefMapJson.append(",");
-                    firstXrefEntry = false;
-
-                    xrefMapJson.append("\"").append(scanAddr.toString()).append("\": [");
-                    for (int j = 0; j < refsAtThisByte.size(); j++) {
-                        if (j > 0) xrefMapJson.append(",");
-                        xrefMapJson.append("\"").append(refsAtThisByte.get(j)).append("\"");
-                    }
-                    xrefMapJson.append("]");
+                    xrefMap.put(scanAddr.toString(), refsAtThisByte);
                 }
 
                 endAddr = scanAddr;
                 byteCount = i + 1;
             }
-            xrefMapJson.append("}");
 
             // Get current name and type
             Data data = listing.getDataAt(startAddr);
@@ -211,7 +194,6 @@ public class AnalysisService extends BaseService {
             String currentType = (data != null) ?
                                 data.getDataType().getName() : "undefined";
 
-            // Classify
             String classification = "PRIMITIVE";
             if (uniqueXrefs.size() > 3) {
                 classification = "ARRAY";
@@ -219,42 +201,30 @@ public class AnalysisService extends BaseService {
                 classification = "STRUCTURE";
             }
 
-            // Build result
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"start_address\": \"").append(startAddr.toString()).append("\",");
-            result.append("\"end_address\": \"").append(endAddr.toString()).append("\",");
-            result.append("\"byte_span\": ").append(byteCount).append(",");
-
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("start_address", startAddr.toString());
+            result.put("end_address", endAddr.toString());
+            result.put("byte_span", byteCount);
             if (includeXrefMap) {
-                result.append(xrefMapJson.toString()).append(",");
+                result.put("xref_map", xrefMap);
             }
+            result.put("unique_xref_addresses", new ArrayList<>(uniqueXrefs));
+            result.put("xref_count", uniqueXrefs.size());
+            result.put("classification_hint", classification);
+            result.put("current_name", currentName);
+            result.put("current_type", currentType);
 
-            result.append("\"unique_xref_addresses\": [");
-            int idx = 0;
-            for (String xref : uniqueXrefs) {
-                if (idx++ > 0) result.append(",");
-                result.append("\"").append(xref).append("\"");
-            }
-            result.append("],");
-
-            result.append("\"xref_count\": ").append(uniqueXrefs.size()).append(",");
-            result.append("\"classification_hint\": \"").append(classification).append("\",");
-            result.append("\"current_name\": \"").append(escapeJson(currentName)).append("\",");
-            result.append("\"current_type\": \"").append(escapeJson(currentType)).append("\"");
-            result.append("}");
-
-            return result.toString();
+            return Response.ok(result);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
     /**
      * Detect array bounds based on xref analysis
      */
-    public String detectArrayBounds(String addressStr, boolean analyzeLoopBounds,
-                                    boolean analyzeIndexing, int maxScanRange) {
+    public Response detectArrayBounds(String addressStr, boolean analyzeLoopBounds,
+                                      boolean analyzeIndexing, int maxScanRange) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
@@ -263,7 +233,7 @@ public class AnalysisService extends BaseService {
         try {
             Address addr = program.getAddressFactory().getAddress(addressStr);
             if (addr == null) {
-                return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+                return Response.err("Invalid address: " + addressStr);
             }
 
             ReferenceManager refMgr = program.getReferenceManager();
@@ -288,107 +258,92 @@ public class AnalysisService extends BaseService {
                 scanAddr = scanAddr.add(1);
             }
 
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"address\": \"").append(addr.toString()).append("\",");
-            result.append("\"estimated_size\": ").append(estimatedSize).append(",");
-            result.append("\"stride\": 1,");
-            result.append("\"element_count\": ").append(estimatedSize).append(",");
-            result.append("\"confidence\": \"medium\",");
-            result.append("\"detection_method\": \"xref_analysis\"");
-            result.append("}");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("address", addr.toString());
+            result.put("estimated_size", estimatedSize);
+            result.put("stride", 1);
+            result.put("element_count", estimatedSize);
+            result.put("confidence", "medium");
+            result.put("detection_method", "xref_analysis");
 
-            return result.toString();
+            return Response.ok(result);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
     /**
      * Get assembly context around xref sources
      */
-    public String getAssemblyContext(String xrefSourcesStr, int contextInstructions, String includePatterns) {
+    public Response getAssemblyContext(String xrefSourcesStr, int contextInstructions, String includePatterns) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
         }
 
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-
         try {
-            // Parse comma-separated addresses
             String[] addresses = xrefSourcesStr.split(",");
             Listing listing = program.getListing();
-            boolean first = true;
+            Map<String, Object> result = new LinkedHashMap<>();
 
             for (String addrStr : addresses) {
                 addrStr = addrStr.trim();
                 if (addrStr.isEmpty()) continue;
 
-                if (!first) json.append(",");
-                first = false;
-
-                json.append("\"").append(addrStr).append("\": {");
-
+                Map<String, Object> entry = new LinkedHashMap<>();
                 try {
                     Address addr = program.getAddressFactory().getAddress(addrStr);
                     if (addr != null) {
                         Instruction instr = listing.getInstructionAt(addr);
-                        json.append("\"address\": \"").append(addrStr).append("\",");
+                        entry.put("address", addrStr);
 
                         if (instr != null) {
-                            json.append("\"instruction\": \"").append(escapeJson(instr.toString())).append("\",");
+                            entry.put("instruction", instr.toString());
 
-                            // Get context before
-                            json.append("\"context_before\": [");
+                            List<String> contextBefore = new ArrayList<>();
                             Address prevAddr = addr;
                             for (int i = 0; i < contextInstructions; i++) {
                                 Instruction prevInstr = listing.getInstructionBefore(prevAddr);
                                 if (prevInstr == null) break;
                                 prevAddr = prevInstr.getAddress();
-                                if (i > 0) json.append(",");
-                                json.append("\"").append(prevAddr).append(": ").append(escapeJson(prevInstr.toString())).append("\"");
+                                contextBefore.add(prevAddr + ": " + prevInstr.toString());
                             }
-                            json.append("],");
+                            entry.put("context_before", contextBefore);
 
-                            // Get context after
-                            json.append("\"context_after\": [");
+                            List<String> contextAfter = new ArrayList<>();
                             Address nextAddr = addr;
                             for (int i = 0; i < contextInstructions; i++) {
                                 Instruction nextInstr = listing.getInstructionAfter(nextAddr);
                                 if (nextInstr == null) break;
                                 nextAddr = nextInstr.getAddress();
-                                if (i > 0) json.append(",");
-                                json.append("\"").append(nextAddr).append(": ").append(escapeJson(nextInstr.toString())).append("\"");
+                                contextAfter.add(nextAddr + ": " + nextInstr.toString());
                             }
-                            json.append("],");
+                            entry.put("context_after", contextAfter);
 
-                            json.append("\"mnemonic\": \"").append(instr.getMnemonicString()).append("\"");
+                            entry.put("mnemonic", instr.getMnemonicString());
                         } else {
-                            json.append("\"error\": \"No instruction at address\"");
+                            entry.put("error", "No instruction at address");
                         }
                     } else {
-                        json.append("\"error\": \"Invalid address\"");
+                        entry.put("error", "Invalid address");
                     }
                 } catch (Exception e) {
-                    json.append("\"error\": \"").append(escapeJson(e.getMessage())).append("\"");
+                    entry.put("error", e.getMessage());
                 }
 
-                json.append("}");
+                result.put(addrStr, entry);
             }
-        } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
-        }
 
-        json.append("}");
-        return json.toString();
+            return Response.ok(result);
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
     }
 
     /**
      * Analyze how structure fields are accessed
      */
-    public String analyzeStructFieldUsage(String addressStr, String structName, int maxFunctions) {
+    public Response analyzeStructFieldUsage(String addressStr, String structName, int maxFunctions) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
@@ -397,10 +352,9 @@ public class AnalysisService extends BaseService {
         try {
             Address addr = program.getAddressFactory().getAddress(addressStr);
             if (addr == null) {
-                return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+                return Response.err("Invalid address: " + addressStr);
             }
 
-            // Get xrefs to understand usage
             ReferenceManager refMgr = program.getReferenceManager();
             ReferenceIterator refIter = refMgr.getReferencesTo(addr);
 
@@ -417,29 +371,22 @@ public class AnalysisService extends BaseService {
                 }
             }
 
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"struct_address\": \"").append(addr.toString()).append("\",");
-            result.append("\"struct_name\": ").append(structName != null ? "\"" + escapeJson(structName) + "\"" : "null").append(",");
-            result.append("\"functions_analyzed\": ").append(referencingFunctions.size()).append(",");
-            result.append("\"referencing_functions\": [");
-            for (int i = 0; i < referencingFunctions.size(); i++) {
-                if (i > 0) result.append(",");
-                result.append("\"").append(escapeJson(referencingFunctions.get(i))).append("\"");
-            }
-            result.append("]");
-            result.append("}");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("struct_address", addr.toString());
+            result.put("struct_name", structName);
+            result.put("functions_analyzed", referencingFunctions.size());
+            result.put("referencing_functions", referencingFunctions);
 
-            return result.toString();
+            return Response.ok(result);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
     /**
      * Get field access context for a structure field
      */
-    public String getFieldAccessContext(String structAddressStr, int fieldOffset, int numExamples) {
+    public Response getFieldAccessContext(String structAddressStr, int fieldOffset, int numExamples) {
         Program program = resolveProgram(null);
         if (program == null) {
             return programNotFoundError(null);
@@ -448,14 +395,14 @@ public class AnalysisService extends BaseService {
         try {
             Address structAddr = program.getAddressFactory().getAddress(structAddressStr);
             if (structAddr == null) {
-                return "{\"error\": \"Invalid address: " + structAddressStr + "\"}";
+                return Response.err("Invalid address: " + structAddressStr);
             }
 
             Address fieldAddr = structAddr.add(fieldOffset);
             ReferenceManager refMgr = program.getReferenceManager();
             ReferenceIterator refIter = refMgr.getReferencesTo(fieldAddr);
 
-            List<String> examples = new ArrayList<>();
+            List<Map<String, String>> examples = new ArrayList<>();
             Listing listing = program.getListing();
 
             while (refIter.hasNext() && examples.size() < numExamples) {
@@ -464,35 +411,27 @@ public class AnalysisService extends BaseService {
                 Instruction instr = listing.getInstructionAt(fromAddr);
                 Function func = program.getFunctionManager().getFunctionContaining(fromAddr);
 
-                StringBuilder example = new StringBuilder();
-                example.append("{\"from_address\": \"").append(fromAddr.toString()).append("\"");
-                example.append(", \"ref_type\": \"").append(ref.getReferenceType().getName()).append("\"");
+                Map<String, String> example = new LinkedHashMap<>();
+                example.put("from_address", fromAddr.toString());
+                example.put("ref_type", ref.getReferenceType().getName());
                 if (instr != null) {
-                    example.append(", \"instruction\": \"").append(escapeJson(instr.toString())).append("\"");
+                    example.put("instruction", instr.toString());
                 }
                 if (func != null) {
-                    example.append(", \"function\": \"").append(escapeJson(func.getName())).append("\"");
+                    example.put("function", func.getName());
                 }
-                example.append("}");
-                examples.add(example.toString());
+                examples.add(example);
             }
 
-            StringBuilder result = new StringBuilder();
-            result.append("{");
-            result.append("\"struct_address\": \"").append(structAddr.toString()).append("\",");
-            result.append("\"field_offset\": ").append(fieldOffset).append(",");
-            result.append("\"field_address\": \"").append(fieldAddr.toString()).append("\",");
-            result.append("\"examples\": [");
-            for (int i = 0; i < examples.size(); i++) {
-                if (i > 0) result.append(",");
-                result.append(examples.get(i));
-            }
-            result.append("]");
-            result.append("}");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("struct_address", structAddr.toString());
+            result.put("field_offset", fieldOffset);
+            result.put("field_address", fieldAddr.toString());
+            result.put("examples", examples);
 
-            return result.toString();
+            return Response.ok(result);
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 }

@@ -16,10 +16,12 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -39,7 +41,7 @@ public class CommentService extends BaseService {
      * Set a decompiler (PRE) comment at an address.
      * Endpoint: /set_decompiler_comment
      */
-    public String setDecompilerComment(String addressStr, String comment) {
+    public Response setDecompilerComment(String addressStr, String comment) {
         return setComment(addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
     }
 
@@ -47,7 +49,7 @@ public class CommentService extends BaseService {
      * Set a disassembly (EOL) comment at an address.
      * Endpoint: /set_disassembly_comment
      */
-    public String setDisassemblyComment(String addressStr, String comment) {
+    public Response setDisassemblyComment(String addressStr, String comment) {
         return setComment(addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
     }
 
@@ -55,21 +57,21 @@ public class CommentService extends BaseService {
      * Set a plate comment on a function.
      * Endpoint: /set_plate_comment
      */
-    public String setPlateComment(String functionAddress, String comment) {
+    public Response setPlateComment(String functionAddress, String comment) {
         Program program = resolveProgram(null);
         if (program == null) {
-            return "Error: No program loaded";
+            return programNotFoundError(null);
         }
         if (functionAddress == null || functionAddress.isEmpty()) {
-            return "Error: Function address is required";
+            return Response.err("Function address is required");
         }
         if (comment == null) {
-            return "Error: Comment is required";
+            return Response.err("Comment is required");
         }
 
         Address addr = parseAddress(program, functionAddress);
         if (addr == null) {
-            return "Error: Invalid address: " + functionAddress;
+            return Response.err("Invalid address: " + functionAddress);
         }
 
         try {
@@ -79,15 +81,16 @@ public class CommentService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "Error: No function found at address: " + functionAddress;
+                    return Response.err("No function found at address: " + functionAddress);
                 }
 
                 Listing listing = program.getListing();
                 listing.setComment(func.getEntryPoint(), CodeUnit.PLATE_COMMENT, comment);
-                return "Success: Set plate comment for " + func.getName();
+                return Response.ok(Map.of("status", "success",
+                        "message", "Set plate comment for " + func.getName()));
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -100,21 +103,21 @@ public class CommentService extends BaseService {
      * @param disassemblyComments List of {address, comment} maps for EOL_COMMENT
      * @param plateComment  Plate comment text (may be null)
      */
-    public String batchSetComments(String functionAddress,
-                                   List<Map<String, String>> decompilerComments,
-                                   List<Map<String, String>> disassemblyComments,
-                                   String plateComment) {
+    public Response batchSetComments(String functionAddress,
+                                     List<Map<String, String>> decompilerComments,
+                                     List<Map<String, String>> disassemblyComments,
+                                     String plateComment) {
         Program program = resolveProgram(null);
         if (program == null) {
-            return "{\"error\": \"No program loaded\"}";
+            return programNotFoundError(null);
         }
         if (functionAddress == null || functionAddress.isEmpty()) {
-            return "{\"error\": \"Function address is required\"}";
+            return Response.err("Function address is required");
         }
 
         Address addr = parseAddress(program, functionAddress);
         if (addr == null) {
-            return "{\"error\": \"Invalid address: " + escapeJson(functionAddress) + "\"}";
+            return Response.err("Invalid address: " + functionAddress);
         }
 
         try {
@@ -124,7 +127,7 @@ public class CommentService extends BaseService {
                     func = program.getFunctionManager().getFunctionContaining(addr);
                 }
                 if (func == null) {
-                    return "{\"error\": \"No function found at address: " + escapeJson(functionAddress) + "\"}";
+                    return Response.err("No function found at address: " + functionAddress);
                 }
 
                 Listing listing = program.getListing();
@@ -132,13 +135,11 @@ public class CommentService extends BaseService {
                 int decompilerSet = 0;
                 int disassemblySet = 0;
 
-                // Set plate comment if provided
                 if (plateComment != null && !plateComment.isEmpty() && !plateComment.equals("null")) {
                     listing.setComment(func.getEntryPoint(), CodeUnit.PLATE_COMMENT, plateComment);
                     plateSet = 1;
                 }
 
-                // Set decompiler comments (PRE_COMMENT)
                 if (decompilerComments != null) {
                     for (Map<String, String> entry : decompilerComments) {
                         String addrStr = entry.get("address");
@@ -153,7 +154,6 @@ public class CommentService extends BaseService {
                     }
                 }
 
-                // Set disassembly comments (EOL_COMMENT)
                 if (disassemblyComments != null) {
                     for (Map<String, String> entry : disassemblyComments) {
                         String addrStr = entry.get("address");
@@ -168,12 +168,15 @@ public class CommentService extends BaseService {
                     }
                 }
 
-                return "{\"success\": true, \"plate_comments_set\": " + plateSet +
-                       ", \"decompiler_comments_set\": " + decompilerSet +
-                       ", \"disassembly_comments_set\": " + disassemblySet + "}";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("plate_comments_set", plateSet);
+                result.put("decompiler_comments_set", decompilerSet);
+                result.put("disassembly_comments_set", disassemblySet);
+                return Response.ok(result);
             });
         } catch (Exception e) {
-            return "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            return Response.err(e.getMessage());
         }
     }
 
@@ -181,25 +184,26 @@ public class CommentService extends BaseService {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    private String setComment(String addressStr, String comment, int commentType, String transactionName) {
+    private Response setComment(String addressStr, String comment, int commentType, String transactionName) {
         Program program = resolveProgram(null);
         if (program == null) {
-            return "Error: No program loaded";
+            return programNotFoundError(null);
         }
 
         Address addr = parseAddress(program, addressStr);
         if (addr == null) {
-            return "Error: Invalid address: " + addressStr;
+            return Response.err("Invalid address: " + addressStr);
         }
 
         try {
             return threadingStrategy.executeWrite(program, transactionName, () -> {
                 Listing listing = program.getListing();
                 listing.setComment(addr, commentType, comment);
-                return "Success: Set comment at " + addressStr;
+                return Response.ok(Map.of("status", "success",
+                        "message", "Set comment at " + addressStr));
             });
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 }

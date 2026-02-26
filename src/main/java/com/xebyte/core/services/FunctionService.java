@@ -16,6 +16,7 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -50,7 +51,7 @@ public class FunctionService extends BaseService {
      * Get function info at a specific address.
      * Endpoint: /get_function_by_address
      */
-    public String getFunctionByAddress(String addressStr, String programName) {
+    public Response getFunctionByAddress(String addressStr, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -58,7 +59,7 @@ public class FunctionService extends BaseService {
 
         Address addr = parseAddress(program, addressStr);
         if (addr == null) {
-            return "{\"error\": \"Invalid address: " + addressStr + "\"}";
+            return Response.err("Invalid address: " + addressStr);
         }
 
         Function func = program.getFunctionManager().getFunctionAt(addr);
@@ -67,17 +68,15 @@ public class FunctionService extends BaseService {
         }
 
         if (func == null) {
-            return "{\"error\": \"No function found at address: " + addressStr + "\"}";
+            return Response.err("No function found at address: " + addressStr);
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"name\": \"").append(escapeJson(func.getName())).append("\",");
-        sb.append("\"address\": \"").append(func.getEntryPoint().toString()).append("\",");
-        sb.append("\"signature\": \"").append(escapeJson(func.getSignature().getPrototypeString())).append("\",");
-        sb.append("\"calling_convention\": \"").append(escapeJson(func.getCallingConventionName())).append("\"");
-        sb.append("}");
-        return sb.toString();
+        Map<String, String> info = new LinkedHashMap<>();
+        info.put("name", func.getName());
+        info.put("address", func.getEntryPoint().toString());
+        info.put("signature", func.getSignature().getPrototypeString());
+        info.put("calling_convention", func.getCallingConventionName());
+        return Response.ok(info);
     }
 
     // =========================================================================
@@ -88,7 +87,7 @@ public class FunctionService extends BaseService {
      * Decompile a function by address or name.
      * Endpoint: /decompile_function
      */
-    public String decompileFunction(String addressStr, String name, String programName) {
+    public Response decompileFunction(String addressStr, String name, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -96,7 +95,7 @@ public class FunctionService extends BaseService {
 
         Function func = resolveFunction(program, addressStr, name);
         if (func == null) {
-            return "Error: Function not found";
+            return Response.err("Function not found");
         }
 
         try {
@@ -107,16 +106,16 @@ public class FunctionService extends BaseService {
 
             if (results == null || !results.decompileCompleted()) {
                 String errorMsg = results != null ? results.getErrorMessage() : "Unknown error";
-                return "Error: Decompilation failed - " + errorMsg;
+                return Response.err("Decompilation failed - " + errorMsg);
             }
 
             String decompiled = results.getDecompiledFunction().getC();
             decompiler.dispose();
 
-            return decompiled != null ? decompiled : "Error: No decompiled output";
+            return decompiled != null ? Response.text(decompiled) : Response.err("No decompiled output");
 
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return Response.err(e.getMessage());
         }
     }
 
@@ -124,7 +123,7 @@ public class FunctionService extends BaseService {
      * Disassemble a function at an address.
      * Endpoint: /disassemble_function
      */
-    public String disassembleFunction(String addressStr, String programName) {
+    public Response disassembleFunction(String addressStr, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -132,7 +131,7 @@ public class FunctionService extends BaseService {
 
         Address addr = parseAddress(program, addressStr);
         if (addr == null) {
-            return "Error: Invalid address: " + addressStr;
+            return Response.err("Invalid address: " + addressStr);
         }
 
         Function func = program.getFunctionManager().getFunctionAt(addr);
@@ -141,7 +140,7 @@ public class FunctionService extends BaseService {
         }
 
         if (func == null) {
-            return "Error: No function found at address: " + addressStr;
+            return Response.err("No function found at address: " + addressStr);
         }
 
         List<String> lines = new ArrayList<>();
@@ -158,14 +157,14 @@ public class FunctionService extends BaseService {
             lines.add(line);
         }
 
-        return String.join("\n", lines);
+        return Response.text(String.join("\n", lines));
     }
 
     /**
      * Force re-decompilation of a function (bypasses cache).
      * Endpoint: /force_decompile
      */
-    public String forceDecompile(String address, String name, String programName) {
+    public Response forceDecompile(String address, String name, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -173,7 +172,7 @@ public class FunctionService extends BaseService {
 
         Function func = resolveFunction(program, address, name);
         if (func == null) {
-            return "{\"error\": \"Function not found\"}";
+            return Response.err("Function not found");
         }
 
         DecompInterface decompiler = new DecompInterface();
@@ -182,11 +181,11 @@ public class FunctionService extends BaseService {
             DecompileResults results = decompiler.decompileFunction(func, DECOMPILE_TIMEOUT_SECONDS, monitor);
 
             if (results == null || !results.decompileCompleted()) {
-                return "{\"error\": \"Decompilation failed\"}";
+                return Response.err("Decompilation failed");
             }
 
             String code = results.getDecompiledFunction().getC();
-            return code != null ? code : "{\"error\": \"No decompiled code available\"}";
+            return code != null ? Response.text(code) : Response.err("No decompiled code available");
         } finally {
             decompiler.dispose();
         }
@@ -200,19 +199,19 @@ public class FunctionService extends BaseService {
      * Get all functions called by a function (callees).
      * Endpoint: /get_function_callees
      */
-    public String getFunctionCallees(String functionName, int offset, int limit, String programName) {
+    public Response getFunctionCallees(String functionName, int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
         }
 
         if (functionName == null || functionName.isEmpty()) {
-            return "{\"error\": \"Function name is required\"}";
+            return Response.err("Function name is required");
         }
 
         Function func = findFunctionByName(program, functionName);
         if (func == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
+            return Response.err("Function not found: " + functionName);
         }
 
         Set<Function> callees = new LinkedHashSet<>();
@@ -245,19 +244,19 @@ public class FunctionService extends BaseService {
      * Get all functions that call a function (callers).
      * Endpoint: /get_function_callers
      */
-    public String getFunctionCallers(String functionName, int offset, int limit, String programName) {
+    public Response getFunctionCallers(String functionName, int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
         }
 
         if (functionName == null || functionName.isEmpty()) {
-            return "{\"error\": \"Function name is required\"}";
+            return Response.err("Function name is required");
         }
 
         Function func = findFunctionByName(program, functionName);
         if (func == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
+            return Response.err("Function not found: " + functionName);
         }
 
         Set<Function> callers = new LinkedHashSet<>();
@@ -290,52 +289,45 @@ public class FunctionService extends BaseService {
      * Get all variables (parameters and locals) for a function.
      * Endpoint: /get_function_variables
      */
-    public String getFunctionVariables(String functionName, String programName) {
+    public Response getFunctionVariables(String functionName, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
         }
 
         if (functionName == null || functionName.isEmpty()) {
-            return "{\"error\": \"Function name is required\"}";
+            return Response.err("Function name is required");
         }
 
         Function func = findFunctionByName(program, functionName);
         if (func == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(functionName) + "\"}";
+            return Response.err("Function not found: " + functionName);
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"function\": \"").append(escapeJson(func.getName())).append("\", ");
-        sb.append("\"parameters\": [");
-
-        Parameter[] params = func.getParameters();
-        for (int i = 0; i < params.length; i++) {
-            if (i > 0) sb.append(", ");
-            Parameter p = params[i];
-            sb.append("{");
-            sb.append("\"name\": \"").append(escapeJson(p.getName())).append("\", ");
-            sb.append("\"type\": \"").append(escapeJson(p.getDataType().getName())).append("\", ");
-            sb.append("\"ordinal\": ").append(p.getOrdinal()).append(", ");
-            sb.append("\"storage\": \"").append(escapeJson(p.getVariableStorage().toString())).append("\"");
-            sb.append("}");
+        List<Object> params = new ArrayList<>();
+        for (Parameter p : func.getParameters()) {
+            params.add(new Object() {
+                final String name = p.getName();
+                final String type = p.getDataType().getName();
+                final int ordinal = p.getOrdinal();
+                final String storage = p.getVariableStorage().toString();
+            });
         }
 
-        sb.append("], \"locals\": [");
-
-        Variable[] locals = func.getLocalVariables();
-        for (int i = 0; i < locals.length; i++) {
-            if (i > 0) sb.append(", ");
-            Variable v = locals[i];
-            sb.append("{");
-            sb.append("\"name\": \"").append(escapeJson(v.getName())).append("\", ");
-            sb.append("\"type\": \"").append(escapeJson(v.getDataType().getName())).append("\", ");
-            sb.append("\"storage\": \"").append(escapeJson(v.getVariableStorage().toString())).append("\"");
-            sb.append("}");
+        List<Object> locals = new ArrayList<>();
+        for (Variable v : func.getLocalVariables()) {
+            locals.add(new Object() {
+                final String name = v.getName();
+                final String type = v.getDataType().getName();
+                final String storage = v.getVariableStorage().toString();
+            });
         }
 
-        sb.append("]}");
-        return sb.toString();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("function", func.getName());
+        result.put("parameters", params);
+        result.put("locals", locals);
+        return Response.ok(result);
     }
 
     // =========================================================================
@@ -346,9 +338,9 @@ public class FunctionService extends BaseService {
      * Comprehensive function analysis in a single call.
      * Endpoint: /analyze_function_complete
      */
-    public String analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
-                                          boolean includeCallers, boolean includeDisasm,
-                                          boolean includeVariables, String programName) {
+    public Response analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
+                                            boolean includeCallers, boolean includeDisasm,
+                                            boolean includeVariables, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -356,87 +348,66 @@ public class FunctionService extends BaseService {
 
         Function func = findFunctionByName(program, name);
         if (func == null) {
-            return "{\"error\": \"Function not found: " + escapeJson(name) + "\"}";
+            return Response.err("Function not found: " + name);
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-
-        // Basic info
-        sb.append("\"name\": \"").append(escapeJson(func.getName())).append("\"");
-        sb.append(", \"address\": \"").append(func.getEntryPoint()).append("\"");
-        sb.append(", \"signature\": \"").append(escapeJson(func.getSignature().getPrototypeString())).append("\"");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("name", func.getName());
+        result.put("address", func.getEntryPoint().toString());
+        result.put("signature", func.getSignature().getPrototypeString());
 
         // Decompiled code
-        String decompiled = decompileFunction(null, name, programName);
-        sb.append(", \"decompiled_code\": \"").append(escapeJson(decompiled)).append("\"");
+        Response decompResponse = decompileFunction(null, name, programName);
+        result.put("decompiled_code", extractText(decompResponse));
 
         // Xrefs
         if (includeXrefs) {
-            sb.append(", \"xrefs\": [");
+            List<Object> xrefs = new ArrayList<>();
             ReferenceManager refMgr = program.getReferenceManager();
             int count = 0;
             for (Reference ref : refMgr.getReferencesTo(func.getEntryPoint())) {
-                if (count > 0) sb.append(", ");
-                sb.append("{\"from\": \"").append(ref.getFromAddress()).append("\"");
-                sb.append(", \"type\": \"").append(ref.getReferenceType()).append("\"}");
+                Map<String, String> xrefEntry = new LinkedHashMap<>();
+                xrefEntry.put("from", ref.getFromAddress().toString());
+                xrefEntry.put("type", ref.getReferenceType().toString());
+                xrefs.add(xrefEntry);
                 if (++count >= 50) break;
             }
-            sb.append("]");
+            result.put("xrefs", xrefs);
         }
 
         // Callees
         if (includeCallees) {
-            String callees = getFunctionCallees(name, 0, 50, programName);
-            sb.append(", \"callees\": [");
-            String[] lines = callees.split("\n");
-            boolean first = true;
-            for (String line : lines) {
-                if (line.isEmpty() || line.contains("error")) continue;
-                if (!first) sb.append(", ");
-                sb.append("\"").append(escapeJson(line)).append("\"");
-                first = false;
-            }
-            sb.append("]");
+            result.put("callees", extractLines(getFunctionCallees(name, 0, 50, programName)));
         }
 
         // Callers
         if (includeCallers) {
-            String callers = getFunctionCallers(name, 0, 50, programName);
-            sb.append(", \"callers\": [");
-            String[] lines = callers.split("\n");
-            boolean first = true;
-            for (String line : lines) {
-                if (line.isEmpty() || line.contains("error")) continue;
-                if (!first) sb.append(", ");
-                sb.append("\"").append(escapeJson(line)).append("\"");
-                first = false;
-            }
-            sb.append("]");
+            result.put("callers", extractLines(getFunctionCallers(name, 0, 50, programName)));
         }
 
         // Disassembly
         if (includeDisasm) {
-            String disasm = disassembleFunction(func.getEntryPoint().toString(), programName);
-            sb.append(", \"disassembly\": \"").append(escapeJson(disasm)).append("\"");
+            Response disasmResponse = disassembleFunction(func.getEntryPoint().toString(), programName);
+            result.put("disassembly", extractText(disasmResponse));
         }
 
         // Variables
         if (includeVariables) {
-            String vars = getFunctionVariables(name, programName);
-            sb.append(", \"variables\": ").append(vars);
+            Response varsResponse = getFunctionVariables(name, programName);
+            if (varsResponse instanceof Response.Ok(var data)) {
+                result.put("variables", data);
+            }
         }
 
-        sb.append("}");
-        return sb.toString();
+        return Response.ok(result);
     }
 
     /**
      * Find the next undefined/unnamed function based on criteria.
      * Endpoint: /find_next_undefined_function
      */
-    public String findNextUndefinedFunction(String startAddress, String criteria,
-                                            String pattern, String direction, String programName) {
+    public Response findNextUndefinedFunction(String startAddress, String criteria,
+                                              String pattern, String direction, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -459,20 +430,19 @@ public class FunctionService extends BaseService {
         FunctionIterator funcIter = fm.getFunctions(startAddr, ascending);
         while (funcIter.hasNext()) {
             Function func = funcIter.next();
-            String name = func.getName();
+            String funcName = func.getName();
 
-            if (name.contains(searchPattern)) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("{\"found\": true");
-                sb.append(", \"name\": \"").append(escapeJson(name)).append("\"");
-                sb.append(", \"address\": \"").append(func.getEntryPoint()).append("\"");
-                sb.append(", \"signature\": \"").append(escapeJson(func.getSignature().getPrototypeString())).append("\"");
-                sb.append("}");
-                return sb.toString();
+            if (funcName.contains(searchPattern)) {
+                Map<String, Object> found = new LinkedHashMap<>();
+                found.put("found", true);
+                found.put("name", funcName);
+                found.put("address", func.getEntryPoint().toString());
+                found.put("signature", func.getSignature().getPrototypeString());
+                return Response.ok(found);
             }
         }
 
-        return "{\"found\": false}";
+        return Response.ok(Map.of("found", false));
     }
 
     // =========================================================================
@@ -513,5 +483,23 @@ public class FunctionService extends BaseService {
         }
 
         return func;
+    }
+
+    /** Extract text content from a Response, returning error message if not text/ok. */
+    private String extractText(Response response) {
+        return switch (response) {
+            case Response.Text(var content) -> content;
+            case Response.Err(var message) -> "Error: " + message;
+            case Response.Ok(var data) -> data.toString();
+        };
+    }
+
+    /** Extract newline-delimited text as a list of non-empty strings. */
+    private List<String> extractLines(Response response) {
+        String text = extractText(response);
+        if (text == null || text.isEmpty()) return List.of();
+        return Arrays.stream(text.split("\n"))
+            .filter(line -> !line.isEmpty())
+            .collect(Collectors.toList());
     }
 }

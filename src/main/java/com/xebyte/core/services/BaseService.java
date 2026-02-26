@@ -16,6 +16,7 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
@@ -28,7 +29,7 @@ import java.util.List;
  * Base class for shared service implementations.
  *
  * Provides common utilities used by all domain services: program resolution,
- * error formatting, JSON escaping, and pagination. Parameterized by
+ * error formatting, and pagination. Parameterized by
  * {@link ProgramProvider} and {@link ThreadingStrategy} so the same service
  * code works in both GUI and headless mode.
  */
@@ -52,40 +53,28 @@ public abstract class BaseService {
     }
 
     /**
-     * Return a JSON error string when a program cannot be found.
+     * Return a Response.Err when a program cannot be found.
      */
-    protected String programNotFoundError(String programName) {
+    protected Response.Err programNotFoundError(String programName) {
         if (programName != null && !programName.isEmpty()) {
-            return "{\"error\": \"Program not found: " + escapeJson(programName) + "\"}";
+            return Response.err("Program not found: " + programName);
         }
-        return "{\"error\": \"No program currently loaded\"}";
+        return Response.err("No program currently loaded");
     }
 
     /**
-     * Paginate a list of pre-formatted strings.
+     * Paginate a list of pre-formatted strings. Returns Text response with newline-delimited items.
      */
-    protected String paginateList(List<String> items, int offset, int limit) {
+    protected Response paginateList(List<String> items, int offset, int limit) {
         if (items.isEmpty()) {
-            return "";
+            return Response.text("");
         }
         int start = Math.max(0, offset);
         int end = Math.min(items.size(), start + limit);
         if (start >= items.size()) {
-            return "";
+            return Response.text("");
         }
-        return String.join("\n", items.subList(start, end));
-    }
-
-    /**
-     * Escape a string for safe inclusion in a JSON value.
-     */
-    protected String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+        return Response.text(String.join("\n", items.subList(start, end)));
     }
 
     /**

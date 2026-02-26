@@ -17,7 +17,9 @@ package com.xebyte.headless;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.xebyte.core.JsonHelper;
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import com.xebyte.core.services.CommentService;
 import com.xebyte.core.services.FunctionService;
@@ -1054,6 +1056,15 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    private void sendResponse(HttpExchange exchange, Response response) throws IOException {
+        String body = switch (response) {
+            case Response.Ok(var data)     -> JsonHelper.toJson(data);
+            case Response.Err(var message) -> JsonHelper.toJson(Map.of("error", message));
+            case Response.Text(var text)   -> text;
+        };
+        sendResponse(exchange, body);
     }
 
     private Map<String, String> parseQueryParams(HttpExchange exchange) {

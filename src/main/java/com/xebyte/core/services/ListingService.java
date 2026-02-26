@@ -16,6 +16,7 @@
 package com.xebyte.core.services;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
@@ -41,7 +42,7 @@ public class ListingService extends BaseService {
      * List all function names (paginated).
      * Endpoint: /list_methods
      */
-    public String listMethods(int offset, int limit, String programName) {
+    public Response listMethods(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -58,7 +59,7 @@ public class ListingService extends BaseService {
      * List all functions with name and address.
      * Endpoint: /list_functions
      */
-    public String listFunctions(String programName) {
+    public Response listFunctions(String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -68,14 +69,14 @@ public class ListingService extends BaseService {
         for (Function f : program.getFunctionManager().getFunctions(true)) {
             lines.add(f.getName() + " @ " + f.getEntryPoint().toString());
         }
-        return String.join("\n", lines);
+        return Response.text(String.join("\n", lines));
     }
 
     /**
      * List all class/namespace names (paginated).
      * Endpoint: /list_classes
      */
-    public String listClasses(int offset, int limit, String programName) {
+    public Response listClasses(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -97,7 +98,7 @@ public class ListingService extends BaseService {
      * List memory segments/blocks (paginated).
      * Endpoint: /list_segments
      */
-    public String listSegments(int offset, int limit, String programName) {
+    public Response listSegments(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -114,7 +115,7 @@ public class ListingService extends BaseService {
      * List imported symbols (paginated).
      * Endpoint: /list_imports
      */
-    public String listImports(int offset, int limit, String programName) {
+    public Response listImports(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -131,7 +132,7 @@ public class ListingService extends BaseService {
      * List exported entry point symbols (paginated).
      * Endpoint: /list_exports
      */
-    public String listExports(int offset, int limit, String programName) {
+    public Response listExports(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -153,7 +154,7 @@ public class ListingService extends BaseService {
      * List all namespaces (paginated, full paths).
      * Endpoint: /list_namespaces
      */
-    public String listNamespaces(int offset, int limit, String programName) {
+    public Response listNamespaces(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -176,7 +177,7 @@ public class ListingService extends BaseService {
      * List defined data items (paginated).
      * Endpoint: /list_data_items
      */
-    public String listDataItems(int offset, int limit, String programName) {
+    public Response listDataItems(int offset, int limit, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -203,14 +204,14 @@ public class ListingService extends BaseService {
             lines.add(name + " @ " + data.getAddress() + " [" + type + "]");
             count++;
         }
-        return String.join("\n", lines);
+        return Response.text(String.join("\n", lines));
     }
 
     /**
      * List defined strings with optional filter (paginated).
      * Endpoint: /list_strings
      */
-    public String listStrings(int offset, int limit, String filter, String programName) {
+    public Response listStrings(int offset, int limit, String filter, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -231,7 +232,7 @@ public class ListingService extends BaseService {
                 String strValue = value != null ? value.toString() : "";
 
                 if (filter == null || filter.isEmpty() || strValue.contains(filter)) {
-                    lines.add(data.getAddress() + ": \"" + escapeJson(strValue) + "\"");
+                    lines.add(data.getAddress() + ": \"" + strValue + "\"");
                 }
             }
         }
@@ -243,7 +244,7 @@ public class ListingService extends BaseService {
      * List data types with optional category filter (paginated).
      * Endpoint: /list_data_types
      */
-    public String listDataTypes(int offset, int limit, String category, String programName) {
+    public Response listDataTypes(int offset, int limit, String category, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -271,7 +272,7 @@ public class ListingService extends BaseService {
      * List defined data items sorted by xref count (paginated).
      * Endpoint: /list_data_items_by_xrefs
      */
-    public String listDataItemsByXrefs(int offset, int limit, String format, String programName) {
+    public Response listDataItemsByXrefs(int offset, int limit, String format, String programName) {
         Program program = resolveProgram(programName);
         if (program == null) {
             return programNotFoundError(programName);
@@ -321,7 +322,7 @@ public class ListingService extends BaseService {
         }
     }
 
-    private String formatDataItemsAsText(List<DataItemInfo> dataItems, int offset, int limit) {
+    private Response formatDataItemsAsText(List<DataItemInfo> dataItems, int offset, int limit) {
         List<String> lines = new ArrayList<>();
         int start = Math.min(offset, dataItems.size());
         int end = Math.min(start + limit, dataItems.size());
@@ -330,22 +331,24 @@ public class ListingService extends BaseService {
             String sizeStr = (item.length == 1) ? "1 byte" : item.length + " bytes";
             lines.add(item.label + " @ " + item.address + " [" + item.typeName + "] (" + sizeStr + ") - " + item.xrefCount + " xrefs");
         }
-        return String.join("\n", lines);
+        return Response.text(String.join("\n", lines));
     }
 
-    private String formatDataItemsAsJson(List<DataItemInfo> dataItems, int offset, int limit) {
-        StringBuilder json = new StringBuilder("[");
+    private Response formatDataItemsAsJson(List<DataItemInfo> dataItems, int offset, int limit) {
         int start = Math.min(offset, dataItems.size());
         int end = Math.min(start + limit, dataItems.size());
+        List<Object> items = new ArrayList<>();
         for (int i = start; i < end; i++) {
-            if (i > start) json.append(",");
             DataItemInfo item = dataItems.get(i);
             String sizeStr = (item.length == 1) ? "1 byte" : item.length + " bytes";
-            json.append("\n  {\"address\": \"").append(item.address).append("\", \"name\": \"").append(escapeJson(item.label))
-                .append("\", \"type\": \"").append(escapeJson(item.typeName)).append("\", \"size\": \"").append(sizeStr)
-                .append("\", \"xref_count\": ").append(item.xrefCount).append("}");
+            items.add(new LinkedHashMap<>(Map.of(
+                "address", item.address,
+                "name", item.label,
+                "type", item.typeName,
+                "size", sizeStr,
+                "xref_count", item.xrefCount
+            )));
         }
-        json.append("\n]");
-        return json.toString();
+        return Response.ok(items);
     }
 }
