@@ -122,3 +122,61 @@ _mcp_inline_CrossMatchByBytes not found by 38876517 [5]
 
 **Likely cause**: The `_mcp_inline_` prefix or the temporary compilation context may
 interfere with OSGi bundle resolution for imported packages.
+
+---
+
+## 10. Multi-program tools fail with "Endpoint not found: //switch_program"
+
+**Status**: Open.
+
+**Problem**: `switch_program`, `open_program`, `list_open_programs`, and
+`get_current_program_info` all fail with double-slash path errors:
+
+```
+{"error": "Endpoint not found: //switch_program"}
+{"error": "Endpoint not found: //list_open_programs"}
+{"error": "Endpoint not found: //open_program"}
+{"error": "Endpoint not found: //get_current_program_info"}
+```
+
+**Root cause**: `DEFAULT_GHIDRA_SERVER` is `"http://127.0.0.1:8089/"` (trailing `/`).
+These tool functions construct URLs with f-strings:
+
+```python
+url = f"{ghidra_server_url}/switch_program"  # → http://127.0.0.1:8089//switch_program
+```
+
+In `make_request()`, the UDS path extracts `endpoint = urlparse(url).path` which yields
+`//switch_program`. The Java `EndpointRouter` registers `/switch_program` (single slash)
+and doesn't match.
+
+Most other tools use `safe_get()` / `safe_post()` which call `urljoin()` and avoid this,
+but the multi-program tools at lines 5514, 5574, 5639 use raw f-strings.
+
+**Fix**: Either:
+- Remove trailing `/` from `DEFAULT_GHIDRA_SERVER` (line 27)
+- Or use `urljoin()` / `safe_get()` in the multi-program tools
+- Or strip leading double slashes in `make_request()` before passing to UDS
+
+**Impact**: All multi-program workflows are broken when using UDS transport — cannot switch
+between programs, cannot list open programs, cannot open programs from the project.
+
+---
+
+## 11. `save_program` fails with "Unable to lock due to active transaction"
+
+**Status**: Open.
+
+**Problem**: `save_program` returns `{"error": "Unable to lock due to active transaction"}`
+when called after script execution or bulk operations that leave an auto-analysis transaction
+open. The Ghidra program's domain object lock cannot be acquired while a transaction is active.
+
+**Reproduction**: Run any script that modifies the program (e.g., `ImportSDKHeaders`,
+`batch_create_labels`), then immediately call `save_program`.
+
+**Workaround**: Let Ghidra auto-save on program close, or wait for auto-analysis to complete
+before calling `save_program`.
+
+**Likely fix**: The Java plugin's `save_program` endpoint should wait for active transactions
+to complete (with a timeout) before attempting to save, or queue the save for after the
+current transaction ends.
