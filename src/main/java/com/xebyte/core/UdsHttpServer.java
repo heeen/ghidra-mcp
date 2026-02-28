@@ -35,7 +35,7 @@ public class UdsHttpServer {
 
     @FunctionalInterface
     public interface Handler {
-        void handle(UdsHttpExchange exchange) throws IOException;
+        void handle(HttpExchange exchange) throws IOException;
     }
 
     private final Path socketPath;

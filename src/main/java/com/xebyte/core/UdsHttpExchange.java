@@ -2,7 +2,10 @@ package com.xebyte.core;
 
 import com.sun.net.httpserver.Headers;
 
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
@@ -15,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * coupled to com.sun.net.httpserver internals). Instead, the ServerManager
  * handler lambdas accept this type directly.
  */
-public class UdsHttpExchange implements Closeable {
+public class UdsHttpExchange implements HttpExchange {
 
     private final String method;
     private final URI requestUri;

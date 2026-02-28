@@ -15,12 +15,16 @@
  */
 package com.xebyte.core.services;
 
+import com.google.gson.JsonObject;
+import com.xebyte.core.JsonHelper;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.Memory;
+import ghidra.util.Msg;
 
 import java.util.*;
 
@@ -890,7 +894,7 @@ public class DataTypeService extends BaseService {
      * Resolve a data type by name with comprehensive fallback chain:
      * well-known aliases, direct DTM lookup, category search, arrays, pointers.
      */
-    protected DataType resolveDataType(DataTypeManager dtm, String typeName) {
+    public DataType resolveDataType(DataTypeManager dtm, String typeName) {
         if (typeName == null || typeName.isEmpty()) return null;
 
         // 1. Well-known C type aliases
@@ -1014,7 +1018,7 @@ public class DataTypeService extends BaseService {
     /**
      * Find a data type by name in all categories (exact match, then case-insensitive).
      */
-    private DataType findDataTypeByName(DataTypeManager dtm, String typeName) {
+    public DataType findDataTypeByName(DataTypeManager dtm, String typeName) {
         // Direct lookup in root category
         DataType dt = dtm.getDataType("/" + typeName);
         if (dt != null) return dt;
@@ -1038,6 +1042,307 @@ public class DataTypeService extends BaseService {
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // TYPE SIZE / VALIDATION / CATEGORY OPERATIONS
+    // =========================================================================
+
+    /**
+     * Get the size, alignment, and path of a named data type.
+     * Endpoint: /get_type_size
+     */
+    public Response getTypeSize(String typeName) {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+        if (typeName == null || typeName.isEmpty()) return Response.err("Type name is required");
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dataType = findDataTypeByName(dtm, typeName);
+
+        if (dataType == null) {
+            return Response.err("Data type not found: " + typeName);
+        }
+
+        int size = dataType.getLength();
+        return Response.text(String.format("Type: %s\nSize: %d bytes\nAlignment: %d\nPath: %s",
+                            dataType.getName(),
+                            size,
+                            dataType.getAlignment(),
+                            dataType.getPathName()));
+    }
+
+    /**
+     * Validate if a data type fits at a given address (memory availability, alignment, conflicts).
+     * Endpoint: /validate_data_type
+     */
+    public Response validateDataType(String addressStr, String typeName) {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+        if (addressStr == null || addressStr.isEmpty()) return Response.err("Address is required");
+        if (typeName == null || typeName.isEmpty()) return Response.err("Type name is required");
+
+        Address addr = parseAddress(program, addressStr);
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dataType = findDataTypeByName(dtm, typeName);
+
+        if (dataType == null) {
+            return Response.err("Data type not found: " + typeName);
+        }
+
+        Memory memory = program.getMemory();
+        int typeSize = dataType.getLength();
+        Address endAddr = addr.add(typeSize - 1);
+
+        boolean memoryAvailable = memory.contains(addr) && memory.contains(endAddr);
+        if (!memoryAvailable) {
+            JsonObject jo = new JsonObject();
+            jo.addProperty("address", addressStr);
+            jo.addProperty("type_name", typeName);
+            jo.addProperty("memory_available", false);
+            jo.addProperty("required_range", addr.toString() + " - " + endAddr.toString());
+            return new Response.Ok(jo);
+        }
+
+        long alignment = dataType.getAlignment();
+        boolean aligned = alignment <= 1 || addr.getOffset() % alignment == 0;
+        String alignmentWarning = aligned ? null
+                : "Address not aligned to " + alignment + "-byte boundary";
+
+        Data existingData = program.getListing().getDefinedDataAt(addr);
+        String conflictingType = existingData != null ? existingData.getDataType().getName() : null;
+
+        JsonObject jo = new JsonObject();
+        jo.addProperty("address", addressStr);
+        jo.addProperty("type_name", typeName);
+        jo.addProperty("memory_available", true);
+        jo.addProperty("range", addr + " - " + endAddr);
+        jo.addProperty("size_bytes", typeSize);
+        jo.addProperty("properly_aligned", aligned);
+        jo.addProperty("alignment_warning", alignmentWarning);
+        jo.addProperty("has_conflicting_data", conflictingType != null);
+        jo.addProperty("conflicting_data_type", conflictingType);
+        return new Response.Ok(jo);
+    }
+
+    /**
+     * Import data types from various sources (placeholder).
+     * Endpoint: /import_data_types
+     */
+    public Response importDataTypes(String source, String format) {
+        if (format == null || format.isEmpty()) format = "c";
+        return Response.err("Import functionality not yet implemented. Source: " + source + ", Format: " + format);
+    }
+
+    /**
+     * Create a new data type category.
+     * Endpoint: /create_data_type_category
+     */
+    public Response createDataTypeCategory(String categoryPath) throws Exception {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+        if (categoryPath == null || categoryPath.isEmpty()) return Response.err("Category path is required");
+
+        return threadingStrategy.executeWrite(program, "Create data type category", () -> {
+            DataTypeManager dtm = program.getDataTypeManager();
+            CategoryPath catPath = new CategoryPath(categoryPath);
+            Category category = dtm.createCategory(catPath);
+            return Response.text("Successfully created category: " + category.getCategoryPathName());
+        });
+    }
+
+    /**
+     * Move a data type to a different category.
+     * Endpoint: /move_data_type_to_category
+     */
+    public Response moveDataTypeToCategory(String typeName, String categoryPath) throws Exception {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+        if (typeName == null || typeName.isEmpty()) return Response.err("Type name is required");
+        if (categoryPath == null || categoryPath.isEmpty()) return Response.err("Category path is required");
+
+        return threadingStrategy.executeWrite(program, "Move data type to category", () -> {
+            DataTypeManager dtm = program.getDataTypeManager();
+            DataType dataType = findDataTypeByName(dtm, typeName);
+
+            if (dataType == null) {
+                return Response.err("Data type not found: " + typeName);
+            }
+
+            CategoryPath catPath = new CategoryPath(categoryPath);
+            dtm.createCategory(catPath);
+            dataType.setCategoryPath(catPath);
+
+            JsonObject jo = new JsonObject();
+            jo.addProperty("success", true);
+            jo.addProperty("type_name", typeName);
+            jo.addProperty("category", categoryPath);
+            return new Response.Ok(jo);
+        });
+    }
+
+    /**
+     * List all data type categories recursively.
+     * Endpoint: /list_data_type_categories
+     */
+    public Response listDataTypeCategories(int offset, int limit) {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        List<String> categories = new ArrayList<>();
+        addCategoriesRecursively(dtm.getRootCategory(), categories, "");
+        return paginateList(categories, offset, limit);
+    }
+
+    private void addCategoriesRecursively(Category category, List<String> categories, String parentPath) {
+        for (Category subCategory : category.getCategories()) {
+            String fullPath = parentPath.isEmpty()
+                            ? subCategory.getName()
+                            : parentPath + "/" + subCategory.getName();
+            categories.add(fullPath);
+            addCategoriesRecursively(subCategory, categories, fullPath);
+        }
+    }
+
+    /**
+     * Get lists of valid built-in and Windows data type names.
+     * Endpoint: /get_valid_data_types
+     */
+    public Response getValidDataTypes(String category) {
+        List<String> builtinTypes = Arrays.asList(
+            "void", "byte", "char", "short", "int", "long", "longlong",
+            "float", "double", "pointer", "bool",
+            "undefined", "undefined1", "undefined2", "undefined4", "undefined8",
+            "uchar", "ushort", "uint", "ulong", "ulonglong",
+            "sbyte", "sword", "sdword", "sqword",
+            "word", "dword", "qword"
+        );
+        List<String> windowsTypes = Arrays.asList(
+            "BOOL", "BOOLEAN", "BYTE", "CHAR", "DWORD", "QWORD", "WORD",
+            "HANDLE", "HMODULE", "HWND", "LPVOID", "PVOID",
+            "LPCSTR", "LPSTR", "LPCWSTR", "LPWSTR",
+            "SIZE_T", "ULONG", "USHORT"
+        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("builtin_types", builtinTypes);
+        response.put("windows_types", windowsTypes);
+        return new Response.Ok(response);
+    }
+
+    /**
+     * Validate a function prototype (basic syntax and calling convention check).
+     * Endpoint: /validate_function_prototype
+     */
+    public Response validateFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+
+        Address addr = parseAddress(program, functionAddress);
+        if (addr == null) {
+            JsonObject jo = new JsonObject();
+            jo.addProperty("valid", false);
+            jo.addProperty("error", "Invalid address: " + functionAddress);
+            return new Response.Ok(jo);
+        }
+
+        Function func = program.getFunctionManager().getFunctionAt(addr);
+        if (func == null) {
+            JsonObject jo = new JsonObject();
+            jo.addProperty("valid", false);
+            jo.addProperty("error", "No function at address: " + functionAddress);
+            return new Response.Ok(jo);
+        }
+
+        if (prototype == null || prototype.trim().isEmpty()) {
+            JsonObject jo = new JsonObject();
+            jo.addProperty("valid", false);
+            jo.addProperty("error", "Empty prototype");
+            return new Response.Ok(jo);
+        }
+
+        if (!prototype.contains("(")) {
+            JsonObject jo = new JsonObject();
+            jo.addProperty("valid", false);
+            jo.addProperty("error", "Invalid prototype format - missing parentheses");
+            return new Response.Ok(jo);
+        }
+
+        List<String> warnings = new ArrayList<>();
+        if (callingConvention != null && !callingConvention.isEmpty()) {
+            String[] validConventions = {"__cdecl", "__stdcall", "__fastcall", "__thiscall", "default"};
+            boolean validConv = false;
+            for (String valid : validConventions) {
+                if (callingConvention.equalsIgnoreCase(valid)) {
+                    validConv = true;
+                    break;
+                }
+            }
+            if (!validConv) {
+                warnings.add("Unknown calling convention: " + callingConvention);
+            }
+        }
+
+        JsonObject jo = new JsonObject();
+        jo.addProperty("valid", true);
+        jo.add("warnings", JsonHelper.gson().toJsonTree(warnings.isEmpty() ? null : warnings));
+        return new Response.Ok(jo);
+    }
+
+    /**
+     * Create a function signature data type.
+     * Endpoint: /create_function_signature
+     */
+    public Response createFunctionSignature(String name, String returnType, String parametersJson) throws Exception {
+        Program program = resolveProgram(null);
+        if (program == null) return Response.err("No program loaded");
+        if (name == null || name.isEmpty()) return Response.err("Function name is required");
+        if (returnType == null || returnType.isEmpty()) return Response.err("Return type is required");
+
+        return threadingStrategy.executeWrite(program, "Create function signature", () -> {
+            DataTypeManager dtm = program.getDataTypeManager();
+
+            DataType returnDataType = resolveDataType(dtm, returnType);
+            if (returnDataType == null) {
+                return Response.err("Return type not found: " + returnType);
+            }
+
+            FunctionDefinitionDataType funcDef = new FunctionDefinitionDataType(name);
+            funcDef.setReturnType(returnDataType);
+
+            String paramWarning = null;
+            if (parametersJson != null && !parametersJson.isEmpty()) {
+                try {
+                    String[] paramPairs = parametersJson.replace("[", "").replace("]", "")
+                                                       .replace("{", "").replace("}", "")
+                                                       .split(",");
+                    for (String paramPair : paramPairs) {
+                        if (paramPair.trim().isEmpty()) continue;
+                        String[] parts = paramPair.split(":");
+                        if (parts.length >= 2) {
+                            String paramType = parts[1].replace("\"", "").trim();
+                            DataType paramDataType = resolveDataType(dtm, paramType);
+                            if (paramDataType != null) {
+                                funcDef.setArguments(new ParameterDefinition[] {
+                                    new ParameterDefinitionImpl(null, paramDataType, null)
+                                });
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    paramWarning = "Could not parse parameters, created without them";
+                }
+            }
+
+            DataType addedFuncDef = dtm.addDataType(funcDef, DataTypeConflictHandler.REPLACE_HANDLER);
+
+            JsonObject jo = new JsonObject();
+            jo.addProperty("success", true);
+            jo.addProperty("function_name", addedFuncDef.getName());
+            jo.addProperty("return_type", returnType);
+            jo.addProperty("parameter_warning", paramWarning);
+            return new Response.Ok(jo);
+        });
     }
 
     // =========================================================================

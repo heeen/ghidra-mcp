@@ -15,9 +15,11 @@
  */
 package com.xebyte.core.services;
 
+import com.google.gson.JsonObject;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.Response;
 import com.xebyte.core.ThreadingStrategy;
+import com.xebyte.VersionInfo;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
@@ -407,5 +409,180 @@ public class ListingService extends BaseService {
             "total", total,
             "offset", offset,
             "limit", limit));
+    }
+
+    // =========================================================================
+    // UTILITY ENDPOINTS (moved from EndpointRouter)
+    // =========================================================================
+
+    /**
+     * Check if the plugin is running and accessible.
+     * Endpoint: /check_connection
+     */
+    public Response checkConnection() {
+        Program program = resolveProgram(null);
+        String programName = program != null ? program.getName() : null;
+        boolean loaded = program != null;
+        JsonObject jo = new JsonObject();
+        jo.addProperty("connected", true);
+        jo.addProperty("program_loaded", loaded);
+        jo.addProperty("program_name", programName);
+        return new Response.Ok(jo);
+    }
+
+    /**
+     * Get version information about the plugin and Ghidra.
+     * Endpoint: /get_version
+     */
+    public Response getVersion() {
+        String pluginVersion = VersionInfo.getVersion();
+        String pluginName = VersionInfo.getAppName();
+        String buildTimestamp = VersionInfo.getBuildTimestamp();
+        String buildNumber = VersionInfo.getBuildNumber();
+        String fullVersion = VersionInfo.getFullVersion();
+        String javaVersion = System.getProperty("java.version");
+        int endpointCount = VersionInfo.getEndpointCount();
+        JsonObject jo = new JsonObject();
+        jo.addProperty("plugin_version", pluginVersion);
+        jo.addProperty("plugin_name", pluginName);
+        jo.addProperty("build_timestamp", buildTimestamp);
+        jo.addProperty("build_number", buildNumber);
+        jo.addProperty("full_version", fullVersion);
+        jo.addProperty("ghidra_version", "12.0.2");
+        jo.addProperty("java_version", javaVersion);
+        jo.addProperty("endpoint_count", endpointCount);
+        return new Response.Ok(jo);
+    }
+
+    /**
+     * Get metadata about the current program.
+     * Endpoint: /get_metadata
+     */
+    public Response getMetadata() {
+        Program program = resolveProgram(null);
+        if (program == null) {
+            return Response.err("No program loaded");
+        }
+
+        long totalSize = 0;
+        int blockCount = 0;
+        for (MemoryBlock block : program.getMemory().getBlocks()) {
+            totalSize += block.getSize();
+            blockCount++;
+        }
+
+        JsonObject jo = new JsonObject();
+        jo.addProperty("program_name", program.getName());
+        jo.addProperty("executable_path", program.getExecutablePath());
+        jo.addProperty("arch", program.getLanguage().getProcessor().toString());
+        jo.addProperty("comp", program.getCompilerSpec().getCompilerSpecID().toString());
+        jo.addProperty("lang", program.getLanguage().getLanguageID().toString());
+        jo.addProperty("endianness", program.getLanguage().isBigEndian() ? "Big" : "Little");
+        jo.addProperty("address_size_bits", program.getAddressFactory().getDefaultAddressSpace().getSize());
+        jo.addProperty("base_address", program.getImageBase().toString());
+        jo.addProperty("memory_block_count", blockCount);
+        jo.addProperty("total_memory_size_bytes", totalSize);
+        jo.addProperty("function_count", program.getFunctionManager().getFunctionCount());
+        jo.addProperty("symbol_count", program.getSymbolTable().getNumSymbols());
+        return new Response.Ok(jo);
+    }
+
+    /**
+     * Convert a number to different representations.
+     * Endpoint: /convert_number
+     */
+    public Response convertNumber(String text, int size) {
+        if (text == null || text.isEmpty()) {
+            return Response.err("No number provided");
+        }
+
+        try {
+            long value;
+            String inputType;
+
+            if (text.startsWith("0x") || text.startsWith("0X")) {
+                value = Long.parseUnsignedLong(text.substring(2), 16);
+                inputType = "hexadecimal";
+            } else if (text.startsWith("0b") || text.startsWith("0B")) {
+                value = Long.parseUnsignedLong(text.substring(2), 2);
+                inputType = "binary";
+            } else if (text.startsWith("0") && text.length() > 1 && text.matches("0[0-7]+")) {
+                value = Long.parseUnsignedLong(text, 8);
+                inputType = "octal";
+            } else {
+                value = Long.parseUnsignedLong(text);
+                inputType = "decimal";
+            }
+
+            long mask = (size == 8) ? -1L : (1L << (size * 8)) - 1L;
+            long maskedValue = value & mask;
+
+            Long decimalSigned = null;
+            if (size <= 8) {
+                long signedValue = maskedValue;
+                if (size < 8) {
+                    long signBit = 1L << (size * 8 - 1);
+                    if ((maskedValue & signBit) != 0) {
+                        signedValue = maskedValue | (~mask);
+                    }
+                }
+                decimalSigned = signedValue;
+            }
+
+            JsonObject jo = new JsonObject();
+            jo.addProperty("input", text);
+            jo.addProperty("input_type", inputType);
+            jo.addProperty("size_bytes", size);
+            jo.addProperty("decimal_unsigned", Long.toUnsignedString(maskedValue));
+            jo.addProperty("decimal_signed", decimalSigned);
+            jo.addProperty("hexadecimal", "0x" + Long.toHexString(maskedValue).toUpperCase());
+            jo.addProperty("binary", "0b" + Long.toBinaryString(maskedValue));
+            jo.addProperty("octal", "0" + Long.toOctalString(maskedValue));
+            jo.addProperty("hex_padded", "0x" + String.format(String.format("%%0%dX", size * 2), maskedValue));
+            return new Response.Ok(jo);
+
+        } catch (NumberFormatException e) {
+            return Response.err("Invalid number format: " + text);
+        } catch (Exception e) {
+            return Response.err("Error converting number: " + e.getMessage());
+        }
+    }
+
+    /**
+     * List all functions with enhanced metadata including thunk/external flags.
+     * Endpoint: /list_functions_enhanced
+     */
+    public Response listFunctionsEnhanced(int offset, int limit, String programName) {
+        Program program = resolveProgram(programName);
+        if (program == null) {
+            return programNotFoundError(programName);
+        }
+
+        var functions = new ArrayList<>();
+        int skipped = 0;
+        int count = 0;
+
+        for (Function func : program.getFunctionManager().getFunctions(true)) {
+            if (skipped < offset) {
+                skipped++;
+                continue;
+            }
+            if (count >= limit) break;
+
+            JsonObject jo = new JsonObject();
+            jo.addProperty("name", func.getName());
+            jo.addProperty("address", func.getEntryPoint().toString());
+            jo.addProperty("isThunk", func.isThunk());
+            jo.addProperty("isExternal", func.isExternal());
+            functions.add(jo);
+            count++;
+        }
+
+        var result = new LinkedHashMap<String, Object>();
+        result.put("functions", functions);
+        result.put("count", count);
+        result.put("offset", offset);
+        result.put("limit", limit);
+        return Response.ok(result);
     }
 }
