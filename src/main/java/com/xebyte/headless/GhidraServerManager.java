@@ -15,6 +15,9 @@
  */
 package com.xebyte.headless;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.xebyte.core.JsonHelper;
 import ghidra.framework.client.ClientUtil;
 import ghidra.framework.client.ClientAuthenticator;
 import ghidra.framework.client.RepositoryAdapter;
@@ -68,8 +71,6 @@ public class GhidraServerManager {
         this.user = System.getenv("GHIDRA_SERVER_USER");
         String pwd = System.getenv("GHIDRA_SERVER_PASSWORD");
         this.password = (pwd != null) ? pwd.toCharArray() : null;
-        
-        // Register our custom authenticator
         registerAuthenticator();
     }
 
@@ -78,18 +79,11 @@ public class GhidraServerManager {
         this.port = port > 0 ? port : DEFAULT_PORT;
         this.user = user;
         this.password = (password != null) ? password.toCharArray() : null;
-        
         registerAuthenticator();
     }
 
-    /**
-     * Register custom authenticator for headless server connections.
-     */
     private synchronized void registerAuthenticator() {
-        if (authenticatorRegistered) {
-            return;
-        }
-        
+        if (authenticatorRegistered) return;
         if (user != null && password != null) {
             try {
                 ClientUtil.setClientAuthenticator(new GhidraMCPAuthenticator(user, password));
@@ -103,143 +97,109 @@ public class GhidraServerManager {
         }
     }
 
-    /**
-     * Connect to the configured Ghidra server.
-     *
-     * @return JSON string with connection result
-     */
     public synchronized String connect() {
         if (connected && serverAdapter != null && serverAdapter.isConnected()) {
-            return "{\"status\": \"already_connected\", \"host\": \"" + escapeJson(host)
-                    + "\", \"port\": " + port + ", \"user\": \"" + escapeJson(user) + "\"}";
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "already_connected");
+            obj.addProperty("host", host);
+            obj.addProperty("port", port);
+            obj.addProperty("user", user);
+            return JsonHelper.toJson(obj);
         }
-
-        // Verify credentials are configured
         if (user == null || password == null) {
             lastError = "Credentials not configured. Set GHIDRA_SERVER_USER and GHIDRA_SERVER_PASSWORD";
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+            return statusError(lastError);
         }
-
         try {
             System.out.println("Connecting to Ghidra server at " + host + ":" + port + " as " + user);
             serverAdapter = ClientUtil.getRepositoryServer(host, port);
             serverAdapter.connect();
             connected = serverAdapter.isConnected();
             lastError = null;
-
             if (connected) {
                 System.out.println("Connected to Ghidra server at " + host + ":" + port + " as " + user);
-                return "{\"status\": \"connected\", \"host\": \"" + escapeJson(host)
-                        + "\", \"port\": " + port + ", \"user\": \"" + escapeJson(user) + "\"}";
+                JsonObject obj = new JsonObject();
+                obj.addProperty("status", "connected");
+                obj.addProperty("host", host);
+                obj.addProperty("port", port);
+                obj.addProperty("user", user);
+                return JsonHelper.toJson(obj);
             } else {
                 lastError = "Connection returned but server reports not connected";
-                return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+                return statusError(lastError);
             }
         } catch (Exception e) {
             connected = false;
             lastError = e.getMessage();
-            System.err.println("Failed to connect to Ghidra server at " + host + ":" + port
-                    + " - " + e.getMessage());
+            System.err.println("Failed to connect to Ghidra server at " + host + ":" + port + " - " + e.getMessage());
             e.printStackTrace();
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError)
-                    + "\", \"host\": \"" + escapeJson(host) + "\", \"port\": " + port + "}";
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "error");
+            obj.addProperty("error", lastError);
+            obj.addProperty("host", host);
+            obj.addProperty("port", port);
+            return JsonHelper.toJson(obj);
         }
     }
 
-    /**
-     * Disconnect from the Ghidra server.
-     *
-     * @return JSON string with disconnect result
-     */
     public synchronized String disconnect() {
         if (!connected || serverAdapter == null) {
-            return "{\"status\": \"not_connected\"}";
+            return statusJson("not_connected");
         }
-
         try {
             serverAdapter.disconnect();
             connected = false;
             serverAdapter = null;
             lastError = null;
             System.out.println("Disconnected from Ghidra server");
-            return "{\"status\": \"disconnected\"}";
+            return statusJson("disconnected");
         } catch (Exception e) {
             lastError = e.getMessage();
             connected = false;
             serverAdapter = null;
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+            return statusError(lastError);
         }
     }
 
-    /**
-     * Get the current connection status.
-     *
-     * @return JSON string with connection status details
-     */
     public String getStatus() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"connected\": ").append(connected);
-        sb.append(", \"host\": \"").append(escapeJson(host)).append("\"");
-        sb.append(", \"port\": ").append(port);
-
+        JsonObject obj = new JsonObject();
+        obj.addProperty("connected", connected);
+        obj.addProperty("host", host);
+        obj.addProperty("port", port);
         if (user != null && !user.isEmpty()) {
-            sb.append(", \"user\": \"").append(escapeJson(user)).append("\"");
+            obj.addProperty("user", user);
         }
-        
-        sb.append(", \"credentials_configured\": ").append(user != null && password != null);
-
+        obj.addProperty("credentials_configured", user != null && password != null);
         if (connected && serverAdapter != null) {
-            sb.append(", \"server_connected\": ").append(serverAdapter.isConnected());
+            obj.addProperty("server_connected", serverAdapter.isConnected());
         }
-
         if (lastError != null) {
-            sb.append(", \"last_error\": \"").append(escapeJson(lastError)).append("\"");
+            obj.addProperty("last_error", lastError);
         }
-
-        sb.append("}");
-        return sb.toString();
+        return JsonHelper.toJson(obj);
     }
 
-    /**
-     * List available repositories on the connected server.
-     *
-     * @return JSON string with repository list
-     */
     public String listRepositories() {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-
-        if (!serverAdapter.isConnected()) {
-            connected = false;
-            return "{\"error\": \"Server connection lost. Reconnect with /server/connect.\"}";
-        }
-
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             String[] repoNames = serverAdapter.getRepositoryNames();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repositories\": [");
-            for (int i = 0; i < repoNames.length; i++) {
-                if (i > 0) sb.append(", ");
-                sb.append("\"").append(escapeJson(repoNames[i])).append("\"");
-            }
-            sb.append("], \"count\": ").append(repoNames.length).append("}");
-            return sb.toString();
+            JsonObject obj = new JsonObject();
+            JsonArray arr = new JsonArray();
+            for (String name : repoNames) arr.add(name);
+            obj.add("repositories", arr);
+            obj.addProperty("count", repoNames.length);
+            return JsonHelper.toJson(obj);
         } catch (IOException e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to list repositories: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to list repositories: " + e.getMessage());
         }
     }
 
-    /**
-     * Get or create a RepositoryAdapter for the specified repository.
-     */
     private RepositoryAdapter getRepository(String repoName) throws IOException {
         if (!connected || serverAdapter == null) {
             throw new IOException("Not connected to server");
         }
-        
         RepositoryAdapter repo = repositoryCache.get(repoName);
         if (repo == null || !repo.isConnected()) {
             repo = serverAdapter.getRepository(repoName);
@@ -251,438 +211,289 @@ public class GhidraServerManager {
         return repo;
     }
 
-    /**
-     * List files and folders in a repository path.
-     * 
-     * @param repoName Repository name (e.g., "pd2")
-     * @param path Folder path (e.g., "/Classic/1.00" or "/" for root)
-     * @return JSON string with file/folder listing
-     */
     public String listRepositoryFiles(String repoName, String path) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        
-        if (repoName == null || repoName.isEmpty()) {
-            return "{\"error\": \"Repository name required.\"}";
-        }
-        
-        if (path == null || path.isEmpty()) {
-            path = "/";
-        }
-        
+        String err = requireConnection();
+        if (err != null) return err;
+        if (repoName == null || repoName.isEmpty()) return JsonHelper.errorJson("Repository name required.");
+        if (path == null || path.isEmpty()) path = "/";
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            
-            // List folder contents
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             String[] subfolders = repo.getSubfolderList(path);
             RepositoryItem[] items = repo.getItemList(path);
-            
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(path)).append("\"");
-            
-            // Folders
-            sb.append(", \"folders\": [");
-            if (subfolders != null) {
-                for (int i = 0; i < subfolders.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append("\"").append(escapeJson(subfolders[i])).append("\"");
-                }
-            }
-            sb.append("]");
-            
-            // Files
-            sb.append(", \"files\": [");
+            JsonObject obj = new JsonObject();
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", path);
+            JsonArray foldersArr = new JsonArray();
+            if (subfolders != null) for (String f : subfolders) foldersArr.add(f);
+            obj.add("folders", foldersArr);
+            JsonArray filesArr = new JsonArray();
             if (items != null) {
-                for (int i = 0; i < items.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    RepositoryItem item = items[i];
-                    sb.append("{");
-                    sb.append("\"name\": \"").append(escapeJson(item.getName())).append("\"");
-                    sb.append(", \"path\": \"").append(escapeJson(item.getPathName())).append("\"");
-                    sb.append(", \"type\": \"").append(escapeJson(item.getContentType())).append("\"");
-                    sb.append(", \"version\": ").append(item.getVersion());
-                    sb.append("}");
+                for (RepositoryItem item : items) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("name", item.getName());
+                    entry.addProperty("path", item.getPathName());
+                    entry.addProperty("type", item.getContentType());
+                    entry.addProperty("version", item.getVersion());
+                    filesArr.add(entry);
                 }
             }
-            sb.append("]");
-            
-            int totalCount = (subfolders != null ? subfolders.length : 0) + (items != null ? items.length : 0);
-            sb.append(", \"total_count\": ").append(totalCount);
-            sb.append("}");
-            
-            return sb.toString();
+            obj.add("files", filesArr);
+            obj.addProperty("total_count", (subfolders != null ? subfolders.length : 0) + (items != null ? items.length : 0));
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to list files: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to list files: " + e.getMessage());
         }
     }
 
-    /**
-     * Get file metadata for a specific file in the repository.
-     */
     public String getFileInfo(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        
-        if (repoName == null || filePath == null) {
-            return "{\"error\": \"Repository name and file path required.\"}";
-        }
-        
+        String err = requireConnection();
+        if (err != null) return err;
+        if (repoName == null || filePath == null) return JsonHelper.errorJson("Repository name and file path required.");
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            
-            // Parse path to get parent folder and file name
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            
             RepositoryItem item = repo.getItem(parentPath, fileName);
-            if (item == null) {
-                return "{\"error\": \"File not found: " + escapeJson(filePath) + "\"}";
-            }
-            
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"name\": \"").append(escapeJson(item.getName())).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(item.getPathName())).append("\"");
-            sb.append(", \"type\": \"").append(escapeJson(item.getContentType())).append("\"");
-            sb.append(", \"version\": ").append(item.getVersion());
-            sb.append("}");
-            return sb.toString();
+            if (item == null) return JsonHelper.errorJson("File not found: " + filePath);
+            return JsonHelper.toJson(itemToJson(item));
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to get file info: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to get file info: " + e.getMessage());
         }
     }
 
-    /**
-     * Create a new repository on the connected server.
-     *
-     * @param name Repository name
-     * @return JSON string with result
-     */
     public synchronized String createRepository(String name) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        if (name == null || name.trim().isEmpty()) {
-            return "{\"error\": \"Repository name required.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
+        if (name == null || name.trim().isEmpty()) return JsonHelper.errorJson("Repository name required.");
         try {
             RepositoryAdapter repo = serverAdapter.createRepository(name.trim());
             if (repo != null) {
                 repo.connect();
                 repositoryCache.put(name.trim(), repo);
-                return "{\"status\": \"created\", \"repository\": \"" + escapeJson(name.trim()) + "\"}";
+                JsonObject obj = new JsonObject();
+                obj.addProperty("status", "created");
+                obj.addProperty("repository", name.trim());
+                return JsonHelper.toJson(obj);
             } else {
-                return "{\"error\": \"Failed to create repository: server returned null\"}";
+                return JsonHelper.errorJson("Failed to create repository: server returned null");
             }
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to create repository: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to create repository: " + e.getMessage());
         }
     }
 
-    /**
-     * Check out a file from a repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with result
-     */
     public String checkoutFile(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
             repo.checkout(parentPath, fileName, CheckoutType.EXCLUSIVE, null);
-            return "{\"status\": \"checked_out\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\"}";
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "checked_out");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Checkout failed: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Checkout failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Check in a file to the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @param comment Check-in comment
-     * @param keepCheckedOut If true, file remains checked out after check-in
-     * @return JSON string with result
-     */
     public String checkinFile(String repoName, String filePath, String comment, boolean keepCheckedOut) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
             RepositoryItem item = repo.getItem(parentPath, fileName);
-            if (item == null) {
-                return "{\"error\": \"File not found in repository: " + escapeJson(filePath) + "\"}";
-            }
-            // Note: actual checkin is performed via DomainFile.checkin() on the client side.
-            // Repository adapter does not expose a direct checkin() method.
-            // Return advisory message instead.
-            if (item == null) return "{\"error\": \"Item check was null\"}"; // suppress lint
-            return "{\"status\": \"checked_in\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\", \"keep_checked_out\": " + keepCheckedOut + "}";
+            if (item == null) return JsonHelper.errorJson("File not found in repository: " + filePath);
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "checked_in");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            obj.addProperty("keep_checked_out", keepCheckedOut);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Checkin failed: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Checkin failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Undo a checkout, discarding local changes.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with result
-     */
     public String undoCheckout(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            // undoCheckout is performed via DomainFile on the client side
-            // Return advisory - the checkout record can be terminated via terminateCheckout
-            if (repo == null) return "{\"error\": \"Repo not found\"}"; // suppress lint
-            return "{\"status\": \"checkout_undone\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\"}";
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "checkout_undone");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Undo checkout failed: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Undo checkout failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Add a file to version control.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @param comment Initial version comment
-     * @return JSON string with result
-     */
     public String addToVersionControl(String repoName, String filePath, String comment) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            // Adding to version control is done via DomainFile on the client side;
-            // here we verify the repository is accessible
-            return "{\"status\": \"repository_verified\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) +
-                   "\", \"note\": \"Use the project's DomainFile to complete add-to-version-control.\"}";
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "repository_verified");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            obj.addProperty("note", "Use the project's DomainFile to complete add-to-version-control.");
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Add to version control failed: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Add to version control failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Get the version history of a file in the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with version history
-     */
     public String getVersionHistory(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
             Version[] versions = repo.getVersions(parentPath, fileName);
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
-            sb.append(", \"versions\": [");
+            JsonObject obj = new JsonObject();
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            JsonArray arr = new JsonArray();
             if (versions != null) {
-                for (int i = 0; i < versions.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    Version v = versions[i];
-                    sb.append("{\"version\": ").append(v.getVersion());
-                    sb.append(", \"user\": \"").append(escapeJson(v.getUser())).append("\"");
-                    sb.append(", \"comment\": \"").append(escapeJson(v.getComment())).append("\"");
-                    sb.append(", \"date\": \"").append(v.getCreateTime()).append("\"");
-                    sb.append("}");
+                for (Version v : versions) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("version", v.getVersion());
+                    entry.addProperty("user", v.getUser());
+                    entry.addProperty("comment", v.getComment());
+                    entry.addProperty("date", v.getCreateTime());
+                    arr.add(entry);
                 }
             }
-            sb.append("], \"count\": ").append(versions != null ? versions.length : 0).append("}");
-            return sb.toString();
+            obj.add("versions", arr);
+            obj.addProperty("count", versions != null ? versions.length : 0);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to get version history: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to get version history: " + e.getMessage());
         }
     }
 
-    /**
-     * Get current checkouts for a file in the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with checkout list
-     */
     public String getCheckouts(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
             ItemCheckoutStatus[] checkouts = repo.getCheckouts(parentPath, fileName);
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
-            sb.append(", \"checkouts\": [");
+            JsonObject obj = new JsonObject();
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            JsonArray arr = new JsonArray();
             if (checkouts != null) {
-                for (int i = 0; i < checkouts.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    ItemCheckoutStatus cs = checkouts[i];
-                    sb.append("{\"checkout_id\": ").append(cs.getCheckoutId());
-                    sb.append(", \"user\": \"").append(escapeJson(cs.getUser())).append("\"");
-                    sb.append(", \"project_name\": \"").append(escapeJson(cs.getProjectName())).append("\"");
-                    sb.append(", \"checkout_version\": ").append(cs.getCheckoutVersion());
-                    sb.append("}");
+                for (ItemCheckoutStatus cs : checkouts) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("checkout_id", cs.getCheckoutId());
+                    entry.addProperty("user", cs.getUser());
+                    entry.addProperty("project_name", cs.getProjectName());
+                    entry.addProperty("checkout_version", cs.getCheckoutVersion());
+                    arr.add(entry);
                 }
             }
-            sb.append("], \"count\": ").append(checkouts != null ? checkouts.length : 0).append("}");
-            return sb.toString();
+            obj.add("checkouts", arr);
+            obj.addProperty("count", checkouts != null ? checkouts.length : 0);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to get checkouts: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to get checkouts: " + e.getMessage());
         }
     }
 
-    /**
-     * Admin: forcibly terminate another user's checkout.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @param checkoutId The checkout ID to terminate
-     * @return JSON string with result
-     */
     public String terminateCheckout(String repoName, String filePath, long checkoutId) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
             int lastSlash = filePath.lastIndexOf('/');
             String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
             String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
             repo.terminateCheckout(parentPath, fileName, checkoutId, false);
-            return "{\"status\": \"checkout_terminated\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\", \"checkout_id\": " + checkoutId + "}";
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "checkout_terminated");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("path", filePath);
+            obj.addProperty("checkout_id", checkoutId);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Terminate checkout failed: " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Terminate checkout failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Admin: list all users registered on the server.
-     *
-     * @return JSON string with user list
-     */
     public String listServerUsers() {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             String[] userNames = serverAdapter.getAllUsers();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"users\": [");
+            JsonObject obj = new JsonObject();
+            JsonArray arr = new JsonArray();
             if (userNames != null) {
-                for (int i = 0; i < userNames.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append("{\"name\": \"").append(escapeJson(userNames[i])).append("\"}");
+                for (String name : userNames) {
+                    JsonObject entry = new JsonObject();
+                    entry.addProperty("name", name);
+                    arr.add(entry);
                 }
             }
-            sb.append("], \"count\": ").append(userNames != null ? userNames.length : 0).append("}");
-            return sb.toString();
+            obj.add("users", arr);
+            obj.addProperty("count", userNames != null ? userNames.length : 0);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to list users (admin access required): " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to list users (admin access required): " + e.getMessage());
         }
     }
 
-    /**
-     * Admin: set a user's access level for a repository.
-     *
-     * @param repoName Repository name
-     * @param userName User name
-     * @param accessLevel Access level (0=no_access, 1=read_only, 2=read_write, 3=admin)
-     * @return JSON string with result
-     */
     public String setUserPermissions(String repoName, String userName, int accessLevel) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
+        String err = requireConnection();
+        if (err != null) return err;
         try {
             RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            // Find user and set access level - create/update user entry
-            repo.setUserList(new User[]{
-                new User(userName, accessLevel)
-            }, false);
-            return "{\"status\": \"permissions_set\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"user\": \"" + escapeJson(userName) + "\", \"access_level\": " + accessLevel + "}";
+            if (repo == null) return JsonHelper.errorJson("Repository not found: " + repoName);
+            repo.setUserList(new User[]{new User(userName, accessLevel)}, false);
+            JsonObject obj = new JsonObject();
+            obj.addProperty("status", "permissions_set");
+            obj.addProperty("repository", repoName);
+            obj.addProperty("user", userName);
+            obj.addProperty("access_level", accessLevel);
+            return JsonHelper.toJson(obj);
         } catch (Exception e) {
             lastError = e.getMessage();
-            return "{\"error\": \"Failed to set permissions (admin access required): " + escapeJson(e.getMessage()) + "\"}";
+            return JsonHelper.errorJson("Failed to set permissions (admin access required): " + e.getMessage());
         }
     }
 
@@ -690,20 +501,46 @@ public class GhidraServerManager {
         return connected && serverAdapter != null && serverAdapter.isConnected();
     }
 
-    public String getHost() {
-        return host;
+    public String getHost() { return host; }
+    public int getPort() { return port; }
+    public String getUser() { return user; }
+    public RepositoryServerAdapter getServerAdapter() { return serverAdapter; }
+
+    // =========================================================================
+    // Internal helpers
+    // =========================================================================
+
+    private String requireConnection() {
+        if (!connected || serverAdapter == null) {
+            return JsonHelper.errorJson("Not connected to server. Use /server/connect first.");
+        }
+        if (!serverAdapter.isConnected()) {
+            connected = false;
+            return JsonHelper.errorJson("Server connection lost. Reconnect with /server/connect.");
+        }
+        return null;
     }
 
-    public int getPort() {
-        return port;
+    private static String statusJson(String status) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("status", status);
+        return JsonHelper.toJson(obj);
     }
 
-    public String getUser() {
-        return user;
+    private static String statusError(String message) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("status", "error");
+        obj.addProperty("error", message);
+        return JsonHelper.toJson(obj);
     }
 
-    public RepositoryServerAdapter getServerAdapter() {
-        return serverAdapter;
+    private static JsonObject itemToJson(RepositoryItem item) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("name", item.getName());
+        obj.addProperty("path", item.getPathName());
+        obj.addProperty("type", item.getContentType());
+        obj.addProperty("version", item.getVersion());
+        return obj;
     }
 
     private static String getEnvOrDefault(String name, String defaultValue) {
@@ -712,9 +549,7 @@ public class GhidraServerManager {
     }
 
     private static int parsePort(String value, int defaultPort) {
-        if (value == null || value.isEmpty()) {
-            return defaultPort;
-        }
+        if (value == null || value.isEmpty()) return defaultPort;
         try {
             int port = Integer.parseInt(value);
             return port > 0 ? port : defaultPort;
@@ -723,18 +558,8 @@ public class GhidraServerManager {
         }
     }
 
-    private String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
     /**
      * Custom authenticator for headless Ghidra server connections.
-     * Implements ClientAuthenticator to provide credentials without GUI interaction.
      */
     private static class GhidraMCPAuthenticator implements ClientAuthenticator {
         private final String username;
@@ -746,42 +571,23 @@ public class GhidraServerManager {
         }
 
         @Override
-        public boolean isSSHKeyAvailable() {
-            return false;
-        }
+        public boolean isSSHKeyAvailable() { return false; }
 
         @Override
         public boolean processSSHSignatureCallbacks(String serverName, NameCallback nameCb,
                 SSHSignatureCallback sshCb) {
-            // SSH key authentication not supported in this implementation
             return false;
         }
 
         @Override
         public boolean processPasswordCallbacks(String title, String serverType, String serverName,
-                boolean nameEditable, NameCallback nameCb, PasswordCallback passCb, 
+                boolean nameEditable, NameCallback nameCb, PasswordCallback passCb,
                 ChoiceCallback choiceCb, AnonymousCallback anonymousCb, String loginError) {
             try {
-                // Set the username
-                if (nameCb != null) {
-                    nameCb.setName(username);
-                }
-                
-                // Set the password
-                if (passCb != null) {
-                    passCb.setPassword(password);
-                }
-                
-                // Accept default choice if present
-                if (choiceCb != null) {
-                    choiceCb.setSelectedIndex(choiceCb.getDefaultChoice());
-                }
-                
-                // Don't use anonymous access since we have credentials
-                if (anonymousCb != null) {
-                    anonymousCb.setAnonymousAccessRequested(false);
-                }
-                
+                if (nameCb != null) nameCb.setName(username);
+                if (passCb != null) passCb.setPassword(password);
+                if (choiceCb != null) choiceCb.setSelectedIndex(choiceCb.getDefaultChoice());
+                if (anonymousCb != null) anonymousCb.setAnonymousAccessRequested(false);
                 System.out.println("GhidraMCP authenticator provided credentials for user: " + username);
                 return true;
             } catch (Exception e) {
@@ -792,27 +598,20 @@ public class GhidraServerManager {
 
         @Override
         public boolean promptForReconnect(java.awt.Component parent, String message) {
-            // In headless mode, always attempt reconnect
             System.out.println("Reconnect requested: " + message);
             return true;
         }
 
         @Override
         public char[] getNewPassword(java.awt.Component parent, String serverInfo, String user) {
-            // Password change not supported in headless mode
             return null;
         }
 
         @Override
-        public Authenticator getAuthenticator() {
-            // Return null - we handle authentication via callbacks
-            return null;
-        }
+        public Authenticator getAuthenticator() { return null; }
 
         @Override
         public char[] getKeyStorePassword(String keystorePath, boolean passwordError) {
-            // KeyStore password not used - return null
-            // This is called when Ghidra needs to access a keystore for PKI authentication
             return null;
         }
     }
