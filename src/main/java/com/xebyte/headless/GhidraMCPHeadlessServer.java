@@ -15,8 +15,12 @@
  */
 package com.xebyte.headless;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.xebyte.core.JsonHelper;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.ThreadingStrategy;
 import ghidra.GhidraApplicationLayout;
@@ -25,8 +29,6 @@ import ghidra.framework.Application;
 import ghidra.framework.ApplicationConfiguration;
 import ghidra.framework.HeadlessGhidraApplicationConfiguration;
 import ghidra.program.model.listing.Program;
-import ghidra.util.Msg;
-
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -387,12 +389,12 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         server.createContext("/get_current_address", exchange -> {
             // Headless mode has no cursor
-            sendResponse(exchange, "{\"error\": \"Headless mode - use address parameter with specific endpoints\"}");
+            sendResponse(exchange, JsonHelper.errorJson("Headless mode - use address parameter with specific endpoints"));
         });
 
         server.createContext("/get_current_function", exchange -> {
             // Headless mode has no cursor
-            sendResponse(exchange, "{\"error\": \"Headless mode - use get_function_by_address\"}");
+            sendResponse(exchange, JsonHelper.errorJson("Headless mode - use get_function_by_address"));
         });
 
         // ==========================================================================
@@ -1591,52 +1593,35 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     private Map<String, String> parsePostParams(HttpExchange exchange) throws IOException {
         Map<String, String> params = new HashMap<>();
 
-        // Get content type
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        if (contentType == null) {
-            contentType = "";
-        }
+        if (contentType == null) contentType = "";
 
-        // Read body
-        String body;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            body = sb.toString();
-        }
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        if (body.isBlank()) return params;
 
-        if (body.isEmpty()) {
-            return params;
-        }
-
-        // Parse based on content type
         if (contentType.contains("application/json")) {
-            // Simple JSON parsing for flat objects
-            body = body.trim();
-            if (body.startsWith("{") && body.endsWith("}")) {
-                body = body.substring(1, body.length() - 1);
-                for (String pair : body.split(",")) {
-                    String[] kv = pair.split(":", 2);
-                    if (kv.length == 2) {
-                        String key = kv[0].trim().replaceAll("^\"|\"$", "");
-                        String value = kv[1].trim().replaceAll("^\"|\"$", "");
-                        params.put(key, value);
+            Gson gson = JsonHelper.gson();
+            JsonObject obj = gson.fromJson(body, JsonObject.class);
+            if (obj != null) {
+                for (var entry : obj.entrySet()) {
+                    JsonElement val = entry.getValue();
+                    if (val.isJsonNull()) continue;
+                    // Primitives become their string value; objects/arrays become JSON strings
+                    if (val.isJsonPrimitive()) {
+                        params.put(entry.getKey(), val.getAsString());
+                    } else {
+                        params.put(entry.getKey(), gson.toJson(val));
                     }
                 }
             }
         } else {
-            // Form-urlencoded
             for (String param : body.split("&")) {
                 String[] pair = param.split("=", 2);
                 if (pair.length == 2) {
                     try {
-                        String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
-                        String value = URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
-                        params.put(key, value);
+                        params.put(
+                            URLDecoder.decode(pair[0], StandardCharsets.UTF_8),
+                            URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
                     } catch (Exception e) {
                         // Skip malformed param
                     }
