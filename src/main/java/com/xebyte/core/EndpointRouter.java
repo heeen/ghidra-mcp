@@ -2416,9 +2416,8 @@ public class EndpointRouter {
             return Response.err("No program loaded");
         }
 
-        final StringBuilder result = new StringBuilder();
-        result.append("{");
         final AtomicBoolean success = new AtomicBoolean(false);
+        final AtomicReference<String> error = new AtomicReference<>();
         final AtomicReference<Integer> paramsRenamed = new AtomicReference<>(0);
         final AtomicReference<Integer> localsRenamed = new AtomicReference<>(0);
 
@@ -2428,22 +2427,20 @@ public class EndpointRouter {
                 try {
                     Address addr = program.getAddressFactory().getAddress(functionAddress);
                     if (addr == null) {
-                        result.append("\"error\": \"Invalid address: ").append(functionAddress).append("\"");
+                        error.set("Invalid address: " + functionAddress);
                         return;
                     }
 
                     Function func = program.getFunctionManager().getFunctionAt(addr);
                     if (func == null) {
-                        result.append("\"error\": \"No function at address: ").append(functionAddress).append("\"");
+                        error.set("No function at address: " + functionAddress);
                         return;
                     }
 
-                    // Rename function
                     if (functionName != null && !functionName.isEmpty()) {
                         func.setName(functionName, SourceType.USER_DEFINED);
                     }
 
-                    // Rename parameters
                     if (parameterRenames != null && !parameterRenames.isEmpty()) {
                         Parameter[] params = func.getParameters();
                         for (Parameter param : params) {
@@ -2455,7 +2452,6 @@ public class EndpointRouter {
                         }
                     }
 
-                    // Rename local variables
                     if (localRenames != null && !localRenames.isEmpty()) {
                         Variable[] locals = func.getLocalVariables();
                         for (Variable local : locals) {
@@ -2467,7 +2463,6 @@ public class EndpointRouter {
                         }
                     }
 
-                    // Set return type if provided
                     if (returnType != null && !returnType.isEmpty()) {
                         DataTypeManager dtm = program.getDataTypeManager();
                         DataType dt = dtm.getDataType(returnType);
@@ -2478,25 +2473,26 @@ public class EndpointRouter {
 
                     success.set(true);
                 } catch (Exception e) {
-                    result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
+                    error.set(e.getMessage());
                     Msg.error(this, "Error in batch rename", e);
                 } finally {
                     program.endTransaction(tx, success.get());
                 }
             });
-
-            if (success.get()) {
-                result.append("\"success\": true, ");
-                result.append("\"function_renamed\": ").append(functionName != null).append(", ");
-                result.append("\"parameters_renamed\": ").append(paramsRenamed.get()).append(", ");
-                result.append("\"locals_renamed\": ").append(localsRenamed.get());
-            }
         } catch (Exception e) {
-            result.append("\"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"");
+            return Response.err(e.getMessage());
         }
 
-        result.append("}");
-        return Response.text(result.toString());
+        if (error.get() != null) {
+            return Response.err(error.get());
+        }
+
+        JsonObject jo = new JsonObject();
+        jo.addProperty("success", true);
+        jo.addProperty("function_renamed", functionName != null);
+        jo.addProperty("parameters_renamed", paramsRenamed.get());
+        jo.addProperty("locals_renamed", localsRenamed.get());
+        return new Response.Ok(jo);
     }
     private Response batchSetVariableTypesOptimized(String functionAddress, Map<String, String> variableTypes) {
         if (variableTypes == null || variableTypes.isEmpty()) {

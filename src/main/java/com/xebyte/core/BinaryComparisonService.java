@@ -14,6 +14,9 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.util.task.TaskMonitor;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -87,44 +90,37 @@ public class BinaryComparisonService {
         public boolean hasEpilogueStripped;
 
         public String toJson() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"function_name\": \"").append(escapeJson(functionName)).append("\", ");
-            sb.append("\"address\": \"").append(escapeJson(address)).append("\", ");
-            sb.append("\"program\": \"").append(escapeJson(programName)).append("\", ");
-            sb.append("\"instruction_count\": ").append(instructionCount).append(", ");
-            sb.append("\"basic_block_count\": ").append(basicBlockCount).append(", ");
-            sb.append("\"edge_count\": ").append(edgeCount).append(", ");
-            sb.append("\"call_count\": ").append(callCount).append(", ");
-            sb.append("\"string_ref_count\": ").append(stringRefCount).append(", ");
-            sb.append("\"param_count\": ").append(paramCount).append(", ");
-            sb.append("\"cyclomatic_complexity\": ").append(cyclomaticComplexity).append(", ");
-            sb.append("\"prologue_stripped\": ").append(hasPrologueStripped).append(", ");
-            sb.append("\"epilogue_stripped\": ").append(hasEpilogueStripped).append(", ");
+            JsonObject jo = new JsonObject();
+            jo.addProperty("function_name", functionName);
+            jo.addProperty("address", address);
+            jo.addProperty("program", programName);
+            jo.addProperty("instruction_count", instructionCount);
+            jo.addProperty("basic_block_count", basicBlockCount);
+            jo.addProperty("edge_count", edgeCount);
+            jo.addProperty("call_count", callCount);
+            jo.addProperty("string_ref_count", stringRefCount);
+            jo.addProperty("param_count", paramCount);
+            jo.addProperty("cyclomatic_complexity", cyclomaticComplexity);
+            jo.addProperty("prologue_stripped", hasPrologueStripped);
+            jo.addProperty("epilogue_stripped", hasEpilogueStripped);
 
-            sb.append("\"callee_names\": [");
-            appendStringSet(sb, calleeNames);
-            sb.append("], ");
+            JsonArray calleeArr = new JsonArray();
+            for (String s : calleeNames) calleeArr.add(s);
+            jo.add("callee_names", calleeArr);
 
-            sb.append("\"string_constants\": [");
-            appendStringSet(sb, stringConstants);
-            sb.append("], ");
+            JsonArray stringArr = new JsonArray();
+            for (String s : stringConstants) stringArr.add(s);
+            jo.add("string_constants", stringArr);
 
-            sb.append("\"immediate_values\": [");
-            boolean first = true;
-            for (Long v : immediateValues) {
-                if (!first) sb.append(", ");
-                sb.append(v);
-                first = false;
-            }
-            sb.append("], ");
+            JsonArray immArr = new JsonArray();
+            for (Long v : immediateValues) immArr.add(v);
+            jo.add("immediate_values", immArr);
 
-            sb.append("\"basic_block_hashes\": [");
-            appendStringList(sb, basicBlockHashes);
-            sb.append("]");
+            JsonArray hashArr = new JsonArray();
+            for (String s : basicBlockHashes) hashArr.add(s);
+            jo.add("basic_block_hashes", hashArr);
 
-            sb.append("}");
-            return sb.toString();
+            return jo.toString();
         }
     }
 
@@ -477,31 +473,31 @@ public class BinaryComparisonService {
 
         int resultCount = Math.min(limit, indices.length);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"source\": ");
-        sb.append("{\"name\": \"").append(escapeJson(srcFunc.getName())).append("\", ");
-        sb.append("\"address\": \"").append(srcFunc.getEntryPoint()).append("\", ");
-        sb.append("\"program\": \"").append(escapeJson(srcProgram.getName())).append("\"}, ");
-        sb.append("\"target_program\": \"").append(escapeJson(tgtProgram.getName())).append("\", ");
-        sb.append("\"threshold\": ").append(threshold).append(", ");
-        sb.append("\"total_matches\": ").append(indices.length).append(", ");
-        sb.append("\"matches\": [");
+        JsonObject source = new JsonObject();
+        source.addProperty("name", srcFunc.getName());
+        source.addProperty("address", srcFunc.getEntryPoint().toString());
+        source.addProperty("program", srcProgram.getName());
 
+        JsonArray matchArr = new JsonArray();
         for (int i = 0; i < resultCount; i++) {
             int idx = indices[i];
             Function tgtFunc = matchFunctions.get(idx);
             double score = matches.get(idx)[0];
 
-            if (i > 0) sb.append(", ");
-            sb.append("{");
-            sb.append("\"name\": \"").append(escapeJson(tgtFunc.getName())).append("\", ");
-            sb.append("\"address\": \"").append(tgtFunc.getEntryPoint()).append("\", ");
-            sb.append("\"score\": ").append(String.format("%.4f", score));
-            sb.append("}");
+            JsonObject m = new JsonObject();
+            m.addProperty("name", tgtFunc.getName());
+            m.addProperty("address", tgtFunc.getEntryPoint().toString());
+            m.addProperty("score", Double.parseDouble(String.format("%.4f", score)));
+            matchArr.add(m);
         }
 
-        sb.append("]}");
-        return sb.toString();
+        JsonObject jo = new JsonObject();
+        jo.add("source", source);
+        jo.addProperty("target_program", tgtProgram.getName());
+        jo.addProperty("threshold", threshold);
+        jo.addProperty("total_matches", indices.length);
+        jo.add("matches", matchArr);
+        return jo.toString();
     }
 
     /**
@@ -530,11 +526,14 @@ public class BinaryComparisonService {
         int endIdx = Math.min(totalSrc, startIdx + limit);
 
         if (startIdx >= totalSrc) {
-            return "{\"source_program\": \"" + escapeJson(srcProgram.getName()) +
-                   "\", \"target_program\": \"" + escapeJson(tgtProgram.getName()) +
-                   "\", \"total_source_functions\": " + totalSrc +
-                   ", \"offset\": " + offset + ", \"limit\": " + limit +
-                   ", \"matches\": []}";
+            JsonObject jo = new JsonObject();
+            jo.addProperty("source_program", srcProgram.getName());
+            jo.addProperty("target_program", tgtProgram.getName());
+            jo.addProperty("total_source_functions", totalSrc);
+            jo.addProperty("offset", offset);
+            jo.addProperty("limit", limit);
+            jo.add("matches", new JsonArray());
+            return jo.toString();
         }
 
         // Pre-compute target signatures
@@ -549,15 +548,7 @@ public class BinaryComparisonService {
             tgtSigs.add(computeFunctionSignature(tgtProgram, f, monitor));
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"source_program\": \"").append(escapeJson(srcProgram.getName())).append("\", ");
-        sb.append("\"target_program\": \"").append(escapeJson(tgtProgram.getName())).append("\", ");
-        sb.append("\"total_source_functions\": ").append(totalSrc).append(", ");
-        sb.append("\"offset\": ").append(offset).append(", ");
-        sb.append("\"limit\": ").append(limit).append(", ");
-        sb.append("\"matches\": [");
-
-        boolean firstMatch = true;
+        JsonArray matchArr = new JsonArray();
         for (int i = startIdx; i < endIdx; i++) {
             if (monitor.isCancelled()) break;
             Function srcFunc = srcFunctions.get(i);
@@ -584,20 +575,24 @@ public class BinaryComparisonService {
 
             if (bestScore >= threshold && bestIdx >= 0) {
                 Function bestFunc = tgtFunctions.get(bestIdx);
-                if (!firstMatch) sb.append(", ");
-                sb.append("{");
-                sb.append("\"source_name\": \"").append(escapeJson(srcFunc.getName())).append("\", ");
-                sb.append("\"source_address\": \"").append(srcFunc.getEntryPoint()).append("\", ");
-                sb.append("\"target_name\": \"").append(escapeJson(bestFunc.getName())).append("\", ");
-                sb.append("\"target_address\": \"").append(bestFunc.getEntryPoint()).append("\", ");
-                sb.append("\"score\": ").append(String.format("%.4f", bestScore));
-                sb.append("}");
-                firstMatch = false;
+                JsonObject m = new JsonObject();
+                m.addProperty("source_name", srcFunc.getName());
+                m.addProperty("source_address", srcFunc.getEntryPoint().toString());
+                m.addProperty("target_name", bestFunc.getName());
+                m.addProperty("target_address", bestFunc.getEntryPoint().toString());
+                m.addProperty("score", Double.parseDouble(String.format("%.4f", bestScore)));
+                matchArr.add(m);
             }
         }
 
-        sb.append("]}");
-        return sb.toString();
+        JsonObject jo = new JsonObject();
+        jo.addProperty("source_program", srcProgram.getName());
+        jo.addProperty("target_program", tgtProgram.getName());
+        jo.addProperty("total_source_functions", totalSrc);
+        jo.addProperty("offset", offset);
+        jo.addProperty("limit", limit);
+        jo.add("matches", matchArr);
+        return jo.toString();
     }
 
     // ========================================================================
@@ -696,65 +691,39 @@ public class BinaryComparisonService {
         double similarity = computeSimilarity(sigA, sigB);
 
         // Build JSON
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
+        JsonObject funcAObj = new JsonObject();
+        funcAObj.addProperty("name", funcA.getName());
+        funcAObj.addProperty("address", funcA.getEntryPoint().toString());
+        funcAObj.addProperty("program", progA.getName());
+        funcAObj.addProperty("instruction_count", partsA[0].size() + partsA[1].size() + partsA[2].size());
 
-        // Function info
-        sb.append("\"function_a\": {");
-        sb.append("\"name\": \"").append(escapeJson(funcA.getName())).append("\", ");
-        sb.append("\"address\": \"").append(funcA.getEntryPoint()).append("\", ");
-        sb.append("\"program\": \"").append(escapeJson(progA.getName())).append("\", ");
-        sb.append("\"instruction_count\": ").append(partsA[0].size() + partsA[1].size() + partsA[2].size());
-        sb.append("}, ");
+        JsonObject funcBObj = new JsonObject();
+        funcBObj.addProperty("name", funcB.getName());
+        funcBObj.addProperty("address", funcB.getEntryPoint().toString());
+        funcBObj.addProperty("program", progB.getName());
+        funcBObj.addProperty("instruction_count", partsB[0].size() + partsB[1].size() + partsB[2].size());
 
-        sb.append("\"function_b\": {");
-        sb.append("\"name\": \"").append(escapeJson(funcB.getName())).append("\", ");
-        sb.append("\"address\": \"").append(funcB.getEntryPoint()).append("\", ");
-        sb.append("\"program\": \"").append(escapeJson(progB.getName())).append("\", ");
-        sb.append("\"instruction_count\": ").append(partsB[0].size() + partsB[1].size() + partsB[2].size());
-        sb.append("}, ");
+        JsonObject summary = new JsonObject();
+        summary.addProperty("similarity_score", Double.parseDouble(String.format("%.4f", similarity)));
+        summary.addProperty("body_equal", bodyEqual);
+        summary.addProperty("body_added", bodyAdded);
+        summary.addProperty("body_removed", bodyRemoved);
+        summary.addProperty("prologue_changed", prologueChanged);
+        summary.addProperty("epilogue_changed", epilogueChanged);
+        summary.addProperty("truncated", truncated);
+        summary.add("calls_only_in_a", toJsonArray(callsOnlyA));
+        summary.add("calls_only_in_b", toJsonArray(callsOnlyB));
+        summary.add("strings_only_in_a", toJsonArray(stringsOnlyA));
+        summary.add("strings_only_in_b", toJsonArray(stringsOnlyB));
 
-        // Summary
-        sb.append("\"summary\": {");
-        sb.append("\"similarity_score\": ").append(String.format("%.4f", similarity)).append(", ");
-        sb.append("\"body_equal\": ").append(bodyEqual).append(", ");
-        sb.append("\"body_added\": ").append(bodyAdded).append(", ");
-        sb.append("\"body_removed\": ").append(bodyRemoved).append(", ");
-        sb.append("\"prologue_changed\": ").append(prologueChanged).append(", ");
-        sb.append("\"epilogue_changed\": ").append(epilogueChanged).append(", ");
-        sb.append("\"truncated\": ").append(truncated).append(", ");
-
-        sb.append("\"calls_only_in_a\": [");
-        appendStringSet(sb, callsOnlyA);
-        sb.append("], ");
-        sb.append("\"calls_only_in_b\": [");
-        appendStringSet(sb, callsOnlyB);
-        sb.append("], ");
-        sb.append("\"strings_only_in_a\": [");
-        appendStringSet(sb, stringsOnlyA);
-        sb.append("], ");
-        sb.append("\"strings_only_in_b\": [");
-        appendStringSet(sb, stringsOnlyB);
-        sb.append("]");
-        sb.append("}, ");
-
-        // Prologue diff
-        sb.append("\"prologue_diff\": [");
-        appendDiffEntries(sb, prologueDiff, prologueDiff.size());
-        sb.append("], ");
-
-        // Body diff (truncated)
-        sb.append("\"body_diff\": [");
-        appendDiffEntries(sb, bodyDiff, MAX_DIFF_ENTRIES);
-        sb.append("], ");
-
-        // Epilogue diff
-        sb.append("\"epilogue_diff\": [");
-        appendDiffEntries(sb, epilogueDiff, epilogueDiff.size());
-        sb.append("]");
-
-        sb.append("}");
-        return sb.toString();
+        JsonObject jo = new JsonObject();
+        jo.add("function_a", funcAObj);
+        jo.add("function_b", funcBObj);
+        jo.add("summary", summary);
+        jo.add("prologue_diff", diffEntriesToJsonArray(prologueDiff, prologueDiff.size()));
+        jo.add("body_diff", diffEntriesToJsonArray(bodyDiff, MAX_DIFF_ENTRIES));
+        jo.add("epilogue_diff", diffEntriesToJsonArray(epilogueDiff, epilogueDiff.size()));
+        return jo.toString();
     }
 
     // ========================================================================
@@ -1004,38 +973,22 @@ public class BinaryComparisonService {
         return sb.toString();
     }
 
-    static String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+    private static JsonArray toJsonArray(Set<String> set) {
+        JsonArray arr = new JsonArray();
+        for (String s : set) arr.add(s);
+        return arr;
     }
 
-    private static void appendStringSet(StringBuilder sb, Set<String> set) {
-        boolean first = true;
-        for (String s : set) {
-            if (!first) sb.append(", ");
-            sb.append("\"").append(escapeJson(s)).append("\"");
-            first = false;
-        }
-    }
-
-    private static void appendStringList(StringBuilder sb, List<String> list) {
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append("\"").append(escapeJson(list.get(i))).append("\"");
-        }
-    }
-
-    private static void appendDiffEntries(StringBuilder sb, List<DiffEntry> entries, int maxEntries) {
+    private static JsonArray diffEntriesToJsonArray(List<DiffEntry> entries, int maxEntries) {
+        JsonArray arr = new JsonArray();
         int count = Math.min(entries.size(), maxEntries);
         for (int i = 0; i < count; i++) {
-            if (i > 0) sb.append(", ");
             DiffEntry e = entries.get(i);
-            sb.append("{\"type\": \"").append(e.type).append("\", ");
-            sb.append("\"line\": \"").append(escapeJson(e.line)).append("\"}");
+            JsonObject obj = new JsonObject();
+            obj.addProperty("type", e.type);
+            obj.addProperty("line", e.line);
+            arr.add(obj);
         }
+        return arr;
     }
 }

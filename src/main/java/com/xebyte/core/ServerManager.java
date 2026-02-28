@@ -15,6 +15,9 @@ import com.xebyte.core.services.DataTypeService;
 import com.xebyte.core.services.MutationService;
 import com.xebyte.core.services.SymbolService;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -200,24 +203,19 @@ public class ServerManager {
                 }
             }
 
-            // Collect program names
-            StringBuilder programs = new StringBuilder("[");
-            Program[] allPrograms = programProvider.getAllOpenPrograms();
-            for (int i = 0; i < allPrograms.length; i++) {
-                if (i > 0) programs.append(", ");
-                programs.append("\"").append(allPrograms[i].getName().replace("\"", "\\\"")).append("\"");
+            JsonArray programs = new JsonArray();
+            for (Program p : programProvider.getAllOpenPrograms()) {
+                programs.add(p.getName());
             }
-            programs.append("]");
 
-            String json = "{\n" +
-                "  \"pid\": " + pid + ",\n" +
-                "  \"project\": \"" + projectName.replace("\"", "\\\"") + "\",\n" +
-                "  \"project_path\": \"" + projectPath.replace("\"", "\\\"").replace("\\", "\\\\") + "\",\n" +
-                "  \"programs\": " + programs + ",\n" +
-                "  \"tools\": " + tools.size() + ",\n" +
-                "  \"started\": \"" + Instant.now() + "\"\n" +
-                "}";
-            Files.writeString(metaPath, json);
+            JsonObject jo = new JsonObject();
+            jo.addProperty("pid", pid);
+            jo.addProperty("project", projectName);
+            jo.addProperty("project_path", projectPath);
+            jo.add("programs", programs);
+            jo.addProperty("tools", tools.size());
+            jo.addProperty("started", Instant.now().toString());
+            Files.writeString(metaPath, jo.toString());
         } catch (IOException e) {
             Msg.warn(this, "Could not write metadata: " + e.getMessage());
         }
