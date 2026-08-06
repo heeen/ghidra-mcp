@@ -12,6 +12,7 @@ import uvicorn
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.cors import CORSMiddleware
 
+from . import resources  # noqa: F401  (registers MCP resources on import)
 from . import server
 from . import state
 from .config import AUTH_TOKEN, logger
