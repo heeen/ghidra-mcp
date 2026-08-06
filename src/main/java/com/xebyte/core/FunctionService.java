@@ -400,7 +400,7 @@ public class FunctionService {
      */
     @McpTool(path = "/force_decompile", description = "Force decompiler cache refresh for function. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.READ_ONLY)
     public Response forceDecompile(
-            @Param(value = "address", paramType = "address",
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -423,7 +423,7 @@ public class FunctionService {
         final AtomicReference<String> decompiledCode = new AtomicReference<>();
 
         // Resolve address before entering threading lambda
-        Address addr = ServiceUtils.parseAddress(program, functionAddrStr);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddrStr);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         try {
@@ -2404,7 +2404,7 @@ public class FunctionService {
      */
     @McpTool(path = "/set_variable_storage", method = "POST", description = "Set a parameter's or local's storage location to a register, register pair, or stack slot. Accepts 'EAX', 'EAX:4', 'R0:4,R2:4' or 'Stack[-0x10]:4'; size defaults to the variable's data-type length. Use this when the argument layout cannot be expressed by any calling convention. Setting a PARAMETER's storage switches the whole function to custom variable storage (reported as custom_storage_enabled). The storage is read back after the write and returned in 'storage'. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.WRITE)
     public Response setVariableStorage(
-            @Param(value = "function_address", paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -2435,7 +2435,7 @@ public class FunctionService {
         }
 
         // Resolve address before entering threading lambda
-        Address addr = ServiceUtils.parseAddress(program, functionAddrStr);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddrStr);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         final AtomicBoolean success = new AtomicBoolean(false);
@@ -2957,7 +2957,7 @@ public class FunctionService {
      */
     @McpTool(path = "/batch_rename_function_components", method = "POST", description = "Rename function and components atomically. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.WRITE)
     public Response batchRenameFunctionComponents(
-            @Param(value = "function_address", paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -2991,7 +2991,7 @@ public class FunctionService {
         Program program = pe.program();
 
         // Resolve address before entering threading lambda
-        Address addr = ServiceUtils.parseAddress(program, functionAddress);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         final AtomicBoolean success = new AtomicBoolean(false);
@@ -3085,7 +3085,7 @@ public class FunctionService {
      */
     @McpTool(path = "/delete_function", method = "POST", description = "Delete function at address. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.DESTRUCTIVE)
     public Response deleteFunctionAtAddress(
-            @Param(value = "address", paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -3102,7 +3102,7 @@ public class FunctionService {
         }
 
         // Resolve address before entering threading lambda
-        Address addr = ServiceUtils.parseAddress(program, addressStr);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, addressStr);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         final AtomicReference<Map<String, Object>> resultData = new AtomicReference<>(null);
@@ -3854,7 +3854,7 @@ public class FunctionService {
      */
     @McpTool(path = "/rename_variables", method = "POST", description = "Rename multiple variables atomically. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.WRITE)
     public Response batchRenameVariables(
-            @Param(value = "function_address", paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -3881,7 +3881,7 @@ public class FunctionService {
         Program program = pe.program();
 
         // Resolve address before entering SwingUtilities lambda
-        Address addr = ServiceUtils.parseAddress(program, functionAddress);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         // force_individual asks for exactly the routine the batch path falls back
@@ -4104,7 +4104,7 @@ public class FunctionService {
                         + "On programs with multiple address spaces, prefix addresses with the space name.",
             category = "function", access = ToolAccess.WRITE)
     public Response setVariables(
-            @Param(value = "function_address", paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
                    description = "Function entry point address") String functionAddress,
             @Param(value = "variables", source = ParamSource.BODY,
                    description = "JSON object mapping old variable names to {name, type} objects. "
@@ -4117,7 +4117,7 @@ public class FunctionService {
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 
-        Address addr = ServiceUtils.parseAddress(program, functionAddress);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         // Parse the variables JSON into a map of oldName -> {name?, type?}.

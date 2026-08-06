@@ -528,6 +528,29 @@ public final class ServiceUtils {
      * 2. If address resolution fails, try exact name match via SymbolTable
      * Returns null if no function is found.
      */
+    /**
+     * The entry point of the function a reference names, for call sites that need an
+     * {@code Address} rather than a {@link Function}.
+     *
+     * <p>Drop-in for {@code parseAddress} at any site that goes on to look up a function:
+     * an address argument behaves exactly as before (including an interior address, which
+     * stays interior so {@code getFunctionAt} still rejects it), while a NAME — which
+     * {@code parseAddress} can only reject — resolves to that function's entry point.
+     *
+     * <p>That asymmetry is why a dozen tools advertised "function address" and meant it
+     * literally, even though {@link #resolveFunction} behind them took either form.
+     *
+     * @return the parsed address, the named function's entry point, or null if neither
+     */
+    public static Address resolveFunctionAddress(Program program, String ref) {
+        Address parsed = parseAddress(program, ref);
+        if (parsed != null) {
+            return parsed;
+        }
+        Function byName = resolveFunction(program, ref);
+        return byName != null ? byName.getEntryPoint() : null;
+    }
+
     public static Function resolveFunction(Program program, String functionRef) {
         if (functionRef == null || functionRef.trim().isEmpty()) return null;
         functionRef = functionRef.trim();
