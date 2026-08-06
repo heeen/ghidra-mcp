@@ -2460,7 +2460,7 @@ public class DataTypeService {
      */
     @McpTool(path = "/validate_function_prototype", description = "Validate prototype before applying. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "datatype", access = ToolAccess.READ_ONLY)
     public Response validateFunctionPrototype(
-            @Param(value = "function_address", paramType = "address",
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -2474,7 +2474,7 @@ public class DataTypeService {
         Program program = pe.program();
 
         // Resolve address before entering SwingUtilities lambda
-        Address addr = ServiceUtils.parseAddress(program, functionAddress);
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
 
         final AtomicReference<Response> responseRef = new AtomicReference<>(null);
