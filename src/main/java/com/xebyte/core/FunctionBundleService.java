@@ -13,9 +13,9 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.Variable;
+import ghidra.program.model.listing.VariableStorage;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighSymbol;
-import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -305,6 +305,29 @@ public class FunctionBundleService {
      * agent actually sees in {@code decompiled_code} — falling back to the listing's
      * low-level variables when decompilation failed.
      */
+    /**
+     * Where a decompiler variable actually lives, or null when that is not a thing a
+     * reader can act on.
+     *
+     * <p>Goes through {@link VariableStorage#toString()} — the same rendering
+     * {@code /get_function_variables} and this bundle's own parameters use — so a register
+     * comes back as {@code RDI:8} rather than {@code register:00001200:8}. The raw varnode
+     * address this used to print is an offset into the register address space: it names no
+     * register, and for a parameter the register IS the calling convention, which is the
+     * one thing worth reading here.
+     *
+     * <p>p-code temporaries ({@code unique:}/hash storage) return null: an SSA temp has no
+     * storage a reader could rename, retype or find in the frame, so the field is omitted
+     * rather than filled with an address that means nothing outside the decompiler.
+     */
+    private static String describeStorage(HighSymbol symbol) {
+        VariableStorage storage = symbol.getStorage();
+        if (storage == null || !storage.isValid()) return null;
+        if (storage.isUniqueStorage() || storage.isHashStorage()) return null;
+        String text = storage.toString();
+        return text == null || text.isEmpty() ? null : text;
+    }
+
     private List<Map<String, Object>> collectLocals(Function func, HighFunction high) {
         List<Map<String, Object>> locals = new ArrayList<>();
         if (high != null) {
@@ -315,10 +338,9 @@ public class FunctionBundleService {
                 String name = symbol.getName();
                 item.put("name", name);
                 item.put("type", symbol.getDataType().getName());
-                HighVariable variable = symbol.getHighVariable();
-                if (variable != null && variable.getRepresentative() != null) {
-                    item.put("storage", variable.getRepresentative().getAddress()
-                        + ":" + variable.getRepresentative().getSize());
+                String storage = describeStorage(symbol);
+                if (storage != null) {
+                    item.put("storage", storage);
                 }
                 // Decompiler-invented names: not real storage the user can rename usefully.
                 item.put("is_phantom", name.startsWith("extraout_") || name.startsWith("in_")
