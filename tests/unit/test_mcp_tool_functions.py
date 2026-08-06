@@ -68,11 +68,11 @@ class TestGetToolDispatch(unittest.TestCase):
             },
             "required": [],
         }
-        fn = _build_tool_function("/list_functions", "GET", schema)
+        fn = _build_tool_function("/find_functions", "GET", schema)
         result = fn(offset=None, limit=None)
 
         # None values should be filtered out
-        mock_get.assert_called_once_with("/list_functions", params=None)
+        mock_get.assert_called_once_with("/find_functions", params=None)
 
     @patch("bridge_mcp_ghidra.dispatch.dispatch_get")
     def test_get_with_no_params(self, mock_get):

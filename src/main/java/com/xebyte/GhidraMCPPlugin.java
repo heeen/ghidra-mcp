@@ -837,15 +837,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return listingService.listDataItemsByXrefs(offset, limit, format, programName).toJson();
     }
 
-    private String searchFunctionsByName(String searchTerm, int offset, int limit, String programName) {
-        return listingService.searchFunctionsByName(searchTerm, offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String searchFunctionsByName(String searchTerm, int offset, int limit) {
-        return listingService.searchFunctionsByName(searchTerm, offset, limit, null).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // Logic for rename, decompile, etc.
     // ----------------------------------------------------------------------------------
@@ -1014,17 +1005,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             // ToolManager may not be available in all contexts
         }
         return null;
-    }
-
-    /**
-     * List all functions in the database
-     */
-    private String listFunctions(String programName) {
-        return listingService.listFunctions(programName).toJson();
-    }
-
-    private String listFunctionsEnhanced(int offset, int limit, String programName) {
-        return listingService.listFunctionsEnhanced(offset, limit, programName).toJson();
     }
 
     /**
@@ -3397,16 +3377,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private String analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
                                           boolean includeCallers, boolean includeDisasm, boolean includeVariables) {
         return analysisService.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables).toJson();
-    }
-
-    /**
-     * NEW v1.6.0: Enhanced function search with filtering and sorting
-     */
-    private String searchFunctionsEnhanced(String namePattern, Integer minXrefs, Integer maxXrefs,
-                                          String callingConvention, Boolean hasCustomName,
-                                          Boolean isThunk, Boolean isExternal, boolean regex,
-                                          String sortBy, int offset, int limit, String programName) {
-        return analysisService.searchFunctionsEnhanced(namePattern, minXrefs, maxXrefs, callingConvention, hasCustomName, isThunk, isExternal, regex, sortBy, offset, limit, programName).toJson();
     }
 
     /**

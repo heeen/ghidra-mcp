@@ -184,27 +184,28 @@ class TestFunctionListing:
 
     def test_list_functions_default(self, http_client):
         """List functions with default parameters."""
-        response = http_client.get("/list_functions")
+        response = http_client.get("/find_functions")
         assert response.status_code == 200
         # Should return some text (may be empty list or error if no program)
         assert len(response.text) > 0
 
-    def test_list_functions_enhanced_with_limit(self, http_client):
-        """Pagination lives on /list_functions_enhanced, not /list_functions.
+    def test_list_functions_with_limit(self, http_client):
+        """List functions with limit parameter."""
+        response = http_client.get("/find_functions", params={"limit": 10})
+        assert response.status_code == 200
 
-        /list_functions declares only `program` -- ListingService documents it
-        as "List all functions (no pagination)". This test used to send
-        `limit` there, which the plugin silently drops, so it asserted nothing.
-        """
-        response = http_client.get("/list_functions_enhanced", params={"limit": 5})
+    def test_list_functions_with_offset(self, http_client):
+        """List functions with pagination."""
+        response = http_client.get("/find_functions", params={"offset": 0, "limit": 5})
         assert response.status_code == 200
         functions = response.json()["functions"]
         assert len(functions) <= 5
 
-    def test_list_functions_enhanced_with_offset(self, http_client):
-        """`offset` is declared on /list_functions_enhanced and must be honored."""
+    def test_find_functions_filters_by_name_pattern(self, http_client):
+        """`name_pattern` narrows the listing; find_functions replaced the four
+        separate listing tools this used to be spread across."""
         response = http_client.get(
-            "/list_functions_enhanced", params={"offset": 0, "limit": 5}
+            "/find_functions", params={"pattern": "FUN_", "limit": 10}
         )
         assert response.status_code == 200
         payload = response.json()
@@ -214,24 +215,24 @@ class TestFunctionListing:
     def test_search_functions_by_name(self, http_client):
         """Search functions by name pattern.
 
-        /search_functions_by_name is not an endpoint; /search_functions is,
-        and its declared selector is `name_pattern`.
+        /search_functions folded into /find_functions; the selector is still
+        `name_pattern`.
         """
-        response = http_client.get("/search_functions", params={"name_pattern": "a"})
+        response = http_client.get("/find_functions", params={"name_pattern": "a"})
         assert response.status_code == 200
         assert "functions" in response.json()
 
     def test_search_functions_enhanced(self, http_client):
         """Enhanced function search.
 
-        The declared selector is `name_pattern`; sent as `pattern` the filter
-        was dropped entirely and this returned an unfiltered listing.
+        /search_functions_enhanced folded into /find_functions, which returns
+        one shape -- `functions` -- for every filter combination.
         """
         response = http_client.get(
-            "/search_functions_enhanced", params={"name_pattern": "FUN_", "limit": 10}
+            "/find_functions", params={"name_pattern": "FUN_", "limit": 10}
         )
         assert response.status_code == 200
-        results = response.json()["results"]
+        results = response.json()["functions"]
         assert len(results) <= 10
         assert all("FUN_" in r["name"] for r in results)
 
@@ -414,12 +415,8 @@ class TestFunctionAnalysis:
 
     @pytest.fixture
     def first_function_address(self, http_client):
-        """Get address of first function in program.
-
-        /list_functions takes no `limit` -- it lists all functions -- so the
-        first match in the full listing is what the regex below finds.
-        """
-        response = http_client.get("/list_functions")
+        """Get address of first function in program."""
+        response = http_client.get("/find_functions", params={"limit": 1})
         if response.status_code != 200:
             pytest.skip("Cannot list functions")
         text = response.text
@@ -610,11 +607,8 @@ class TestXRefEndpoints:
 
     @pytest.fixture
     def sample_address(self, http_client):
-        """Get a sample address from the program.
-
-        /list_functions declares only `program`; `limit` was silently dropped.
-        """
-        response = http_client.get("/list_functions")
+        """Get a sample address from the program."""
+        response = http_client.get("/find_functions", params={"limit": 1})
         if response.status_code != 200:
             pytest.skip("Cannot get sample address")
         import re
@@ -842,11 +836,8 @@ class TestResponseFormats:
             assert len(response.text) > 0
 
     def test_list_functions_parseable(self, http_client):
-        """Function list should be parseable.
-
-        Sent without `limit`: the endpoint does not declare one.
-        """
-        response = http_client.get("/list_functions")
+        """Function list should be parseable."""
+        response = http_client.get("/find_functions", params={"limit": 5})
         assert response.status_code == 200
         # Should be non-empty
         assert len(response.text) > 0

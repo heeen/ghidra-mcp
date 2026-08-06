@@ -203,10 +203,7 @@ def sample_function(http_client, program_loaded):
     if not program_loaded:
         pytest.skip("No program loaded")
 
-    # /list_functions declares only `program` -- ListingService documents it
-    # as "List all functions (no pagination)" -- so a `limit` sent here is
-    # dropped. The first entry of the full listing is what is wanted anyway.
-    response = http_client.get("/list_functions")
+    response = http_client.get("/find_functions", params={"limit": 1})
     if response.status_code != 200 or not response.text.strip():
         pytest.skip("No functions available")
 
@@ -223,8 +220,7 @@ def sample_address(http_client, program_loaded):
     if not program_loaded:
         pytest.skip("No program loaded")
 
-    # See sample_function: /list_functions takes no `limit`.
-    response = http_client.get("/list_functions")
+    response = http_client.get("/find_functions", params={"limit": 1})
     if response.status_code != 200 or not response.text.strip():
         pytest.skip("No functions available")
 

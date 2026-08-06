@@ -59,7 +59,7 @@ def probe_facts(transport, program: str, second: str) -> ProgramFacts:
     listing = transport.call_tool("list_functions_enhanced",
                                   {"program": program, "limit": 40}, timeout=90)
     functions = (listing.json() or {}).get("functions") or []
-    real = [f for f in functions if not f.get("isThunk") and not f.get("isExternal")]
+    real = [f for f in functions if not f.get("is_thunk") and not f.get("is_external")]
     if not real:
         raise SystemExit(f"no non-thunk functions found in {program}; cannot generate cases")
     first = real[0]

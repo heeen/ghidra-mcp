@@ -83,12 +83,12 @@ def _compact(payload) -> str:
 
 
 def parse_function_hit(item) -> tuple[str | None, str | None]:
-    """Normalise a listing/search row into ``(name, address)``.
+    """Normalise a ``find_functions`` row into ``(name, address)``.
 
-    ``/list_functions`` and ``/list_functions_enhanced`` return dicts;
-    ``/search_functions`` returns legacy ``"name @ address"`` strings. One parser
-    keeps every resource that builds a ``uri`` field from producing a different
-    address spelling than ``canonical_function_uri``.
+    One parser keeps every resource that builds a ``uri`` from producing a different
+    address spelling than ``canonical_function_uri``. The string form is still accepted
+    because ``search_functions`` used to answer ``"name @ address"`` — a shape the 7.0.0
+    response contract disallows, and one reason the four listing tools were merged.
     """
     if isinstance(item, dict):
         address = item.get("address")
@@ -186,9 +186,8 @@ async def program_index_resource(program: str) -> str:
 async def function_index_resource(program: str) -> str:
     name = unquote(program)
     subscriptions.note_resource_read(f"ghidra://program/{quote(name, safe='')}/functions")
-    # /list_functions has no limit and materialises every function; enhanced is paginated.
     raw = await _read_async(
-        "/list_functions_enhanced",
+        "/find_functions",
         program=name,
         offset=0,
         limit=_MAX_INDEX_FUNCTIONS,
@@ -346,7 +345,7 @@ async def function_search_resource(program: str, pattern: str) -> str:
         f"ghidra://search/{quote(program_name, safe='')}/functions/{quote(needle, safe='')}"
     )
     raw = await _read_async(
-        "/search_functions", name_pattern=needle, program=program_name, limit=_MAX_SEARCH_HITS
+        "/find_functions", name_pattern=needle, program=program_name, limit=_MAX_SEARCH_HITS
     )
     payload = json.loads(raw)
     items = payload.get("functions", payload) if isinstance(payload, dict) else payload
@@ -398,7 +397,7 @@ async def complete_resource_argument(ref, argument, context):
             if not partial:
                 return Completion(values=[])
             raw = await _read_async(
-                "/search_functions",
+                "/find_functions",
                 name_pattern=partial,
                 program=unquote(program) if program else None,
                 limit=_COMPLETION_LIMIT,

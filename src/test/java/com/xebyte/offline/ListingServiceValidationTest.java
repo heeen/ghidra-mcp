@@ -68,8 +68,9 @@ public class ListingServiceValidationTest extends TestCase {
         assertNoProgram(listing.searchStrings("pattern", 4, "", 0, 100, ""));
     }
 
-    public void testSearchFunctionsByNameDegradesGracefully() {
-        assertNoProgram(listing.searchFunctionsByName("Foo", 0, 100, ""));
+    public void testFindFunctionsDegradesGracefully() {
+        assertNoProgram(listing.findFunctions("Foo", false, null, null, "", null, null, null,
+                                              "address", 0, 100, ""));
     }
 
     public void testListImportsDegradesGracefully() {

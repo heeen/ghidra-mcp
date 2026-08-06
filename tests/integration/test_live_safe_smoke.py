@@ -30,12 +30,8 @@ def require_server_and_program(server_available, program_loaded):
 
 @pytest.fixture
 def first_function_address(http_client):
-    """Get the address of the first function in the current program.
-
-    /list_functions declares only `program` -- "List all functions (no
-    pagination)" -- so the `limit=1` this used to send was silently dropped.
-    """
-    response = http_client.get("/list_functions")
+    """Get the address of the first function in the current program."""
+    response = http_client.get("/find_functions", params={"limit": 1})
     if response.status_code != 200 or not response.text.strip():
         pytest.skip("Cannot list functions")
 
@@ -167,12 +163,7 @@ class TestLiveServerSmoke:
         assert "architecture" in payload and "language" in payload
 
     def test_list_functions_returns_live_data(self, http_client):
-        """/list_functions takes no `limit`; it lists the whole program.
-
-        The dropped `limit=3` made `len(text) > 0` the only claim, which the
-        `{}` of an errored response also satisfies. Assert the envelope.
-        """
-        response = http_client.get("/list_functions")
+        response = http_client.get("/find_functions", params={"limit": 3})
         assert response.status_code == 200
         payload = response.json()
         assert payload["count"] == len(payload["functions"])
