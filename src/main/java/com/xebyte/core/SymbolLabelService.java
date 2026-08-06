@@ -40,7 +40,7 @@ public class SymbolLabelService {
 
     @McpTool(path = "/get_function_labels", description = "Get labels within a function body. Accepts a function name OR address.", category = "symbol", access = ToolAccess.READ_ONLY)
     public Response getFunctionLabels(
-            @Param(value = "name", paramType = "address", aliases = {"function", "address", "function_address"},
+            @Param(value = "function", aliases = {"name", "address", "function_address", "function_name"}, paramType = "address",
                    description = "Function name or address (0x<hex> / <space>:<hex>).") String functionName,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of labels to skip before this page starts; 0 begins at the "
