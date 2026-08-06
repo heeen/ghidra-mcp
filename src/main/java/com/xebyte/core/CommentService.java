@@ -67,7 +67,7 @@ public class CommentService {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction(transactionName);
+                WriteTx tx = WriteTx.begin(program, transactionName);
                 try {
                     program.getListing().setComment(addr, commentType, comment);
                     success.set(true);
@@ -75,7 +75,7 @@ public class CommentService {
                     errorMsg.set(e.getMessage());
                     Msg.error(this, "Error setting " + transactionName.toLowerCase(), e);
                 } finally {
-                    program.endTransaction(tx, success.get());
+                    tx.end(success.get());
                 }
             });
         } catch (Exception e) {
@@ -339,7 +339,7 @@ public class CommentService {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Batch Set Comments");
+                WriteTx tx = WriteTx.begin(program, "Batch Set Comments");
                 try {
                     // Set or clear plate comment (v3.0.1: null=skip, ""=clear, non-empty=set)
                     // - Function target → use Function.setComment (existing behavior).
@@ -427,7 +427,7 @@ public class CommentService {
                     errorMsg.set(e.getMessage());
                     Msg.error(this, "Error in batch set comments", e);
                 } finally {
-                    program.endTransaction(tx, success.get());
+                    tx.end(success.get());
                 }
             });
 
@@ -508,7 +508,7 @@ public class CommentService {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Clear Function Comments");
+                WriteTx tx = WriteTx.begin(program, "Clear Function Comments");
                 try {
                     Function func = program.getFunctionManager().getFunctionAt(resolvedAddr);
                     if (func == null) {
@@ -551,7 +551,7 @@ public class CommentService {
                     errorMsg.set(e.getMessage());
                     Msg.error(this, "Error clearing function comments", e);
                 } finally {
-                    program.endTransaction(tx, success.get());
+                    tx.end(success.get());
                 }
             });
         } catch (Exception e) {
