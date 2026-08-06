@@ -124,6 +124,7 @@ async def programs_resource() -> str:
                 "index": f"ghidra://program/{encoded}/index",
                 "functions": f"ghidra://program/{encoded}/functions",
                 "search": f"ghidra://search/{encoded}/functions/{{pattern}}",
+                "changes": f"ghidra://program/{encoded}/changes",
             })
 
     return _json({
@@ -133,6 +134,7 @@ async def programs_resource() -> str:
             "function_by_address": "ghidra://function/{program}/{address}",
             "function_by_name": "ghidra://function/{program}/by-name/{name}",
             "search": "ghidra://search/{program}/functions/{pattern}",
+            "changes": "ghidra://program/{program}/changes",
             "notes": [
                 "Addresses are lowercase hex without 0x, exactly as Ghidra reports them "
                 "(use space:hex on programs with several address spaces).",
@@ -207,6 +209,52 @@ async def function_index_resource(program: str) -> str:
         "total": total,
         "truncated": truncated,
     })
+
+
+@mcp.resource(
+    "ghidra://program/{program}/changes",
+    name="Ghidra change token",
+    description="The program's modification counter plus what this session can expect in "
+                "the way of change notifications. Read this when a cached bundle might be "
+                "stale: compare it against the bundle's own revision.modification_number.",
+    mime_type=_JSON,
+)
+async def program_changes_resource(program: str) -> str:
+    """Expose the coarse change token and the delivery caveats that go with it.
+
+    Notifications can be lost (a transport with no stream open, a session that
+    reconnected), and a stale read is worse than churn — an agent that re-reads
+    pre-write code concludes its own write did not land. So the token is
+    published as well as polled: comparing it to a bundle's
+    ``revision.modification_number`` detects staleness without any notification
+    at all.
+    """
+    name = unquote(program)
+    uri = f"ghidra://program/{quote(name, safe='')}/changes"
+    subscriptions.note_resource_read(uri)
+    payload: dict = {"program": name}
+    try:
+        payload.update(json.loads(await _read_async("/get_change_token", program=name)))
+    except Exception as e:
+        payload["error"] = str(e)
+    stateless = bool(getattr(mcp.settings, "stateless_http", False))
+    payload["notifications"] = {
+        "subscribe_supported": not stateless,
+        "staleness_check": "Re-read this resource and compare modification_number with "
+                           "the revision.modification_number in a cached function bundle; "
+                           "they diverge whenever the program was written to.",
+        "granularity": "Per program, not per function. It counts writes rather than "
+                       "changed content, so re-setting an identical comment still moves it.",
+        "caveats": [
+            "stdio: notifications are delivered on the single stream.",
+            "streamable-http: resources/updated for a write rides that call's own "
+            "response stream; out-of-band edits (GUI, undo/redo, scripts) arrive on the "
+            "standalone GET stream, so open one to see them.",
+            "--json-response: no notification can be delivered at all; poll this resource.",
+            "--stateless-http: resources/subscribe is refused; poll this resource.",
+        ],
+    }
+    return _json(payload)
 
 
 @mcp.resource(
