@@ -81,10 +81,10 @@ class TestGetToolDispatch(unittest.TestCase):
         mock_get.return_value = '{"version": "4.2.0"}'
 
         schema = {"properties": {}, "required": []}
-        fn = _build_tool_function("/get_version", "GET", schema)
+        fn = _build_tool_function("/mcp/health", "GET", schema)
         result = fn()
 
-        mock_get.assert_called_once_with("/get_version", params=None)
+        mock_get.assert_called_once_with("/mcp/health", params=None)
 
 
 class TestPostToolDispatch(unittest.TestCase):

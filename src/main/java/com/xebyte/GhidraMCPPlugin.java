@@ -1923,38 +1923,39 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 queueSize = tpe.getQueue().size();
             }
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"status\": \"ok\",");
-            sb.append("\"uptime_seconds\": ").append(uptimeSec).append(",");
-            sb.append("\"active_requests\": ").append(active).append(",");
-            sb.append("\"http_pool\": {");
-            sb.append("\"configured_size\": 3,");
-            sb.append("\"current_size\": ").append(poolSize).append(",");
-            sb.append("\"largest_size\": ").append(largestPool).append(",");
-            sb.append("\"queue_size\": ").append(queueSize).append(",");
-            sb.append("\"completed_tasks\": ").append(completedTasks);
-            sb.append("},");
-            sb.append("\"memory_mb\": {");
-            sb.append("\"used\": ").append(usedMb).append(",");
-            sb.append("\"total\": ").append(totalMb).append(",");
-            sb.append("\"max\": ").append(maxMb);
-            sb.append("}");
-            sb.append("}");
-            sendResponse(exchange, sb.toString());
+            Program current = getCurrentProgram();
+            // Absorbs the former /check_connection (which answered an English sentence,
+            // the last endpoint to violate the JSON contract) and /get_version: three
+            // endpoints answering "who and what are you, and are you alive".
+            sendResponse(exchange, com.xebyte.core.JsonHelper.toJson(
+                com.xebyte.core.JsonHelper.mapOf(
+                    "status", "ok",
+                    "connected", true,
+                    "program", current != null ? current.getName() : null,
+                    "uptime_seconds", uptimeSec,
+                    "active_requests", active,
+                    "version", com.xebyte.core.JsonHelper.mapOf(
+                        "plugin_version", VersionInfo.getVersion(),
+                        "plugin_name", VersionInfo.getAppName(),
+                        "full_version", VersionInfo.getFullVersion(),
+                        "build_timestamp", VersionInfo.getBuildTimestamp(),
+                        "build_number", VersionInfo.getBuildNumber(),
+                        "ghidra_version", VersionInfo.getGhidraVersion(),
+                        "java_version", System.getProperty("java.version"),
+                        "endpoint_count", VersionInfo.getEndpointCount()),
+                    "http_pool", com.xebyte.core.JsonHelper.mapOf(
+                        "configured_size", 3,
+                        "current_size", poolSize,
+                        "largest_size", largestPool,
+                        "queue_size", queueSize,
+                        "completed_tasks", completedTasks),
+                    "memory_mb", com.xebyte.core.JsonHelper.mapOf(
+                        "used", usedMb, "total", totalMb, "max", maxMb))));
         }));
 
         // ==========================================================================
         // INFRASTRUCTURE ENDPOINTS (not in service layer)
         // ==========================================================================
-
-        reg.add("/check_connection", safeHandler(exchange -> {
-            sendResponse(exchange, checkConnection());
-        }));
-
-        reg.add("/get_version", safeHandler(exchange -> {
-            sendResponse(exchange, getVersion());
-        }));
 
         // ==========================================================================
         // GUI-ONLY ENDPOINTS (require PluginTool/CodeBrowser/Swing context)
@@ -2512,35 +2513,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      */
     public String applyDataType(String addressStr, String typeName, boolean clearExisting) {
         return dataTypeService.applyDataType(addressStr, typeName, clearExisting).toJson();
-    }
-
-    /**
-     * Check if the plugin is running and accessible
-     */
-    private String checkConnection() {
-        Program program = getCurrentProgram();
-        if (program == null) {
-            return "Connected: GhidraMCP plugin running, but no program loaded";
-        }
-        return "Connected: GhidraMCP plugin running with program '" + program.getName() + "'";
-    }
-
-    /**
-     * Get version information about the plugin and Ghidra (v1.7.0)
-     */
-    private String getVersion() {
-        StringBuilder version = new StringBuilder();
-        version.append("{\n");
-        version.append("  \"plugin_version\": \"").append(VersionInfo.getVersion()).append("\",\n");
-        version.append("  \"plugin_name\": \"").append(VersionInfo.getAppName()).append("\",\n");
-        version.append("  \"build_timestamp\": \"").append(VersionInfo.getBuildTimestamp()).append("\",\n");
-        version.append("  \"build_number\": \"").append(VersionInfo.getBuildNumber()).append("\",\n");
-        version.append("  \"full_version\": \"").append(VersionInfo.getFullVersion()).append("\",\n");
-        version.append("  \"ghidra_version\": \"").append(VersionInfo.getGhidraVersion()).append("\",\n");
-        version.append("  \"java_version\": \"").append(System.getProperty("java.version")).append("\",\n");
-        version.append("  \"endpoint_count\": ").append(VersionInfo.getEndpointCount()).append("\n");
-        version.append("}");
-        return version.toString();
     }
 
     /**

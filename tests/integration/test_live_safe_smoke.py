@@ -59,14 +59,16 @@ def _extract_signature(function_text):
 
 class TestLiveServerSmoke:
     def test_server_health(self, http_client):
-        response = http_client.get("/check_connection")
-        assert response.status_code == 200
-        assert "connected" in response.text.lower() or "ok" in response.text.lower()
-
-    def test_version_payload_parseable(self, http_client):
-        response = http_client.get("/get_version")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         payload = json.loads(response.text)
+        assert payload["status"] == "ok"
+        assert payload["connected"] is True
+
+    def test_version_payload_parseable(self, http_client):
+        response = http_client.get("/mcp/health")
+        assert response.status_code == 200
+        payload = json.loads(response.text)["version"]
         assert isinstance(payload, dict)
         assert payload.get("plugin_name") == "GhidraMCP"
         assert "plugin_version" in payload
@@ -96,8 +98,8 @@ class TestLiveServerSmoke:
         assert match is not None, "Could not locate project version in pom.xml"
         pom_version = match.group(1).strip()
 
-        response = http_client.get("/get_version")
-        payload = json.loads(response.text)
+        response = http_client.get("/mcp/health")
+        payload = json.loads(response.text)["version"]
         live_version = payload["plugin_version"]
 
         assert live_version == pom_version, (
@@ -121,20 +123,20 @@ class TestLiveServerSmoke:
         )
 
     def test_endpoint_count_consistent(self, http_client):
-        """/get_version.endpoint_count must equal len(/mcp/schema.tools).
+        """/mcp/health.version.endpoint_count must equal len(/mcp/schema.tools).
 
         Pre-v5.11.1 the constant was hardcoded and drifted (was 177 while
         the live scanner registered 196). Fixed by having the plugin
         call VersionInfo.setEndpointCount(scanner.getEndpoints().size())
         after registration. This test pins the contract."""
-        version_response = http_client.get("/get_version")
-        reported = json.loads(version_response.text)["endpoint_count"]
+        version_response = http_client.get("/mcp/health")
+        reported = json.loads(version_response.text)["version"]["endpoint_count"]
 
         schema_response = http_client.get("/mcp/schema")
         actual = len(json.loads(schema_response.text).get("tools", []))
 
         assert reported == actual, (
-            f"/mcp/schema returned {actual} tools but /get_version reports "
+            f"/mcp/schema returned {actual} tools but /mcp/health reports "
             f"{reported}. The endpoint count published to the version banner is "
             "stale — either the plugin's setEndpointCount() call regressed or "
             "the deployed jar predates the fix."
@@ -144,8 +146,8 @@ class TestLiveServerSmoke:
         """v5.11.0 added Ghidra 12.1 support (#211). The live plugin
         must report the Ghidra version it was loaded into — used by
         the deploy script's smoke check and by issue triage."""
-        response = http_client.get("/get_version")
-        payload = json.loads(response.text)
+        response = http_client.get("/mcp/health")
+        payload = json.loads(response.text)["version"]
         ghidra_version = payload.get("ghidra_version", "")
         # Strip BUILD_DATE suffix if present (older builds embedded it).
         ghidra_version = ghidra_version.split()[0] if ghidra_version else ""

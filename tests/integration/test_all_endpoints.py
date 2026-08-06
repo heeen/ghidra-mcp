@@ -31,13 +31,13 @@ class TestServerConnection:
 
     def test_health_check(self, http_client):
         """Server should respond to health check."""
-        response = http_client.get("/check_connection")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         assert "Connection OK" in response.text or "GhidraMCP" in response.text
 
     def test_version_endpoint(self, http_client):
         """Server should return version info."""
-        response = http_client.get("/get_version")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         # Should contain version string
         assert "1." in response.text or "version" in response.text.lower()

@@ -139,7 +139,7 @@ def main():
     if args.integration or args.all:
         try:
             import requests
-            response = requests.get(f"{args.server}/check_connection", timeout=5)
+            response = requests.get(f"{args.server}/mcp/health", timeout=5)
             if response.status_code == 200:
                 print(f"[OK] Server is running at {args.server}")
             else:

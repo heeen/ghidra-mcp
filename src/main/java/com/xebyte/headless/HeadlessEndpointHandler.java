@@ -134,16 +134,6 @@ public class HeadlessEndpointHandler {
     // VERSION AND METADATA
     // ==========================================================================
 
-    public String getVersion() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"plugin_version\": \"").append(VERSION).append("\",");
-        sb.append("\"plugin_name\": \"GhidraMCP Headless\",");
-        sb.append("\"mode\": \"headless\"");
-        sb.append("}");
-        return sb.toString();
-    }
-
     /**
      * Health check endpoint for container orchestration (Docker, Kubernetes).
      * Returns JSON with status, version, and program information.
@@ -152,7 +142,12 @@ public class HeadlessEndpointHandler {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
         sb.append("\"status\": \"healthy\",");
+        // Absorbs the former /get_version and /check_connection: one endpoint answers
+        // "who and what are you, and are you alive", as it does in GUI mode.
         sb.append("\"version\": \"").append(VERSION).append("\",");
+        sb.append("\"plugin_name\": \"GhidraMCP Headless\",");
+        sb.append("\"mode\": \"headless\",");
+        sb.append("\"connected\": true,");
 
         // Check if any program is loaded
         Program program = getProgram(null);

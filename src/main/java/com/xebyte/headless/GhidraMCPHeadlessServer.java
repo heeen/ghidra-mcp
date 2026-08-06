@@ -378,16 +378,8 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // INFRASTRUCTURE ENDPOINTS (not in service layer)
         // ==========================================================================
 
-        safeContext("/check_connection", exchange -> {
-            sendResponse(exchange, "Connection OK - GhidraMCP Headless Server v" + VERSION);
-        });
-
         safeContext("/health", exchange -> {
             sendResponse(exchange, endpointHandler.getHealth());
-        });
-
-        safeContext("/get_version", exchange -> {
-            sendResponse(exchange, endpointHandler.getVersion());
         });
 
         // ==========================================================================
@@ -431,9 +423,9 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // GhidraMCPPlugin; see ManualToolDescriptors for the shared metadata
         // source. Found via a live-schema-vs-catalog diff (v6.0.0).
         com.xebyte.core.ManualToolDescriptors.addAll(scanner,
-            "/check_connection", "/configure_analyzer",
+            "/configure_analyzer",
             "/delete_project", "/exit_ghidra", "/get_current_address",
-            "/get_current_function", "/get_version", "/health",
+            "/get_current_function", "/health",
             "/list_projects", "/mcp/schema",
             "/server/admin/set_permissions", "/server/admin/terminate_all_checkouts",
             "/server/admin/terminate_checkout", "/server/admin/users",

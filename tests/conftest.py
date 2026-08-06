@@ -147,7 +147,7 @@ def http_client(http_session, server_url):
 def server_available(server_url):
     """Check if the server is available."""
     try:
-        response = requests.get(f"{server_url}/check_connection", timeout=5)
+        response = requests.get(f"{server_url}/mcp/health", timeout=5)
         return response.status_code == 200
     except requests.RequestException:
         return False

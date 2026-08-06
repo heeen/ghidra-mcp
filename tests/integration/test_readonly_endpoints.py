@@ -56,15 +56,15 @@ def require_server(server_available):
 class TestServerHealth:
     """Test server connectivity and health endpoints."""
 
-    def test_check_connection(self, http_client):
+    def test_server_health(self, http_client):
         """Server should respond to health check."""
-        response = http_client.get("/check_connection")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         assert "ok" in response.text.lower() or "connected" in response.text.lower()
 
     def test_get_version(self, http_client):
         """Server should return version info."""
-        response = http_client.get("/get_version")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         text = response.text
         # Should contain version info
@@ -826,7 +826,7 @@ class TestResponseFormats:
 
     def test_version_is_json_parseable(self, http_client):
         """Version response should be JSON."""
-        response = http_client.get("/get_version")
+        response = http_client.get("/mcp/health")
         assert response.status_code == 200
         try:
             data = json.loads(response.text)
