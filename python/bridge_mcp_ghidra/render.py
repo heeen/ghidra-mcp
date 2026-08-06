@@ -20,7 +20,26 @@ sole consumer is a model reading prose.
 
 from __future__ import annotations
 
+import re
+
 _MAX_LOCALS = 80
+
+# Ghidra's own naming, i.e. nobody has looked at this variable yet. The stack
+# forms encode their own offset (local_f0 is Stack[-0xf0]), which is why an
+# auto-named stack local adds nothing to what the declaration already said.
+_AUTO_NAMED = re.compile(
+    r"""^(
+        local_[0-9a-fA-F]+          # local_f0
+      | local_res[0-9a-fA-F]+       # positive-offset (caller frame) slot
+      | [a-z]{0,3}Stack_[0-9a-fA-F]+  # auStack_110, uStack_120
+      | [a-z]{1,4}Var\d+            # uVar1, pcVar5, puVar1
+      | param_\d+                   # unnamed parameter
+      | in_\w+                      # in_AL, in_FS_OFFSET (decompiler-invented)
+      | extraout_\w+
+      | unaff_\w+
+    )$""",
+    re.VERBOSE,
+)
 
 
 def _fence(code: str, lang: str = "c") -> list[str]:
@@ -51,26 +70,64 @@ def _kv_line(bundle: dict) -> list[str]:
     return out
 
 
+def _row(var: dict) -> str:
+    line = f"- `{var.get('name')}` : {var.get('type')}"
+    if var.get("storage"):
+        line += f" @ {var['storage']}"
+    notes = []
+    if var.get("is_phantom"):
+        notes.append("phantom")
+    if var.get("in_decompiled_code") is False:
+        notes.append("not in decompiled code")
+    if notes:
+        line += f"  ({', '.join(notes)})"
+    return line
+
+
 def _variables(bundle: dict) -> list[str]:
-    rows = list(bundle.get("parameters") or []) + list(bundle.get("locals") or [])
-    if not rows:
+    """Parameters, and only the locals that say something the C does not.
+
+    The decompiled code above already declares every local with its name and its
+    type, so repeating all 48 of them is the single largest redundancy in a
+    bundle. What the C text cannot carry is: which register a value lives in,
+    the stack offset of a local that has been *renamed* away from Ghidra's
+    offset-derived auto-name, and variables Ghidra knows about that the
+    decompiler dropped. Those survive; the rest are counted, not listed.
+
+    Parameters always survive — there are few of them and their storage is the
+    calling convention, which is exactly what a wrong signature hides.
+    """
+    params = list(bundle.get("parameters") or [])
+    locals_ = list(bundle.get("locals") or [])
+    keep = [v for v in locals_ if _says_something(v)]
+    omitted = len(locals_) - len(keep)
+    rows = params + keep
+    if not rows and not omitted:
         return []
-    out = ["", f"## Parameters and locals ({len(rows)})"]
+
+    out = ["", "## Parameters and notable locals"]
     for var in rows[:_MAX_LOCALS]:
-        line = f"- `{var.get('name')}` : {var.get('type')}"
-        if var.get("storage"):
-            line += f" @ {var['storage']}"
-        notes = []
-        if var.get("is_phantom"):
-            notes.append("phantom")
-        if var.get("in_decompiled_code") is False:
-            notes.append("not in decompiled code")
-        if notes:
-            line += f"  ({', '.join(notes)})"
-        out.append(line)
+        out.append(_row(var))
     if len(rows) > _MAX_LOCALS:
         out.append(f"- … {len(rows) - _MAX_LOCALS} more")
+    if omitted:
+        out.append(f"- _{omitted} auto-named locals omitted — the declarations above "
+                   "carry their names and types, and their stack offsets are in their names._")
     return out
+
+
+def _says_something(var: dict) -> bool:
+    """True when a local carries a fact the decompiled declarations do not.
+
+    An auto-named local never does: the name IS the storage. ``local_f0`` is
+    Stack[-0xf0]; ``in_AL``, ``extraout_EAX`` and ``unaff_EBX`` name their
+    register; and ``uVar7``'s register is a register-allocation artifact nobody
+    acts on. Rename it to ``bytesRead`` and the offset lives nowhere else — which
+    is when the row starts earning its place.
+    """
+    if var.get("in_decompiled_code") is False:
+        return True  # Ghidra knows it; the decompiler dropped it
+    return not _AUTO_NAMED.match(var.get("name") or "")
 
 
 def _call_context(bundle: dict) -> list[str]:
