@@ -2188,7 +2188,7 @@ public class AnalysisService {
     /**
      * Comprehensive function analysis combining decompilation, xrefs, callees, callers, disassembly, and variables
      */
-        @McpTool(path = "/analyze_function_complete", description = "Comprehensive single-call function analysis. Accepts function name or address.", category = "analysis", access = ToolAccess.READ_ONLY)
+        @McpTool(path = "/analyze_function_complete", description = "Comprehensive single-call function analysis. Accepts function name or address. For a cacheable read of decompile+callers+comments+xrefs prefer ghidra://function/{program}/{address} (or /get_function_bundle).", category = "analysis", access = ToolAccess.READ_ONLY)
     public Response analyzeFunctionComplete(
             @Param(value = "name", description = "Function reference (name or address)") String name,
             @Param(value = "include_xrefs", defaultValue = "true",

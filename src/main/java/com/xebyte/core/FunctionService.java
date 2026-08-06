@@ -156,7 +156,7 @@ public class FunctionService {
      * Decompile a function at the given address.
      * If programName is provided, uses that program instead of the current one.
      */
-    @McpTool(path = "/decompile_function", description = "Decompile ONE function (address) OR MANY (functions=comma-separated names/addresses) to pseudocode. On programs with multiple address spaces, prefix addresses with the space name (mem:1000). Replaces batch_decompile.", category = "function", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/decompile_function", description = "Decompile ONE function (address) OR MANY (functions=comma-separated names/addresses) to pseudocode. Prefer the MCP resource ghidra://function/{program}/{address} (or /get_function_bundle) when you also need callers/comments/xrefs — one read replaces this plus several follow-ups. On programs with multiple address spaces, prefix addresses with the space name (mem:1000). Replaces batch_decompile.", category = "function", access = ToolAccess.READ_ONLY)
     public Response decompileFunctionByAddress(
             @Param(value = "address", paramType = "address", defaultValue = "",
                    description = "Function address or name (single mode). 0x<hex> or <space>:<hex>. Omit when using functions=.") String addressStr,
