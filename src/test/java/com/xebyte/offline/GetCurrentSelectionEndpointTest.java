@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
  *
  * <ol>
  *   <li>{@code GhidraMCPPlugin.java} registers a route handler for
- *       {@code /get_current_selection} via {@code server.createContext}.</li>
+ *       {@code /get_current_selection} via the shared route registrar.</li>
  *   <li>A private helper {@code getCurrentSelection()} exists alongside
  *       the existing {@code getCurrentAddress()} / {@code getCurrentFunction()}
  *       helpers and uses {@code CodeViewerService.getCurrentSelection()} —
@@ -48,7 +48,7 @@ public class GetCurrentSelectionEndpointTest extends TestCase {
     public void testPluginRegistersGetCurrentSelectionRoute() throws IOException {
         String src = readUtf8("src/main/java/com/xebyte/GhidraMCPPlugin.java");
         Pattern p = Pattern.compile(
-                "server\\.createContext\\s*\\(\\s*\"/get_current_selection\"",
+                "(?:server\\.createContext|reg\\.add)\\s*\\(\\s*\"/get_current_selection\"",
                 Pattern.MULTILINE);
         assertTrue(
                 "GhidraMCPPlugin.java must register a route handler for "
