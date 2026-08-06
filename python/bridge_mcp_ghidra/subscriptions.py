@@ -38,6 +38,9 @@ def note_resource_read(uri: str) -> None:
     if session is None:
         return
     state.remember_resource_interest(session, uri=str(uri), read=True)
+    from . import change_poller
+
+    change_poller.kick()
 
 
 def _subscriptions_supported() -> bool:
@@ -65,6 +68,9 @@ async def _on_subscribe(uri: AnyUrl) -> None:
         )
     state.remember_resource_interest(session, uri=str(uri), subscribed=True)
     logger.debug("Resource subscribed: %s", uri)
+    from . import change_poller
+
+    change_poller.kick()
 
 
 @mcp._mcp_server.unsubscribe_resource()

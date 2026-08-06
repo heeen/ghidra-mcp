@@ -128,6 +128,9 @@ class TestSubscribeHandlers(unittest.TestCase):
         with state._resource_interest_lock:
             state._resource_interest.clear()
         mcp.settings.stateless_http = False
+        from bridge_mcp_ghidra import change_poller
+
+        change_poller.stop()
 
     def test_subscribe_records_interest(self):
         session = _Session()
@@ -135,7 +138,7 @@ class TestSubscribeHandlers(unittest.TestCase):
         async def body():
             with patch.object(
                 subscriptions, "_current_session", return_value=session
-            ):
+            ), patch("bridge_mcp_ghidra.change_poller.kick"):
                 await subscriptions._on_subscribe(AnyUrl("ghidra://function/ls/001f4000"))
             entry = state._resource_interest[id(session)]
             self.assertIn("ghidra://function/ls/001f4000", entry.subscribed_uris)

@@ -73,12 +73,13 @@ public class ServerManager {
             ProgramScriptService programScriptService = new ProgramScriptService(programProvider, ts);
             FunctionBundleService functionBundleService = new FunctionBundleService(programProvider, ts, functionService);
             TypeReferenceService typeReferenceService = new TypeReferenceService(programProvider);
+            ChangeTokenService changeTokenService = new ChangeTokenService(programProvider);
 
             AnnotationScanner scanner = new AnnotationScanner(programProvider, ts,
                 listingService, functionService, commentService, symbolLabelService,
                 xrefCallGraphService, dataTypeService, analysisService,
                 documentationHashService, malwareSecurityService, programScriptService,
-                functionBundleService, typeReferenceService);
+                functionBundleService, typeReferenceService, changeTokenService);
 
             startServer(scanner, guiEndpoints);
         }
