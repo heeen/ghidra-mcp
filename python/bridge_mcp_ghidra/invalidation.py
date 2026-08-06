@@ -208,10 +208,15 @@ async def _invalidate(
             list_changed = True
             uris |= _by_name_uris(program, kwargs)
     elif tier is InvalidationTier.TYPE:
-        # Precise fan-out arrives with /find_type_users; until then, anything
-        # this session already knows about in the program is the safe set.
-        uris |= _known_uris_for_program(program)
-        list_changed = True
+        # Precise fan-out via /find_type_users (DataTypeReferenceFinder, off EDT).
+        # On timeout/error, degrade to the program's known URIs.
+        type_uris = await _type_user_uris(program, kwargs)
+        if type_uris is None:
+            uris |= _known_uris_for_program(program)
+            list_changed = True
+        else:
+            uris |= type_uris
+            list_changed = True  # index rows may mention the type name indirectly
     else:  # UNBOUNDED
         uris |= _known_uris_for_program(program)
         list_changed = True
@@ -322,6 +327,58 @@ async def _caller_uris(program: str | None, kwargs: dict) -> set[str]:
             caddr = item.get("address")
             if caddr:
                 uris.add(canonical_function_uri(program, str(caddr)))
+    return uris
+
+
+async def _type_user_uris(program: str | None, kwargs: dict) -> set[str] | None:
+    """Return precise URIs for a TYPE-tier write, or None to degrade.
+
+    ``None`` means the finder timed out / errored / could not resolve the type
+    name from the write kwargs — the caller should fall back to known URIs.
+    An empty set means the finder ran and found no users (nothing to invalidate).
+    """
+    type_name = _first(
+        kwargs,
+        "type_name",
+        "name",
+        "struct_name",
+        "data_type",
+        "datatype",
+        "enum_name",
+        "old_name",
+    )
+    if not type_name or not program:
+        return None
+    field = _first(kwargs, "field", "field_name", "member", "member_name")
+    params: dict[str, Any] = {
+        "type_name": type_name,
+        "program": program,
+        "timeout_seconds": 10,
+    }
+    if field:
+        params["field"] = field
+    try:
+        raw = await state.run_blocking_ghidra_call(
+            lambda: dispatch.raise_on_failure(
+                dispatch.dispatch_get("/find_type_users", params=params)
+            )
+        )
+        payload = json.loads(raw)
+    except Exception as e:
+        logger.debug("find_type_users for invalidation failed: %s", e)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("timed_out"):
+        logger.debug("find_type_users timed out for %s; degrading", type_name)
+        return None
+    functions = payload.get("functions", [])
+    uris: set[str] = set()
+    if isinstance(functions, list):
+        for item in functions:
+            if not isinstance(item, dict) or not item.get("address"):
+                continue
+            uris.add(canonical_function_uri(program, str(item["address"])))
     return uris
 
 
