@@ -1352,12 +1352,12 @@ public class FunctionService {
                 String currentComment = func.getComment();
                 if (currentComment == null || currentComment.isEmpty() ||
                     currentComment.startsWith("Setting prototype:")) {
-                    int txRestore = program.startTransaction("Restore plate comment after prototype");
+                    WriteTx txRestore = WriteTx.begin(program, "Restore plate comment after prototype");
                     try {
                         func.setComment(savedPlateComment);
                         Msg.info(this, "Restored plate comment after prototype change for " + func.getName());
                     } finally {
-                        program.endTransaction(txRestore, true);
+                        txRestore.end(true);
                     }
                 }
             }
@@ -1375,7 +1375,7 @@ public class FunctionService {
     void parseFunctionSignatureAndApply(Program program, Address addr, String prototype,
                                               String callingConvention, AtomicBoolean success, StringBuilder errorMessage) {
         // Use ApplyFunctionSignatureCmd to parse and apply the signature
-        int txProto = program.startTransaction("Set function prototype");
+        WriteTx txProto = WriteTx.begin(program, "Set function prototype");
         boolean signatureApplied = false;
         try {
             // Get data type manager
@@ -1417,13 +1417,13 @@ public class FunctionService {
             errorMessage.append(msg);
             Msg.error(this, msg, e);
         } finally {
-            program.endTransaction(txProto, signatureApplied);
+            txProto.end(signatureApplied);
         }
 
         // Apply calling convention in a SEPARATE transaction after signature is committed
         // This ensures the calling convention isn't overridden by ApplyFunctionSignatureCmd
         if (signatureApplied && callingConvention != null && !callingConvention.isEmpty()) {
-            int txConv = program.startTransaction("Set calling convention");
+            WriteTx txConv = WriteTx.begin(program, "Set calling convention");
             boolean conventionApplied = false;
             try {
                 conventionApplied = applyCallingConvention(program, addr, callingConvention, errorMessage);
@@ -1438,7 +1438,7 @@ public class FunctionService {
                 Msg.error(this, msg, e);
                 success.set(false);
             } finally {
-                program.endTransaction(txConv, conventionApplied);
+                txConv.end(conventionApplied);
             }
         } else if (signatureApplied) {
             success.set(true);
@@ -2066,7 +2066,7 @@ public class FunctionService {
      */
     boolean updateVariableType(Program program, HighSymbol symbol, DataType dataType,
                                        AtomicBoolean success, StringBuilder errorDetails) {
-        int tx = program.startTransaction("Set variable type");
+        WriteTx tx = WriteTx.begin(program, "Set variable type");
         boolean result = false;
         String storageInfo = "unknown";
 
@@ -2138,7 +2138,7 @@ public class FunctionService {
                 errorDetails.append(msg).append(" (Storage: ").append(storageInfo).append(")");
             }
         } finally {
-            program.endTransaction(tx, success.get());
+            tx.end(success.get());
         }
         return result;
     }
@@ -3357,7 +3357,7 @@ public class FunctionService {
                      (endAddress != null ? " to " + endAddress : ""));
 
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Disassemble Bytes");
+                WriteTx tx = WriteTx.begin(program, "Disassemble Bytes");
                 boolean success = false;
 
                 try {
@@ -3505,7 +3505,7 @@ public class FunctionService {
                     errorMsg.set("Exception during disassembly: " + msg);
                     Msg.error(this, "disassembleBytes: Exception during disassembly", e);
                 } finally {
-                    program.endTransaction(tx, success);
+                    tx.end(success);
                 }
             });
 
@@ -3897,9 +3897,9 @@ public class FunctionService {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Batch Rename Variables");
+                WriteTx tx = WriteTx.begin(program, "Batch Rename Variables");
                 // Suppress events during batch operation to prevent re-analysis on each rename
-                int eventTx = program.startTransaction("Suppress Events");
+                WriteTx eventTx = WriteTx.begin(program, "Suppress Events");
                 program.flushEvents();
 
                 try {
@@ -4033,9 +4033,9 @@ public class FunctionService {
                     }
                 } finally {
                     // ALWAYS close transactions — nested transactions must be closed inner-first
-                    program.endTransaction(eventTx, success.get());
+                    eventTx.end(success.get());
                     program.flushEvents();
-                    program.endTransaction(tx, success.get());
+                    tx.end(success.get());
 
                     // Invalidate decompiler cache after successful renames
                     if (success.get() && variablesRenamed.get() > 0 && funcRef.get() != null) {
@@ -4195,7 +4195,7 @@ public class FunctionService {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Set Variables");
+                WriteTx tx = WriteTx.begin(program, "Set Variables");
                 try {
                     Function func = program.getFunctionManager().getFunctionAt(addr);
                     if (func == null) {
@@ -4356,7 +4356,7 @@ public class FunctionService {
                 } catch (Exception e) {
                     errorRef.set(e.getMessage());
                 } finally {
-                    program.endTransaction(tx, errorRef.get() == null);
+                    tx.end(errorRef.get() == null);
                 }
             });
         } catch (Exception e) {
