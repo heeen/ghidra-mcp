@@ -29,6 +29,7 @@ from urllib.parse import quote, unquote
 
 from . import dispatch
 from . import state
+from . import subscriptions
 from .config import logger
 from .server import mcp
 
@@ -103,6 +104,7 @@ def parse_function_hit(item) -> tuple[str | None, str | None]:
 )
 async def programs_resource() -> str:
     """List open programs and document how to build the other URIs."""
+    subscriptions.note_resource_read("ghidra://programs")
     try:
         raw = await _read_async("/list_open_programs")
         programs = json.loads(raw)
@@ -152,7 +154,10 @@ async def programs_resource() -> str:
     mime_type=_JSON,
 )
 async def program_index_resource(program: str) -> str:
-    return await _read_async("/get_current_program_info", program=unquote(program))
+    name = unquote(program)
+    uri = f"ghidra://program/{quote(name, safe='')}/index"
+    subscriptions.note_resource_read(uri)
+    return await _read_async("/get_current_program_info", program=name)
 
 
 @mcp.resource(
@@ -165,6 +170,7 @@ async def program_index_resource(program: str) -> str:
 )
 async def function_index_resource(program: str) -> str:
     name = unquote(program)
+    subscriptions.note_resource_read(f"ghidra://program/{quote(name, safe='')}/functions")
     # /list_functions has no limit and materialises every function; enhanced is paginated.
     raw = await _read_async(
         "/list_functions_enhanced",
@@ -216,12 +222,14 @@ async def function_index_resource(program: str) -> str:
 )
 async def function_bundle_resource(program: str, address: str) -> str:
     program_name, addr = unquote(program), unquote(address)
+    uri = canonical_function_uri(program_name, addr)
+    subscriptions.note_resource_read(uri)
     raw = await _read_async("/get_function_bundle", name=addr, program=program_name)
     payload = json.loads(raw)
     if isinstance(payload, dict):
         # Stamp the cache key onto the body so a client that only kept the text
         # still knows which URI to re-read after resources/updated.
-        payload.setdefault("canonical_uri", canonical_function_uri(program_name, addr))
+        payload.setdefault("canonical_uri", uri)
         return _json(payload)
     return raw
 
@@ -235,6 +243,9 @@ async def function_bundle_resource(program: str, address: str) -> str:
 )
 async def function_by_name_resource(program: str, name: str) -> str:
     program_name, function_name = unquote(program), unquote(name)
+    subscriptions.note_resource_read(
+        f"ghidra://function/{quote(program_name, safe='')}/by-name/{quote(function_name, safe='')}"
+    )
     # /get_function_by_address's sole locator param is `address`, but
     # ServiceUtils.resolveFunction accepts a function name there too.
     raw = await _read_async(
@@ -262,6 +273,9 @@ async def function_by_name_resource(program: str, name: str) -> str:
 )
 async def function_search_resource(program: str, pattern: str) -> str:
     program_name, needle = unquote(program), unquote(pattern)
+    subscriptions.note_resource_read(
+        f"ghidra://search/{quote(program_name, safe='')}/functions/{quote(needle, safe='')}"
+    )
     raw = await _read_async(
         "/search_functions", name_pattern=needle, program=program_name, limit=_MAX_SEARCH_HITS
     )

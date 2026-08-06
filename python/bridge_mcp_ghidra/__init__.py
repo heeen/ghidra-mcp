@@ -28,6 +28,7 @@ from . import schema  # noqa: F401
 from . import dispatch  # noqa: F401
 from . import registry  # noqa: F401
 from . import resources  # noqa: F401
+from . import subscriptions  # noqa: F401
 from . import static_tools  # noqa: F401
 from . import debugger  # noqa: F401
 from . import oracle  # noqa: F401
