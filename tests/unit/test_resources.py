@@ -137,7 +137,7 @@ class TestResourceHandlers(unittest.TestCase):
         self.assertIn("error", body)
         self.assertIn("notifications", body)
 
-    def test_function_index_uses_enhanced_listing_and_builds_uris(self):
+    def test_function_index_rows_are_name_address_plus_one_template(self):
         listing = {
             "functions": [
                 {"name": "_DT_INIT", "address": "001f4000"},
@@ -159,10 +159,12 @@ class TestResourceHandlers(unittest.TestCase):
             body = json.loads(_run(function_index_resource("ls")))
         self.assertEqual(body["count"], 2)
         self.assertFalse(body["truncated"])
+        # A per-row uri was a third of this payload and is derivable, so the
+        # template is carried once instead.
         self.assertEqual(
-            body["functions"][0]["uri"],
-            "ghidra://function/ls/001f4000",
+            body["functions"][0], {"name": "_DT_INIT", "address": "001f4000"}
         )
+        self.assertEqual(body["uri_template"], "ghidra://function/ls/{address}")
 
     def test_function_index_marks_truncation_from_program_info(self):
         rows = [
@@ -225,24 +227,49 @@ class TestResourceHandlers(unittest.TestCase):
             body = json.loads(_run(function_search_resource("ls", "printf")))
         self.assertEqual(body["count"], 2)
         self.assertEqual(
-            body["matches"][0]["uri"],
-            "ghidra://function/ls/001f4030",
+            body["matches"][0], {"name": "__snprintf_chk", "address": "001f4030"}
         )
-        self.assertEqual(body["matches"][0]["name"], "__snprintf_chk")
+        self.assertEqual(body["uri_template"], "ghidra://function/ls/{address}")
 
-    def test_bundle_stamps_canonical_uri(self):
+    def test_bundle_is_markdown_and_names_its_own_uri(self):
+        """The body is Markdown, not JSON — a JSON body inside a resource read's
+        JSON string reaches the model doubly escaped (see render.py)."""
         payload = {
             "name": "_DT_INIT",
             "address": "001f4000",
+            "program": "ls",
             "decompiled_code": "void _DT_INIT(void) {}",
+            "call_context": [
+                {
+                    "caller": "entry",
+                    "caller_address": "001f4100",
+                    "site_address": "001f4108",
+                    "text": "11:   if (once == 0) {\n12:     _DT_INIT();\n13:   }",
+                }
+            ],
         }
         with patch(
             "bridge_mcp_ghidra.resources._read_async",
             new=AsyncMock(return_value=json.dumps(payload)),
         ):
-            body = json.loads(_run(function_bundle_resource("ls", "001f4000")))
-        self.assertEqual(body["canonical_uri"], "ghidra://function/ls/001f4000")
-        self.assertIn("decompiled_code", body)
+            body = _run(function_bundle_resource("ls", "001f4000"))
+        self.assertTrue(body.startswith("# _DT_INIT"))
+        self.assertIn("```c", body)
+        self.assertIn("void _DT_INIT(void) {}", body)
+        # Every line of a multi-line call window keeps the list indent, or the
+        # fence closes early and the rest renders as prose.
+        self.assertIn("  11:   if (once == 0) {", body)
+        self.assertIn("  12:     _DT_INIT();", body)
+        self.assertIn("ghidra://function/ls/001f4000", body)
+
+    def test_bundle_mime_type_is_markdown(self):
+        for template in mcp._resource_manager.list_templates():
+            uri = str(getattr(template, "uriTemplate", None) or template.uri_template)
+            if uri == "ghidra://function/{program}/{address}":
+                self.assertEqual(template.mime_type, "text/markdown")
+                break
+        else:
+            self.fail("bundle template not registered")
 
 
 if __name__ == "__main__":
