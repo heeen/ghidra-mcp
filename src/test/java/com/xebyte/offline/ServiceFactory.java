@@ -16,6 +16,7 @@ import com.xebyte.core.ProgramScriptService;
 import com.xebyte.core.PromptPolicyService;
 import com.xebyte.core.SymbolLabelService;
 import com.xebyte.core.ThreadingStrategy;
+import com.xebyte.core.TypeReferenceService;
 import com.xebyte.core.XrefCallGraphService;
 import com.xebyte.headless.GhidraServerManager;
 import com.xebyte.headless.HeadlessManagementService;
@@ -67,6 +68,7 @@ public final class ServiceFactory {
 
         FunctionBundleService functionBundleService =
             new FunctionBundleService(provider, ts, functionService);
+        TypeReferenceService typeReferenceService = new TypeReferenceService(provider);
 
         return new Object[] {
             listingService,
@@ -84,6 +86,7 @@ public final class ServiceFactory {
             debuggerService,
             promptPolicyService,
             functionBundleService,
+            typeReferenceService,
         };
     }
 
