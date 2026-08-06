@@ -18,6 +18,12 @@ Shape, and why it is not symmetrical:
   in the bundle body — a ``resources/read`` result carries only uri/mimeType/text, with no
   name field to put them in.
 
+Bodies are shaped for the thing that reads them, not for symmetry: the function bundle
+is **Markdown** (a resource body travels inside a JSON string, so JSON there arrives at the
+model doubly escaped — see ``render.py`` for the measurement), while the row-shaped index
+and search bodies stay JSON but compact and without a per-row ``uri``, which was a third of
+the index payload and is derivable from the ``uri_template`` they carry.
+
 URI keys are **addresses, never names**. Renaming is the most common write, and a
 name-keyed URI would die exactly when its content changes: the client's cached body would
 be stranded at the old name with no notification able to reach it, since
@@ -28,6 +34,7 @@ import json
 from urllib.parse import quote, unquote
 
 from . import dispatch
+from . import render
 from . import state
 from . import subscriptions
 from .config import logger
@@ -38,6 +45,7 @@ _MAX_INDEX_FUNCTIONS = 2000
 _MAX_SEARCH_HITS = 200
 
 _JSON = "application/json"
+_MARKDOWN = "text/markdown"
 
 
 def canonical_function_uri(program: str, address: str) -> str:
@@ -67,6 +75,11 @@ async def _read_async(endpoint: str, **params) -> str:
 
 def _json(payload) -> str:
     return json.dumps(payload, indent=2)
+
+
+def _compact(payload) -> str:
+    """For row-shaped bodies: indentation is pure escaped whitespace in transit."""
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def parse_function_hit(item) -> tuple[str | None, str | None]:
@@ -165,9 +178,9 @@ async def program_index_resource(program: str) -> str:
 @mcp.resource(
     "ghidra://program/{program}/functions",
     name="Ghidra function index",
-    description="Every function as {name, address, uri}. This is where a function's "
-                "current descriptive name is visible — a resource read result has no name "
-                "field of its own.",
+    description="Every function as {name, address}, plus the uri_template that turns an "
+                "address into its bundle URI. This is where a function's current descriptive "
+                "name is visible — a resource read result has no name field of its own.",
     mime_type=_JSON,
 )
 async def function_index_resource(program: str) -> str:
@@ -188,11 +201,10 @@ async def function_index_resource(program: str) -> str:
             fname, address = parse_function_hit(item)
             if not address:
                 continue
-            rows.append({
-                "name": fname,
-                "address": address,
-                "uri": canonical_function_uri(name, address),
-            })
+            # No per-row uri: it is address plus a fixed prefix, and repeating it
+            # cost ~a third of this payload (measured 234KB for 2000 rows). The
+            # template is in `uri_template` below and in ghidra://programs.
+            rows.append({"name": fname, "address": address})
     truncated = len(rows) >= _MAX_INDEX_FUNCTIONS
     total = len(rows)
     if truncated:
@@ -202,8 +214,9 @@ async def function_index_resource(program: str) -> str:
                 total = int(info["function_count"])
         except Exception:
             total = len(rows)
-    return _json({
+    return _compact({
         "program": name,
+        "uri_template": f"ghidra://function/{quote(name, safe='')}/{{address}}",
         "functions": rows,
         "count": len(rows),
         "total": total,
@@ -266,19 +279,26 @@ async def program_changes_resource(program: str) -> str:
                 "with their actual call-site source lines, callees and xrefs. Replaces the "
                 "decompile_function + get_function_variables + get_function_callers + "
                 "get_comment + get_function_xrefs sequence.",
-    mime_type=_JSON,
+    mime_type=_MARKDOWN,
 )
 async def function_bundle_resource(program: str, address: str) -> str:
+    """Markdown, not JSON — see render.py for the measurement.
+
+    A resource body travels inside a JSON string, so JSON here would reach the
+    model doubly escaped: every key re-quoted, every line of C as a literal
+    \\n. The tool /get_function_bundle still answers JSON for anything that
+    parses it.
+    """
     program_name, addr = unquote(program), unquote(address)
     uri = canonical_function_uri(program_name, addr)
     subscriptions.note_resource_read(uri)
     raw = await _read_async("/get_function_bundle", name=addr, program=program_name)
     payload = json.loads(raw)
     if isinstance(payload, dict):
-        # Stamp the cache key onto the body so a client that only kept the text
+        # Stamp the cache key into the body so a client that only kept the text
         # still knows which URI to re-read after resources/updated.
         payload.setdefault("canonical_uri", uri)
-        return _json(payload)
+        return render.function_bundle_markdown(payload)
     return raw
 
 
@@ -314,9 +334,10 @@ async def function_by_name_resource(program: str, name: str) -> str:
 @mcp.resource(
     "ghidra://search/{program}/functions/{pattern}",
     name="Ghidra function search",
-    description="Functions whose name matches a pattern, as {name, address, uri}. A "
-                "filtered result set has no stable identity, so this is not cached against "
-                "per-function invalidation — re-read it when the program changes.",
+    description="Functions whose name matches a pattern, as {name, address} plus a "
+                "uri_template. A filtered result set has no stable identity, so this is not "
+                "cached against per-function invalidation — re-read it when the program "
+                "changes.",
     mime_type=_JSON,
 )
 async def function_search_resource(program: str, pattern: str) -> str:
@@ -335,15 +356,12 @@ async def function_search_resource(program: str, pattern: str) -> str:
             fname, address = parse_function_hit(item)
             if not address:
                 continue
-            hits.append({
-                "name": fname,
-                "address": address,
-                "uri": canonical_function_uri(program_name, address),
-            })
+            hits.append({"name": fname, "address": address})
     total = payload.get("total", len(hits)) if isinstance(payload, dict) else len(hits)
-    return _json({
+    return _compact({
         "program": program_name,
         "pattern": needle,
+        "uri_template": f"ghidra://function/{quote(program_name, safe='')}/{{address}}",
         "matches": hits,
         "count": len(hits),
         "total": total,
