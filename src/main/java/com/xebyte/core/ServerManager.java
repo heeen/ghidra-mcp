@@ -74,12 +74,23 @@ public class ServerManager {
             FunctionBundleService functionBundleService = new FunctionBundleService(programProvider, ts, functionService);
             TypeReferenceService typeReferenceService = new TypeReferenceService(programProvider);
             ChangeTokenService changeTokenService = new ChangeTokenService(programProvider);
+            // These three existed only on GhidraMCPPlugin's own legacy server, which
+            // nothing starts by default — so P-code emulation, the debugger and the
+            // modal-prompt policy were unreachable over UDS *and* over the TCP port
+            // this manager binds, i.e. on both transports the bridge uses. Measured:
+            // 21 of the 67 catalog endpoints missing from a live GUI instance.
+            // DebuggerService needs a PluginTool for TraceRmi; the tool that first
+            // registered is the same one the plugin would have handed it.
+            EmulationService emulationService = new EmulationService(programProvider, ts);
+            DebuggerService debuggerService = new DebuggerService(programProvider, ts, tool);
+            PromptPolicyService promptPolicyService = new PromptPolicyService();
 
             AnnotationScanner scanner = new AnnotationScanner(programProvider, ts,
                 listingService, functionService, commentService, symbolLabelService,
                 xrefCallGraphService, dataTypeService, analysisService,
                 documentationHashService, malwareSecurityService, programScriptService,
-                functionBundleService, typeReferenceService, changeTokenService);
+                functionBundleService, typeReferenceService, changeTokenService,
+                emulationService, debuggerService, promptPolicyService);
 
             startServer(scanner, guiEndpoints);
         }
