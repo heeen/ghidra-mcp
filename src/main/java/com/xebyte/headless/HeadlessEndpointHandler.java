@@ -259,7 +259,7 @@ public class HeadlessEndpointHandler {
     // ==========================================================================
 
     public String getXrefsTo(String addressStr, int offset, int limit, String programName) {
-        return xrefCallGraphService.getXrefsTo(addressStr, offset, limit, programName).toJson();
+        return xrefCallGraphService.getXrefsTo(addressStr, null, offset, limit, programName).toJson();
     }
 
     public String getXrefsFrom(String addressStr, int offset, int limit, String programName) {
@@ -1177,10 +1177,6 @@ public class HeadlessEndpointHandler {
     /**
      * Get cross-references for multiple addresses in bulk.
      */
-    public String getBulkXrefs(String addressesJson, String programName) {
-        return xrefCallGraphService.getBulkXrefs(addressesJson, programName).toJson();
-    }
-
     /**
      * List global variables with optional filtering.
      */

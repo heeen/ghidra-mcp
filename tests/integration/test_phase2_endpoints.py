@@ -233,20 +233,23 @@ class TestBulkXrefs:
     """Test bulk xref lookup endpoint."""
 
     @pytest.mark.requires_program
-    def test_get_bulk_xrefs(self, http_client, sample_address):
-        """Test getting xrefs for multiple addresses."""
-        response = http_client.post("/get_bulk_xrefs", data={
-            "addresses": json.dumps([sample_address])
-        })
+    def test_get_xrefs_to_many_addresses(self, http_client, sample_address):
+        """The many-at-once form: one tool, keyed by the address asked for."""
+        response = http_client.get("/get_xrefs_to", params={"addresses": sample_address})
         assert response.status_code == 200
+        body = response.json()
+        assert "references_by_address" in body
+        assert sample_address in body["references_by_address"]
 
     @pytest.mark.requires_program
-    def test_get_bulk_xrefs_empty(self, http_client):
-        """Test bulk xrefs with empty list."""
-        response = http_client.post("/get_bulk_xrefs", data={
-            "addresses": "[]"
-        })
+    def test_get_xrefs_to_many_tolerates_a_bad_address(self, http_client, sample_address):
+        """One unresolvable entry yields an empty list, not a failed batch."""
+        response = http_client.get(
+            "/get_xrefs_to", params={"addresses": f"{sample_address},zzzznotanaddress"}
+        )
         assert response.status_code == 200
+        by_addr = response.json()["references_by_address"]
+        assert by_addr["zzzznotanaddress"] == []
 
 
 class TestGlobalVariables:
