@@ -99,8 +99,8 @@ public class FunctionBundleService {
             + "call analyze_function_completeness for that.",
         category = "function", access = ToolAccess.READ_ONLY)
     public Response getFunctionBundle(
-            @Param(value = "name", paramType = "address",
-                   aliases = {"function", "address", "function_address"},
+            @Param(value = "function", paramType = "address",
+                   aliases = {"name", "address", "function_address", "function_name"},
                    description = "Function name or address. Address accepts 0x<hex> or "
                                + "<space>:<hex> (e.g. mem:1000); a plain name resolves by exact "
                                + "function name.") String functionRef,

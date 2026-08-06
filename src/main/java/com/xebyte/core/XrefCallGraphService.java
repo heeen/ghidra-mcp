@@ -329,8 +329,11 @@ public class XrefCallGraphService {
      */
     @McpTool(path = "/get_function_xrefs", description = "Get cross-references to a function. Accepts function name or address (pass address as 'address' param, or as 'name').", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionXrefs(
-            @Param(value = "name", defaultValue = "", description = "Function name") String functionName,
-            @Param(value = "address", defaultValue = "", description = "Function entry-point address (hex) — alternative to name") String address,
+            @Param(value = "function", defaultValue = "",
+                   aliases = {"name", "address", "function_name", "function_address"},
+                   description = "Function name or entry-point address (0x<hex> or <space>:<hex>). "
+                               + "One parameter for both: the resolver tries the address form first, "
+                               + "then an exact function name.") String functionRef,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of entries to skip before this page starts; 0 begins at the "
                                + "first entry. Page by adding `limit` each call until offset reaches the "
@@ -347,8 +350,8 @@ public class XrefCallGraphService {
         Program program = pe.program();
 
         try {
-            FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionName, address).tryResolve(program);
-            if (!resolved.isSuccess()) return Response.err("Function not found: " + functionName);
+            FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
+            if (!resolved.isSuccess()) return Response.err("Function not found: " + functionRef);
             Function function = resolved.function();
 
             List<Map<String, Object>> refs = new ArrayList<>();
@@ -386,13 +389,16 @@ public class XrefCallGraphService {
      * Get all jump target addresses from a function's disassembly
      */
     public Response getFunctionJumpTargets(String functionName, int offset, int limit) {
-        return getFunctionJumpTargets(functionName, null, offset, limit, null);
+        return getFunctionJumpTargets(functionName, offset, limit, null);
     }
 
     @McpTool(path = "/get_function_jump_targets", description = "Get jump targets within a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionJumpTargets(
-            @Param(value = "name", defaultValue = "", description = "Function name") String functionName,
-            @Param(value = "address", defaultValue = "", description = "Function entry-point address (hex) — alternative to name") String address,
+            @Param(value = "function", defaultValue = "",
+                   aliases = {"name", "address", "function_name", "function_address"},
+                   description = "Function name or entry-point address (0x<hex> or <space>:<hex>). "
+                               + "One parameter for both: the resolver tries the address form first, "
+                               + "then an exact function name.") String functionRef,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of entries to skip before this page starts; 0 begins at the "
                                + "first entry. Page by adding `limit` each call until offset reaches the "
@@ -412,9 +418,9 @@ public class XrefCallGraphService {
         FunctionManager functionManager = program.getFunctionManager();
 
         // Find the function by name or address
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionName, address).tryResolve(program);
+        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
         if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionName);
+            return Response.err("Function not found: " + functionRef);
         }
         Function function = resolved.function();
 
@@ -483,8 +489,11 @@ public class XrefCallGraphService {
      */
     @McpTool(path = "/get_function_callees", description = "Get functions called by a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionCallees(
-            @Param(value = "name", defaultValue = "", description = "Function name") String functionName,
-            @Param(value = "address", defaultValue = "", description = "Function entry-point address (hex) — alternative to name") String address,
+            @Param(value = "function", defaultValue = "",
+                   aliases = {"name", "address", "function_name", "function_address"},
+                   description = "Function name or entry-point address (0x<hex> or <space>:<hex>). "
+                               + "One parameter for both: the resolver tries the address form first, "
+                               + "then an exact function name.") String functionRef,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of entries to skip before this page starts; 0 begins at the "
                                + "first entry. Page by adding `limit` each call until offset reaches the "
@@ -504,9 +513,9 @@ public class XrefCallGraphService {
         FunctionManager functionManager = program.getFunctionManager();
 
         // Find the function by name or address
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionName, address).tryResolve(program);
+        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
         if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionName);
+            return Response.err("Function not found: " + functionRef);
         }
         Function function = resolved.function();
 
@@ -556,8 +565,11 @@ public class XrefCallGraphService {
      */
     @McpTool(path = "/get_function_callers", description = "Get functions calling a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionCallers(
-            @Param(value = "name", defaultValue = "", description = "Function name") String functionName,
-            @Param(value = "address", defaultValue = "", description = "Function entry-point address (hex) — alternative to name") String address,
+            @Param(value = "function", defaultValue = "",
+                   aliases = {"name", "address", "function_name", "function_address"},
+                   description = "Function name or entry-point address (0x<hex> or <space>:<hex>). "
+                               + "One parameter for both: the resolver tries the address form first, "
+                               + "then an exact function name.") String functionRef,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of entries to skip before this page starts; 0 begins at the "
                                + "first entry. Page by adding `limit` each call until offset reaches the "
@@ -578,9 +590,9 @@ public class XrefCallGraphService {
 
         // Find the function by name or address
         Function targetFunction = null;
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionName, address).tryResolve(program);
+        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
         if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionName);
+            return Response.err("Function not found: " + functionRef);
         }
         targetFunction = resolved.function();
 
@@ -619,8 +631,11 @@ public class XrefCallGraphService {
      */
     @McpTool(path = "/get_function_call_graph", description = "Traverse call graph from a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionCallGraph(
-            @Param(value = "name", defaultValue = "", description = "Function name") String functionName,
-            @Param(value = "address", defaultValue = "", description = "Function entry-point address (hex) — alternative to name") String address,
+            @Param(value = "function", defaultValue = "",
+                   aliases = {"name", "address", "function_name", "function_address"},
+                   description = "Function name or entry-point address (0x<hex> or <space>:<hex>). "
+                               + "One parameter for both: the resolver tries the address form first, "
+                               + "then an exact function name.") String functionRef,
             @Param(value = "depth", defaultValue = "2", description = "Traversal depth") int depth,
             @Param(value = "direction", defaultValue = "both", description = "Traversal direction (both/callers/callees)") String direction,
             @Param(value = "program", defaultValue = "",
@@ -635,9 +650,9 @@ public class XrefCallGraphService {
 
         // Find the function by name or address
         Function rootFunction = null;
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionName, address).tryResolve(program);
+        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
         if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionName);
+            return Response.err("Function not found: " + functionRef);
         }
         rootFunction = resolved.function();
 

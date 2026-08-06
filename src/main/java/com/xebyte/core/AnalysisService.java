@@ -2190,7 +2190,7 @@ public class AnalysisService {
      */
         @McpTool(path = "/analyze_function_complete", description = "Comprehensive single-call function analysis. Accepts function name or address. For a cacheable read of decompile+callers+comments+xrefs prefer ghidra://function/{program}/{address} (or /get_function_bundle).", category = "analysis", access = ToolAccess.READ_ONLY)
     public Response analyzeFunctionComplete(
-            @Param(value = "name", description = "Function reference (name or address)") String name,
+            @Param(value = "function", aliases = {"name", "address", "function_address", "function_name"}, description = "Function reference (name or address)") String name,
             @Param(value = "include_xrefs", defaultValue = "true",
                    description = "True (the default) adds `xrefs` — the sources referencing the entry "
                                + "point — capped at the first 100. `xref_count` counts what was listed, so "

@@ -1187,7 +1187,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * Get all references to a specific function by name
      */
     private String getFunctionXrefs(String functionName, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionXrefs(functionName, null, offset, limit, programName).toJson();
+        return xrefCallGraphService.getFunctionXrefs(functionName, offset, limit, programName).toJson();
     }
 
 /**
@@ -2350,11 +2350,11 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * Get all jump target addresses from a function's disassembly
      */
     public String getFunctionJumpTargets(String functionName, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionJumpTargets(functionName, null, offset, limit, programName).toJson();
+        return xrefCallGraphService.getFunctionJumpTargets(functionName, offset, limit, programName).toJson();
     }
 
     public String getFunctionJumpTargets(String functionName, int offset, int limit) {
-        return xrefCallGraphService.getFunctionJumpTargets(functionName, null, offset, limit, null).toJson();
+        return xrefCallGraphService.getFunctionJumpTargets(functionName, offset, limit, null).toJson();
     }
 
     public String createLabel(String addressStr, String labelName, String programName) {
@@ -2401,21 +2401,21 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * Get all functions called by the specified function (callees)
      */
     public String getFunctionCallees(String functionName, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionCallees(functionName, null, offset, limit, programName).toJson();
+        return xrefCallGraphService.getFunctionCallees(functionName, offset, limit, programName).toJson();
     }
 
     /**
      * Get all functions that call the specified function (callers)
      */
     public String getFunctionCallers(String functionName, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionCallers(functionName, null, offset, limit, programName).toJson();
+        return xrefCallGraphService.getFunctionCallers(functionName, offset, limit, programName).toJson();
     }
 
     /**
      * Get a call graph subgraph centered on the specified function
      */
     public String getFunctionCallGraph(String functionName, int depth, String direction, String programName) {
-        return xrefCallGraphService.getFunctionCallGraph(functionName, null, depth, direction, programName).toJson();
+        return xrefCallGraphService.getFunctionCallGraph(functionName, depth, direction, programName).toJson();
     }
 
     /**

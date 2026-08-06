@@ -158,7 +158,7 @@ public class FunctionService {
      */
     @McpTool(path = "/decompile_function", description = "Decompile ONE function (address) OR MANY (functions=comma-separated names/addresses) to pseudocode. Prefer the MCP resource ghidra://function/{program}/{address} (or /get_function_bundle) when you also need callers/comments/xrefs — one read replaces this plus several follow-ups. On programs with multiple address spaces, prefix addresses with the space name (mem:1000). Replaces batch_decompile.", category = "function", access = ToolAccess.READ_ONLY)
     public Response decompileFunctionByAddress(
-            @Param(value = "address", paramType = "address", defaultValue = "",
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", defaultValue = "",
                    description = "Function address or name (single mode). 0x<hex> or <space>:<hex>. Omit when using functions=.") String addressStr,
             @Param(value = "functions", defaultValue = "",
                    description = "Bulk mode: comma-separated function references (names or addresses). When set, address is ignored.") String functionsParam,
@@ -758,7 +758,7 @@ public class FunctionService {
      */
     @McpTool(path = "/get_function_by_address", description = "Get function info at a specific address. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.READ_ONLY)
     public Response getFunctionByAddress(
-            @Param(value = "address", paramType = "address",
+            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
