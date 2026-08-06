@@ -1153,7 +1153,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * Get all references to a specific address (xref to)
      */
     private String getXrefsTo(String addressStr, int offset, int limit, String programName) {
-        return xrefCallGraphService.getXrefsTo(addressStr, offset, limit, programName).toJson();
+        return xrefCallGraphService.getXrefsTo(addressStr, null, offset, limit, programName).toJson();
     }
 
     /**
@@ -2784,10 +2784,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     /**
      * 1. GET_BULK_XREFS - Retrieve xrefs for multiple addresses in one call
      */
-    private String getBulkXrefs(Object addressesObj) {
-        return xrefCallGraphService.getBulkXrefs(addressesObj).toJson();
-    }
-
     /**
      * 2. ANALYZE_DATA_REGION - Comprehensive single-call data analysis
      */
