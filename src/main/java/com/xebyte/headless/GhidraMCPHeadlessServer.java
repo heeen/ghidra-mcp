@@ -400,7 +400,8 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             endpointHandler.getXrefCallGraphService(), endpointHandler.getDataTypeService(),
             endpointHandler.getAnalysisService(), endpointHandler.getDocumentationHashService(),
             endpointHandler.getMalwareSecurityService(), endpointHandler.getProgramScriptService(),
-            endpointHandler.getEmulationService(), managementService);
+            endpointHandler.getEmulationService(), managementService,
+            endpointHandler.getFunctionBundleService());
 
         for (EndpointDef ep : scanner.getEndpoints()) {
             safeContext(ep.path(), exchange -> {
