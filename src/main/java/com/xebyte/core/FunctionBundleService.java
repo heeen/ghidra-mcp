@@ -180,6 +180,13 @@ public class FunctionBundleService {
         }
 
         out.put("plate_comment", func.getComment());
+        // Same validator rename_function/batch_set_comments warn through, so a reader
+        // sees the plate's structural gaps without a second call — and sees them by the
+        // project's own rules rather than guessing at them.
+        List<String> plateIssues = NamingConventions.validatePlateCommentStructure(func.getComment());
+        if (!plateIssues.isEmpty()) {
+            out.put("plate_comment_issues", plateIssues);
+        }
         out.put("comments", collectComments(program, func));
         out.put("labels", collectLabels(program, func));
         out.put("parameters", collectParameters(func));
