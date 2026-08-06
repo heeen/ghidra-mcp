@@ -22,6 +22,7 @@ from bridge_mcp_ghidra.resources import (  # noqa: E402
     function_index_resource,
     function_search_resource,
     parse_function_hit,
+    program_changes_resource,
     programs_resource,
 )
 from bridge_mcp_ghidra.server import mcp  # noqa: E402
@@ -89,6 +90,7 @@ class TestResourceRegistration(unittest.TestCase):
         self.assertIn("ghidra://function/{program}/{address}", uris)
         self.assertIn("ghidra://function/{program}/by-name/{name}", uris)
         self.assertIn("ghidra://search/{program}/functions/{pattern}", uris)
+        self.assertIn("ghidra://program/{program}/changes", uris)
 
 
 class TestResourceHandlers(unittest.TestCase):
@@ -109,6 +111,31 @@ class TestResourceHandlers(unittest.TestCase):
             "ghidra://program/ls/functions",
         )
         self.assertIn("function_by_address", body["uri_contract"])
+
+    def test_changes_resource_publishes_the_token_and_its_caveats(self):
+        """The token is published, not only polled: a lost notification must
+        still be detectable by comparing it with a bundle's revision."""
+        async def fake_read(endpoint, **params):
+            self.assertEqual(endpoint, "/get_change_token")
+            return json.dumps({"program": "ls", "modification_number": 42})
+
+        with patch(
+            "bridge_mcp_ghidra.resources._read_async",
+            new=AsyncMock(side_effect=fake_read),
+        ):
+            body = json.loads(_run(program_changes_resource("ls")))
+        self.assertEqual(body["modification_number"], 42)
+        self.assertTrue(body["notifications"]["subscribe_supported"])
+        self.assertTrue(any("json-response" in c for c in body["notifications"]["caveats"]))
+
+    def test_changes_resource_survives_an_unreachable_ghidra(self):
+        with patch(
+            "bridge_mcp_ghidra.resources._read_async",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            body = json.loads(_run(program_changes_resource("ls")))
+        self.assertIn("error", body)
+        self.assertIn("notifications", body)
 
     def test_function_index_uses_enhanced_listing_and_builds_uris(self):
         listing = {
