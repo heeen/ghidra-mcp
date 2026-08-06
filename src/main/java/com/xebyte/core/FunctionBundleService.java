@@ -1,0 +1,480 @@
+package com.xebyte.core;
+
+import ghidra.app.decompiler.ClangLine;
+import ghidra.app.decompiler.ClangToken;
+import ghidra.app.decompiler.DecompileResults;
+import ghidra.app.decompiler.component.DecompilerUtils;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.CodeUnit;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.Variable;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighSymbol;
+import ghidra.program.model.pcode.HighVariable;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolIterator;
+import ghidra.program.model.symbol.SymbolTable;
+import ghidra.program.model.symbol.SymbolType;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * One read that answers everything an agent asks about a function.
+ *
+ * <p>Reviewing a single function used to cost five round trips —
+ * {@code decompile_function} + {@code get_function_variables} +
+ * {@code get_function_callers} + {@code get_comment} + {@code get_function_xrefs} — and
+ * every write forced the agent to re-read to see its effect. This endpoint collapses that
+ * into one call backed by **one** decompilation, which matters because the plugin has no
+ * decompiler cache: each decompile builds and disposes a fresh {@code DecompInterface}, so
+ * two bundled reads composed from existing endpoints would decompile the same function
+ * twice.
+ *
+ * <p>It also carries {@code call_context} — the caller's actual decompiled call
+ * expression, e.g. {@code "115: __snprintf_chk(local_f6,5,2,6,&DAT_0093d57a,cVar1);"} —
+ * which is the context a reader wants without paying for a separate read per caller. That
+ * costs one decompile per *unique* caller (~43 ms measured), so it is deduped and capped.
+ *
+ * <p>Deliberately excluded: completeness scoring. {@code /analyze_function_completeness}
+ * decompiles again, and a second decompile would defeat the point of this endpoint. Call
+ * that tool directly when a score is wanted.
+ *
+ * <p>Threading: the whole bundle is built on the calling HTTP worker thread with no
+ * {@code threadingStrategy} wrapper, following {@link CommentService}. In GUI mode
+ * {@code SwingThreadingStrategy} hops onto the EDT, and decompiling several callers there
+ * would stall the UI for hundreds of milliseconds; Ghidra's program database is safe for
+ * concurrent reads, so the hop buys nothing here.
+ *
+ * @since 7.1.0
+ */
+public class FunctionBundleService {
+
+    /** Hard caps: a bundle is a read for an agent, not a bulk export. */
+    private static final int MAX_CALLERS = 50;
+    private static final int MAX_CALLEES = 50;
+    private static final int MAX_XREFS = 100;
+    private static final int MAX_DISASM = 200;
+    private static final int MAX_DECOMPILED_CHARS = 120_000;
+
+    private final ProgramProvider programProvider;
+    private final ThreadingStrategy threadingStrategy;
+    private final FunctionService functionService;
+
+    public FunctionBundleService(ProgramProvider programProvider,
+            ThreadingStrategy threadingStrategy, FunctionService functionService) {
+        this.programProvider = programProvider;
+        this.threadingStrategy = threadingStrategy;
+        this.functionService = functionService;
+    }
+
+    @McpTool(path = "/get_function_bundle",
+        description = "Everything about one function in a single call and a single decompilation: "
+            + "decompiled code, signature, plate and inline comments, parameters, locals, labels, "
+            + "callers (with the caller's actual call-site source line), callees, and xrefs. "
+            + "Replaces the decompile_function + get_function_variables + get_function_callers + "
+            + "get_comment + get_function_xrefs sequence. Accepts a function name or address. "
+            + "Completeness scoring is NOT included because it costs a second decompilation — "
+            + "call analyze_function_completeness for that.",
+        category = "function", access = ToolAccess.READ_ONLY)
+    public Response getFunctionBundle(
+            @Param(value = "name", paramType = "address",
+                   aliases = {"function", "address", "function_address"},
+                   description = "Function name or address. Address accepts 0x<hex> or "
+                               + "<space>:<hex> (e.g. mem:1000); a plain name resolves by exact "
+                               + "function name.") String functionRef,
+            @Param(value = "include_call_context", defaultValue = "true",
+                   description = "Include each caller's decompiled call-site line. Costs one "
+                               + "decompilation per unique caller (~43ms); set false for the "
+                               + "cheapest possible bundle.") boolean includeCallContext,
+            @Param(value = "call_context_limit", defaultValue = "6",
+                   description = "Maximum number of UNIQUE callers to decompile for call "
+                               + "context.") int callContextLimit,
+            @Param(value = "include_disasm", defaultValue = "false",
+                   description = "Include the raw instruction listing. Off by default: it roughly "
+                               + "doubles the payload and agents rarely read it.") boolean includeDisasm,
+            @Param(value = "program", defaultValue = "",
+                   description = "Target program name (omit to use the active program — always "
+                               + "specify when multiple programs are open)") String programName) {
+
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        if (functionRef == null || functionRef.isEmpty()) {
+            return Response.err("name parameter required (function name or address)");
+        }
+
+        // Resolve before any threading hop: parseAddress reports failures through a
+        // thread-local that an EDT hop would make invisible (ServiceUtils.java:668-672).
+        Function func = ServiceUtils.resolveFunction(program, functionRef);
+        if (func == null) {
+            String parseError = ServiceUtils.getLastParseError();
+            return Response.err("Function not found: " + functionRef
+                + (parseError != null && !parseError.isEmpty() ? " (" + parseError + ")" : ""));
+        }
+
+        try {
+            return Response.ok(buildBundle(program, func, includeCallContext,
+                Math.max(0, callContextLimit), includeDisasm));
+        } catch (Exception e) {
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            return Response.err("Failed to build bundle for " + func.getName() + ": " + msg);
+        }
+    }
+
+    private Map<String, Object> buildBundle(Program program, Function func,
+            boolean includeCallContext, int callContextLimit, boolean includeDisasm) {
+        Address entry = func.getEntryPoint();
+        Map<String, Object> out = new LinkedHashMap<>();
+        Map<String, Object> truncation = new LinkedHashMap<>();
+
+        out.put("name", func.getName());
+        out.putAll(ServiceUtils.addressToJson(entry, program));
+        out.put("program", program.getName());
+        out.put("signature", func.getSignature().toString());
+        out.put("classification", AnalysisService.classifyFunction(func, program));
+
+        String returnType = func.getReturnType().getName();
+        out.put("return_type", returnType);
+        if (returnType.startsWith("undefined")) {
+            out.put("return_type_resolved", false);
+            out.put("return_type_warning", "Return type is '" + returnType
+                + "' -- verify the return register at RET. Do not trust a decompiler 'void'.");
+        } else {
+            out.put("return_type_resolved", true);
+        }
+
+        // The single decompilation. Everything downstream reuses this result.
+        DecompileResults decomp = functionService.decompileFunctionNoRetry(func, program);
+        boolean decompiled = decomp != null && decomp.decompileCompleted()
+            && decomp.getDecompiledFunction() != null;
+        if (decompiled) {
+            String code = decomp.getDecompiledFunction().getC();
+            if (code != null) {
+                if (code.length() > MAX_DECOMPILED_CHARS) {
+                    out.put("decompiled_code", code.substring(0, MAX_DECOMPILED_CHARS));
+                    truncation.put("decompiled_code", true);
+                    out.put("decompiled_code_note", "Truncated at " + MAX_DECOMPILED_CHARS
+                        + " chars; call decompile_function for the full text.");
+                } else {
+                    out.put("decompiled_code", code);
+                }
+            }
+        } else {
+            out.put("decompiled_code", null);
+            out.put("decompile_failed", true);
+        }
+
+        out.put("plate_comment", func.getComment());
+        out.put("comments", collectComments(program, func));
+        out.put("labels", collectLabels(program, func));
+        out.put("parameters", collectParameters(func));
+        out.put("locals", collectLocals(func, decompiled ? decomp.getHighFunction() : null));
+
+        List<Function> callers = findCallers(program, func);
+        out.put("caller_count", callers.size());
+        out.put("callers", summarizeFunctions(program, callers, MAX_CALLERS));
+        if (callers.size() > MAX_CALLERS) truncation.put("callers", true);
+
+        if (includeCallContext && !callers.isEmpty() && callContextLimit > 0) {
+            List<Map<String, Object>> context =
+                collectCallContext(program, entry, callers, callContextLimit);
+            out.put("call_context", context);
+            if (callers.size() > callContextLimit) truncation.put("call_context", true);
+        }
+
+        List<Function> callees = calleesOf(func);
+        out.put("callee_count", callees.size());
+        out.put("callees", summarizeFunctions(program, callees, MAX_CALLEES));
+        if (callees.size() > MAX_CALLEES) truncation.put("callees", true);
+
+        out.put("xrefs", collectXrefs(program, entry, truncation));
+
+        if (includeDisasm) {
+            out.put("disassembly", collectDisassembly(program, func, truncation));
+        }
+
+        // Lets a caller detect a stale read even when a change notification was lost.
+        Map<String, Object> revision = new LinkedHashMap<>();
+        revision.put("modification_number", program.getModificationNumber());
+        revision.put("decompiled", decompiled);
+        out.put("revision", revision);
+
+        out.put("truncation", truncation);
+        return out;
+    }
+
+    /** All five comment kinds at every address in the body, with body-relative offsets. */
+    private List<Map<String, Object>> collectComments(Program program, Function func) {
+        Listing listing = program.getListing();
+        Address entry = func.getEntryPoint();
+        List<Map<String, Object>> comments = new ArrayList<>();
+        int[] kinds = {CodeUnit.PLATE_COMMENT, CodeUnit.PRE_COMMENT, CodeUnit.EOL_COMMENT,
+                       CodeUnit.POST_COMMENT, CodeUnit.REPEATABLE_COMMENT};
+        String[] kindNames = {"plate", "pre", "eol", "post", "repeatable"};
+        Iterator<Address> addresses = func.getBody().getAddresses(true);
+        while (addresses.hasNext()) {
+            Address addr = addresses.next();
+            for (int i = 0; i < kinds.length; i++) {
+                String text = listing.getComment(kinds[i], addr);
+                if (text == null || text.isEmpty()) continue;
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.putAll(ServiceUtils.addressToJson(addr, program));
+                item.put("relative_offset", addr.subtract(entry));
+                item.put("kind", kindNames[i]);
+                item.put("text", text);
+                comments.add(item);
+            }
+        }
+        return comments;
+    }
+
+    private List<Map<String, Object>> collectLabels(Program program, Function func) {
+        List<Map<String, Object>> labels = new ArrayList<>();
+        SymbolTable symbolTable = program.getSymbolTable();
+        Address entry = func.getEntryPoint();
+        SymbolIterator symbols = symbolTable.getSymbolIterator();
+        while (symbols.hasNext()) {
+            Symbol symbol = symbols.next();
+            if (symbol.getSymbolType() != SymbolType.LABEL) continue;
+            if (!func.getBody().contains(symbol.getAddress())) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.putAll(ServiceUtils.addressToJson(symbol.getAddress(), program));
+            item.put("relative_offset", symbol.getAddress().subtract(entry));
+            item.put("name", symbol.getName());
+            item.put("source", symbol.getSource().toString());
+            labels.add(item);
+        }
+        return labels;
+    }
+
+    private List<Map<String, Object>> collectParameters(Function func) {
+        List<Map<String, Object>> params = new ArrayList<>();
+        int ordinal = 0;
+        for (Variable param : func.getParameters()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("ordinal", ordinal++);
+            item.put("name", param.getName());
+            item.put("type", param.getDataType().getName());
+            item.put("storage", param.getVariableStorage().toString());
+            if (param.getComment() != null && !param.getComment().isEmpty()) {
+                item.put("comment", param.getComment());
+            }
+            params.add(item);
+        }
+        return params;
+    }
+
+    /**
+     * Locals from the decompiler's view when available — that is the set whose names the
+     * agent actually sees in {@code decompiled_code} — falling back to the listing's
+     * low-level variables when decompilation failed.
+     */
+    private List<Map<String, Object>> collectLocals(Function func, HighFunction high) {
+        List<Map<String, Object>> locals = new ArrayList<>();
+        if (high != null) {
+            Iterator<HighSymbol> symbols = high.getLocalSymbolMap().getSymbols();
+            while (symbols.hasNext()) {
+                HighSymbol symbol = symbols.next();
+                Map<String, Object> item = new LinkedHashMap<>();
+                String name = symbol.getName();
+                item.put("name", name);
+                item.put("type", symbol.getDataType().getName());
+                HighVariable variable = symbol.getHighVariable();
+                if (variable != null && variable.getRepresentative() != null) {
+                    item.put("storage", variable.getRepresentative().getAddress()
+                        + ":" + variable.getRepresentative().getSize());
+                }
+                // Decompiler-invented names: not real storage the user can rename usefully.
+                item.put("is_phantom", name.startsWith("extraout_") || name.startsWith("in_")
+                    || name.startsWith("unaff_"));
+                item.put("in_decompiled_code", true);
+                locals.add(item);
+            }
+            return locals;
+        }
+        for (Variable local : func.getLocalVariables()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", local.getName());
+            item.put("type", local.getDataType().getName());
+            item.put("storage", local.getVariableStorage().toString());
+            item.put("is_phantom", false);
+            item.put("in_decompiled_code", false);
+            locals.add(item);
+        }
+        return locals;
+    }
+
+    /**
+     * Callers as the union of address references and Ghidra's own calling-function set —
+     * the thorough form {@code /get_function_callers} uses. {@code getCallingFunctions}
+     * alone misses callers reachable only through data/indirect references.
+     */
+    private List<Function> findCallers(Program program, Function func) {
+        Set<Function> callers = new LinkedHashSet<>();
+        FunctionManager functionManager = program.getFunctionManager();
+        ReferenceManager refManager = program.getReferenceManager();
+        ReferenceIterator refs = refManager.getReferencesTo(func.getEntryPoint());
+        while (refs.hasNext()) {
+            Reference ref = refs.next();
+            Function containing = functionManager.getFunctionContaining(ref.getFromAddress());
+            if (containing != null) callers.add(containing);
+        }
+        try {
+            callers.addAll(func.getCallingFunctions(null));
+        } catch (Exception ignored) {
+            // Ghidra could not compute them; the address references above still stand.
+        }
+        List<Function> sorted = new ArrayList<>(callers);
+        sorted.sort((a, b) -> a.getName().compareTo(b.getName()));
+        return sorted;
+    }
+
+    private List<Function> calleesOf(Function func) {
+        Set<Function> callees;
+        try {
+            callees = new LinkedHashSet<>(func.getCalledFunctions(null));
+        } catch (Exception e) {
+            return List.of();
+        }
+        List<Function> sorted = new ArrayList<>(callees);
+        sorted.sort((a, b) -> a.getName().compareTo(b.getName()));
+        return sorted;
+    }
+
+    private List<Map<String, Object>> summarizeFunctions(Program program,
+            List<Function> functions, int cap) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Function f : functions) {
+            if (out.size() >= cap) break;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", f.getName());
+            item.putAll(ServiceUtils.addressToJson(f.getEntryPoint(), program));
+            out.add(item);
+        }
+        return out;
+    }
+
+    /**
+     * The caller's own source line at each call site — "who calls me, and how".
+     *
+     * <p>Deduped by caller function before decompiling: a caller that calls the target six
+     * times must be decompiled once, not six times. Measured ~43 ms per unique caller.
+     */
+    private List<Map<String, Object>> collectCallContext(Program program, Address target,
+            List<Function> callers, int limit) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        FunctionManager functionManager = program.getFunctionManager();
+
+        // Call sites grouped by the caller that contains them.
+        Map<Function, List<Address>> sitesByCaller = new LinkedHashMap<>();
+        ReferenceIterator refs = program.getReferenceManager().getReferencesTo(target);
+        while (refs.hasNext()) {
+            Reference ref = refs.next();
+            if (!ref.getReferenceType().isCall()) continue;
+            Function containing = functionManager.getFunctionContaining(ref.getFromAddress());
+            if (containing == null) continue;
+            sitesByCaller.computeIfAbsent(containing, k -> new ArrayList<>()).add(ref.getFromAddress());
+        }
+
+        int decompiled = 0;
+        for (Map.Entry<Function, List<Address>> entry : sitesByCaller.entrySet()) {
+            if (decompiled >= limit) break;
+            Function caller = entry.getKey();
+            decompiled++;
+            DecompileResults results = functionService.decompileFunctionNoRetry(caller, program);
+            List<ClangLine> lines = (results != null && results.decompileCompleted()
+                && results.getCCodeMarkup() != null)
+                ? DecompilerUtils.toLines(results.getCCodeMarkup())
+                : List.of();
+            for (Address site : entry.getValue()) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("caller", caller.getName());
+                item.put("caller_address", caller.getEntryPoint().toString(false));
+                item.put("site_address", site.toString(false));
+                ClangLine line = lineContaining(lines, site);
+                if (line != null) {
+                    item.put("line_number", line.getLineNumber());
+                    item.put("text", line.toString().trim());
+                } else {
+                    item.put("text", null);
+                }
+                out.add(item);
+            }
+        }
+        return out;
+    }
+
+    private ClangLine lineContaining(List<ClangLine> lines, Address site) {
+        for (ClangLine line : lines) {
+            for (ClangToken token : line.getAllTokens()) {
+                Address min = token.getMinAddress();
+                if (min != null && min.equals(site)) return line;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * References to the entry point, carrying the reference TYPE — which
+     * {@code analyze_function_complete} drops, leaving a caller unable to tell a call from
+     * a data reference.
+     */
+    private List<Map<String, Object>> collectXrefs(Program program, Address entry,
+            Map<String, Object> truncation) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        ReferenceIterator refs = program.getReferenceManager().getReferencesTo(entry);
+        int total = 0;
+        while (refs.hasNext()) {
+            Reference ref = refs.next();
+            total++;
+            if (out.size() >= MAX_XREFS) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("from", ref.getFromAddress().toString(false));
+            item.put("type", ref.getReferenceType().getName());
+            Function containing = program.getFunctionManager()
+                .getFunctionContaining(ref.getFromAddress());
+            if (containing != null) item.put("from_function", containing.getName());
+            out.add(item);
+        }
+        if (total > out.size()) truncation.put("xrefs", true);
+        return out;
+    }
+
+    private List<Map<String, Object>> collectDisassembly(Program program, Function func,
+            Map<String, Object> truncation) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        InstructionIterator instructions = program.getListing().getInstructions(func.getBody(), true);
+        int total = 0;
+        while (instructions.hasNext()) {
+            Instruction instruction = instructions.next();
+            total++;
+            if (out.size() >= MAX_DISASM) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("address", instruction.getAddress().toString(false));
+            item.put("mnemonic", instruction.getMnemonicString());
+            List<String> operands = new ArrayList<>();
+            for (int i = 0; i < instruction.getNumOperands(); i++) {
+                operands.add(instruction.getDefaultOperandRepresentation(i));
+            }
+            item.put("operands", String.join(", ", operands));
+            out.add(item);
+        }
+        if (total > out.size()) truncation.put("disassembly", true);
+        return out;
+    }
+}

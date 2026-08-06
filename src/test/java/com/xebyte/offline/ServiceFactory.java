@@ -6,6 +6,7 @@ import com.xebyte.core.CommentService;
 import com.xebyte.core.DataTypeService;
 import com.xebyte.core.DebuggerService;
 import com.xebyte.core.DocumentationHashService;
+import com.xebyte.core.FunctionBundleService;
 import com.xebyte.core.FunctionService;
 import com.xebyte.core.ListingService;
 import com.xebyte.core.MalwareSecurityService;
@@ -64,6 +65,9 @@ public final class ServiceFactory {
         // catalog-parity tests — the gap ServiceFactoryCoverageTest now prevents.
         PromptPolicyService promptPolicyService = new PromptPolicyService();
 
+        FunctionBundleService functionBundleService =
+            new FunctionBundleService(provider, ts, functionService);
+
         return new Object[] {
             listingService,
             functionService,
@@ -79,6 +83,7 @@ public final class ServiceFactory {
             headlessManagementService,
             debuggerService,
             promptPolicyService,
+            functionBundleService,
         };
     }
 
