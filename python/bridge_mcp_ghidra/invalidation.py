@@ -4,16 +4,21 @@ After a mutating tool succeeds, figure out which resource URIs may have changed
 and emit ``resources/updated`` (and ``resources/list_changed`` when a listing
 row's label moved). Read-only tools return immediately.
 
-Tier resolution for LOCAL and CALLERS is done here with existing Ghidra
-endpoints; TYPE waits on ``/find_type_users`` (commit 7) and currently degrades
-to the program's known URIs. UNBOUNDED always does that plus list_changed.
+Tier resolution runs in Ghidra, not in the agent: LOCAL resolves the write's own
+target, CALLERS adds ``/get_function_callers``, TYPE asks ``/find_type_users``
+(``DataTypeReferenceFinder``, off the EDT) and degrades to the program's known
+URIs if that errors or times out. UNBOUNDED always degrades, plus list_changed.
+NONE is for writes no resource body reports — saving above all, which happens
+after nearly every other write.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from enum import Enum
 from typing import Any
+from urllib.parse import quote
 
 from . import dispatch
 from . import state
@@ -27,9 +32,10 @@ _MAX_URI_FANOUT = 64
 
 
 class InvalidationTier(str, Enum):
+    NONE = "none"            # cannot change any resource body
     LOCAL = "local"          # the write's own target function
     CALLERS = "callers"      # target + functions that call it
-    TYPE = "type"            # DataTypeReferenceFinder (stub → known URIs for now)
+    TYPE = "type"            # DataTypeReferenceFinder, or known URIs on failure
     UNBOUNDED = "unbounded"  # create/destroy functions or rewrite the program
 
 
@@ -37,6 +43,27 @@ class InvalidationTier(str, Enum):
 # when a new write endpoint is added without a tier, so silent non-invalidation
 # cannot ship.
 ENDPOINT_TIER: dict[str, InvalidationTier] = {
+    # --- NONE: mutates something no resource body reports ---
+    # Saving is the important one: it is called after nearly every write, and
+    # invalidating on it would drop the whole cache this feature exists to build.
+    "/save_program": InvalidationTier.NONE,
+    "/save_all_programs": InvalidationTier.NONE,
+    "/checkin_program": InvalidationTier.NONE,
+    "/export_program": InvalidationTier.NONE,
+    "/prompt_policy": InvalidationTier.NONE,
+    "/set_bookmark": InvalidationTier.NONE,
+    "/delete_bookmark": InvalidationTier.NONE,
+    "/archive_ingest_function": InvalidationTier.NONE,
+    "/archive_ingest_program": InvalidationTier.NONE,
+    # Debugger writes land in a trace, never in the program database.
+    "/debugger/launch": InvalidationTier.NONE,
+    "/debugger/set_breakpoint": InvalidationTier.NONE,
+    "/debugger/remove_breakpoint": InvalidationTier.NONE,
+    "/debugger/resume": InvalidationTier.NONE,
+    "/debugger/interrupt": InvalidationTier.NONE,
+    "/debugger/step_into": InvalidationTier.NONE,
+    "/debugger/step_over": InvalidationTier.NONE,
+    "/debugger/step_out": InvalidationTier.NONE,
     # --- LOCAL: body/docs of one function, callers' decompilations untouched ---
     "/set_comment": InvalidationTier.LOCAL,
     "/batch_set_comments": InvalidationTier.LOCAL,
@@ -49,7 +76,6 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/remove_function_tag": InvalidationTier.LOCAL,
     "/set_function_tag_comment": InvalidationTier.LOCAL,
     "/apply_function_documentation": InvalidationTier.LOCAL,
-    "/archive_ingest_function": InvalidationTier.LOCAL,
     "/batch_rename_function_components": InvalidationTier.LOCAL,
     "/clear_instruction_flow_override": InvalidationTier.LOCAL,
     "/add_memory_reference": InvalidationTier.LOCAL,
@@ -106,10 +132,6 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/close_program": InvalidationTier.UNBOUNDED,
     "/switch_program": InvalidationTier.UNBOUNDED,
     "/import_file": InvalidationTier.UNBOUNDED,
-    "/save_program": InvalidationTier.UNBOUNDED,
-    "/save_all_programs": InvalidationTier.UNBOUNDED,
-    "/set_bookmark": InvalidationTier.UNBOUNDED,
-    "/delete_bookmark": InvalidationTier.UNBOUNDED,
     "/set_program_option": InvalidationTier.UNBOUNDED,
     "/remove_program_option": InvalidationTier.UNBOUNDED,
     "/set_property": InvalidationTier.UNBOUNDED,
@@ -120,35 +142,30 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/move_folder": InvalidationTier.UNBOUNDED,
     "/move_file": InvalidationTier.UNBOUNDED,
     "/delete_file": InvalidationTier.UNBOUNDED,
-    "/archive_ingest_program": InvalidationTier.UNBOUNDED,
     "/merge_program_documentation": InvalidationTier.UNBOUNDED,
     "/create_project": InvalidationTier.UNBOUNDED,
     "/close_project": InvalidationTier.UNBOUNDED,
     "/restore_project": InvalidationTier.UNBOUNDED,
     "/archive_project": InvalidationTier.UNBOUNDED,
     "/open_project": InvalidationTier.UNBOUNDED,
-    "/checkin_program": InvalidationTier.UNBOUNDED,
-    "/export_program": InvalidationTier.UNBOUNDED,
     "/import_program": InvalidationTier.UNBOUNDED,
     "/load_program": InvalidationTier.UNBOUNDED,
     "/load_program_from_project": InvalidationTier.UNBOUNDED,
-    "/prompt_policy": InvalidationTier.UNBOUNDED,
-    "/debugger/launch": InvalidationTier.UNBOUNDED,
-    "/debugger/set_breakpoint": InvalidationTier.UNBOUNDED,
-    "/debugger/remove_breakpoint": InvalidationTier.UNBOUNDED,
-    "/debugger/resume": InvalidationTier.UNBOUNDED,
-    "/debugger/interrupt": InvalidationTier.UNBOUNDED,
-    "/debugger/step_into": InvalidationTier.UNBOUNDED,
-    "/debugger/step_over": InvalidationTier.UNBOUNDED,
-    "/debugger/step_out": InvalidationTier.UNBOUNDED,
 }
 
 
-def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str) -> None:
-    """Sync entry point from the registry hook — schedules async emit if needed.
+async def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str) -> None:
+    """Awaited by the registry hook once ``raise_on_failure`` accepted ``result``.
 
-    Called only after ``raise_on_failure`` has accepted ``result``. Read-only
-    tools are a no-op so the read path pays nothing.
+    Awaited rather than fired-and-forgotten, because ``related_request_id`` only
+    reaches the client while the request is still open: streamable-HTTP tears a
+    request's SSE stream down as soon as its response is sent, and a notification
+    arriving after that is dropped outright (``streamable_http.py`` logs
+    "Request stream … not found" and moves on). LOCAL/CALLERS cost one or two
+    Ghidra GETs, which is noise next to the write itself. TYPE is the exception —
+    the finder can run for seconds, so it goes to the background and emits with
+    no related id, landing on the session's standalone stream instead of a closed
+    one.
     """
     if tool_def.get("read_only"):
         return
@@ -157,35 +174,51 @@ def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str) -> No
     if tier is None:
         logger.debug("No invalidation tier for %s; skipping", endpoint)
         return
-    # Remember the session so later emits (and the change-token poller) have a
-    # place to send to, even if this write's fan-out is empty.
-    if ctx is not None and getattr(ctx, "_request_context", None) is not None:
-        try:
-            state.remember_resource_interest(ctx.request_context.session)
-        except Exception:
-            pass
+    if tier is InvalidationTier.NONE:
+        return
 
     related_id = None
     if ctx is not None and getattr(ctx, "_request_context", None) is not None:
         try:
+            # Remember the session so the change-token poller has somewhere to
+            # send to even when this write's own fan-out turns out empty.
+            state.remember_resource_interest(ctx.request_context.session)
             related_id = ctx.request_context.request_id
         except Exception:
-            related_id = None
+            pass
 
-    # Resolution may hit Ghidra (CALLERS); keep it off the event loop.
-    import asyncio
+    if tier is InvalidationTier.TYPE:
+        _spawn(_invalidate_guarded(endpoint, tier, kwargs, None))
+        return
+    await _invalidate_guarded(endpoint, tier, kwargs, related_id)
 
-    async def _run() -> None:
-        try:
-            await _invalidate(endpoint, tier, kwargs, related_id)
-        except Exception as e:
-            logger.debug("Resource invalidation after %s failed: %s", endpoint, e)
 
+# Strong references: a bare create_task() may be garbage-collected mid-flight.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        coro.close()
         return
-    loop.create_task(_run())
+    task = loop.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def _invalidate_guarded(
+    endpoint: str,
+    tier: InvalidationTier,
+    kwargs: dict,
+    related_request_id,
+) -> None:
+    """Invalidation is best-effort: it must never turn a successful write into an error."""
+    try:
+        await _invalidate(endpoint, tier, kwargs, related_request_id)
+    except Exception as e:
+        logger.debug("Resource invalidation after %s failed: %s", endpoint, e)
 
 
 async def _invalidate(
@@ -215,8 +248,9 @@ async def _invalidate(
             uris |= _known_uris_for_program(program)
             list_changed = True
         else:
+            # No list_changed: index rows are {name, address, uri} and a type
+            # edit moves none of them.
             uris |= type_uris
-            list_changed = True  # index rows may mention the type name indirectly
     else:  # UNBOUNDED
         uris |= _known_uris_for_program(program)
         list_changed = True
@@ -264,7 +298,6 @@ def _known_uris_for_program(program: str | None) -> set[str]:
     if not program:
         return set(known)
     # Match both raw and percent-encoded program segments.
-    from urllib.parse import quote
     markers = (f"/{program}/", f"/{quote(program, safe='')}/")
     return {u for u in known if any(m in u for m in markers) or u == "ghidra://programs"}
 
@@ -272,10 +305,8 @@ def _known_uris_for_program(program: str | None) -> set[str]:
 async def _local_uris(program: str | None, kwargs: dict) -> set[str]:
     addr = await _resolve_target_address(program, kwargs)
     if not addr or not program:
-        # Without a program name we cannot build a canonical URI; the change
-        # token poller (commit 8) will catch these coarse.
-        if addr and program is None:
-            return set()
+        # A canonical URI needs both halves. Writes that omit `program` are
+        # caught coarsely by the change-token poller instead.
         return set()
     return {canonical_function_uri(program, addr)}
 
@@ -283,7 +314,6 @@ async def _local_uris(program: str | None, kwargs: dict) -> set[str]:
 def _by_name_uris(program: str | None, kwargs: dict) -> set[str]:
     if not program:
         return set()
-    from urllib.parse import quote
     out: set[str] = set()
     for key in ("old_name", "new_name", "name", "symbol_name"):
         value = kwargs.get(key)
