@@ -44,10 +44,12 @@ import java.util.Set;
  * two bundled reads composed from existing endpoints would decompile the same function
  * twice.
  *
- * <p>It also carries {@code call_context} — the caller's actual decompiled call
- * expression, e.g. {@code "115: __snprintf_chk(local_f6,5,2,6,&DAT_0093d57a,cVar1);"} —
- * which is the context a reader wants without paying for a separate read per caller. That
+ * <p>It also carries {@code call_context} — a window of the caller's actual decompiled
+ * source centred on the call, three lines by default, because the line that decides whether
+ * the call happens and the line that consumes its result are usually the ones next to it.
+ * That is the context a reader wants without paying for a separate read per caller, and it
  * costs one decompile per *unique* caller (~43 ms measured), so it is deduped and capped.
+ * Widening the window costs nothing extra — the caller is already decompiled.
  *
  * <p>Deliberately excluded: completeness scoring. {@code /analyze_function_completeness}
  * decompiles again, and a second decompile would defeat the point of this endpoint. Call
@@ -69,6 +71,8 @@ public class FunctionBundleService {
     private static final int MAX_XREFS = 100;
     private static final int MAX_DISASM = 200;
     private static final int MAX_DECOMPILED_CHARS = 120_000;
+    /** Widest call-site window. Past this a reader should just read the caller's bundle. */
+    private static final int MAX_CALL_CONTEXT_LINES = 21;
 
     private final ProgramProvider programProvider;
     private final ThreadingStrategy threadingStrategy;
@@ -84,7 +88,8 @@ public class FunctionBundleService {
     @McpTool(path = "/get_function_bundle",
         description = "Everything about one function in a single call and a single decompilation: "
             + "decompiled code, signature, plate and inline comments, parameters, locals, labels, "
-            + "callers (with the caller's actual call-site source line), callees, and xrefs. "
+            + "callers (with a window of the caller's own decompiled source around each call site, "
+            + "3 lines by default), callees, and xrefs. "
             + "Replaces the decompile_function + get_function_variables + get_function_callers + "
             + "get_comment + get_function_xrefs sequence. Accepts a function name or address. "
             + "Completeness scoring is NOT included because it costs a second decompilation — "
@@ -103,6 +108,13 @@ public class FunctionBundleService {
             @Param(value = "call_context_limit", defaultValue = "6",
                    description = "Maximum number of UNIQUE callers to decompile for call "
                                + "context.") int callContextLimit,
+            @Param(value = "call_context_lines", defaultValue = "3",
+                   aliases = {"call_context_window"},
+                   description = "Lines of the caller's decompilation to return per call site, "
+                               + "centred on the call. 1 is the call line alone; the default 3 "
+                               + "adds the line above and below, which is usually where the "
+                               + "guard and the use of the result live. Clamped to 1-21; costs "
+                               + "no extra decompilation.") int callContextLines,
             @Param(value = "include_disasm", defaultValue = "false",
                    description = "Include the raw instruction listing. Off by default: it roughly "
                                + "doubles the payload and agents rarely read it.") boolean includeDisasm,
@@ -129,7 +141,8 @@ public class FunctionBundleService {
 
         try {
             return Response.ok(buildBundle(program, func, includeCallContext,
-                Math.max(0, callContextLimit), includeDisasm));
+                Math.max(0, callContextLimit),
+                Math.clamp(callContextLines, 1, MAX_CALL_CONTEXT_LINES), includeDisasm));
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             return Response.err("Failed to build bundle for " + func.getName() + ": " + msg);
@@ -137,7 +150,8 @@ public class FunctionBundleService {
     }
 
     private Map<String, Object> buildBundle(Program program, Function func,
-            boolean includeCallContext, int callContextLimit, boolean includeDisasm) {
+            boolean includeCallContext, int callContextLimit, int callContextLines,
+            boolean includeDisasm) {
         Address entry = func.getEntryPoint();
         Map<String, Object> out = new LinkedHashMap<>();
         Map<String, Object> truncation = new LinkedHashMap<>();
@@ -199,7 +213,7 @@ public class FunctionBundleService {
 
         if (includeCallContext && !callers.isEmpty() && callContextLimit > 0) {
             List<Map<String, Object>> context =
-                collectCallContext(program, entry, callers, callContextLimit);
+                collectCallContext(program, entry, callers, callContextLimit, callContextLines);
             out.put("call_context", context);
             if (callers.size() > callContextLimit) truncation.put("call_context", true);
         }
@@ -377,13 +391,13 @@ public class FunctionBundleService {
     }
 
     /**
-     * The caller's own source line at each call site — "who calls me, and how".
+     * The caller's own source lines around each call site — "who calls me, and how".
      *
      * <p>Deduped by caller function before decompiling: a caller that calls the target six
      * times must be decompiled once, not six times. Measured ~43 ms per unique caller.
      */
     private List<Map<String, Object>> collectCallContext(Program program, Address target,
-            List<Function> callers, int limit) {
+            List<Function> callers, int limit, int contextLines) {
         List<Map<String, Object>> out = new ArrayList<>();
         FunctionManager functionManager = program.getFunctionManager();
 
@@ -413,10 +427,36 @@ public class FunctionBundleService {
                 item.put("caller", caller.getName());
                 item.put("caller_address", caller.getEntryPoint().toString(false));
                 item.put("site_address", site.toString(false));
-                ClangLine line = lineContaining(lines, site);
-                if (line != null) {
-                    item.put("line_number", line.getLineNumber());
-                    item.put("text", line.toString().trim());
+                int at = indexOfLineContaining(lines, site);
+                if (at >= 0) {
+                    item.put("line_number", lines.get(at).getLineNumber());
+                    // Window is centred on the call, biased upward when it cannot be split
+                    // evenly: the guard that decides whether the call happens reads better
+                    // than one more line after it.
+                    int before = contextLines / 2;
+                    int from = Math.max(0, at - before);
+                    int to = Math.min(lines.size(), from + contextLines);
+                    from = Math.max(0, to - contextLines);
+                    StringBuilder text = new StringBuilder();
+                    for (int i = from; i < to; i++) {
+                        if (i > from) text.append('\n');
+                        // ClangLine.toString() gives "<n>: <tokens>" with the indentation
+                        // dropped — the indent is a separate field. Put it back: whether the
+                        // neighbouring line is inside the branch above it or after it is most
+                        // of what makes a window worth more than the call line alone.
+                        ClangLine line = lines.get(i);
+                        text.append(line.getLineNumber()).append(": ")
+                            .append(line.getIndentString());
+                        for (ClangToken token : line.getAllTokens()) {
+                            text.append(token.getText());
+                        }
+                        stripTrailingInPlace(text);
+                    }
+                    item.put("text", text.toString());
+                    if (contextLines > 1) {
+                        item.put("first_line_number", lines.get(from).getLineNumber());
+                        item.put("last_line_number", lines.get(to - 1).getLineNumber());
+                    }
                 } else {
                     item.put("text", null);
                 }
@@ -426,14 +466,24 @@ public class FunctionBundleService {
         return out;
     }
 
-    private ClangLine lineContaining(List<ClangLine> lines, Address site) {
-        for (ClangLine line : lines) {
-            for (ClangToken token : line.getAllTokens()) {
+    private int indexOfLineContaining(List<ClangLine> lines, Address site) {
+        for (int i = 0; i < lines.size(); i++) {
+            for (ClangToken token : lines.get(i).getAllTokens()) {
                 Address min = token.getMinAddress();
-                if (min != null && min.equals(site)) return line;
+                if (min != null && min.equals(site)) return i;
             }
         }
-        return null;
+        return -1;
+    }
+
+    /** Drop trailing whitespace from what has been appended so far. */
+    private static void stripTrailingInPlace(StringBuilder text) {
+        int end = text.length();
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1))
+                && text.charAt(end - 1) != '\n') {
+            end--;
+        }
+        text.setLength(end);
     }
 
     /**
