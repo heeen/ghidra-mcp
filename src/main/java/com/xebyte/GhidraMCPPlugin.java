@@ -289,6 +289,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private final com.xebyte.core.PromptPolicyService promptPolicyService;
     private final com.xebyte.core.FunctionBundleService functionBundleService;
     private final com.xebyte.core.TypeReferenceService typeReferenceService;
+    private final com.xebyte.core.ChangeTokenService changeTokenService;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -314,6 +315,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         this.promptPolicyService = new com.xebyte.core.PromptPolicyService();
         this.functionBundleService = new com.xebyte.core.FunctionBundleService(programProvider, threadingStrategy, functionService);
         this.typeReferenceService = new com.xebyte.core.TypeReferenceService(programProvider);
+        this.changeTokenService = new com.xebyte.core.ChangeTokenService(programProvider);
         Msg.info(this, "============================================");
         Msg.info(this, "GhidraMCP " + VersionInfo.getFullVersion());
         Msg.info(this, "Endpoints: " + VersionInfo.getEndpointCount());
@@ -655,7 +657,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             xrefCallGraphService, dataTypeService, analysisService,
             documentationHashService, malwareSecurityService, programScriptService,
             emulationService, debuggerService, promptPolicyService, functionBundleService,
-            typeReferenceService);
+            typeReferenceService, changeTokenService);
 
         for (EndpointDef ep : scanner.getEndpoints()) {
             server.createContext(ep.path(), safeHandler(exchange -> {

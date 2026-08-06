@@ -2,6 +2,7 @@ package com.xebyte.offline;
 
 import com.xebyte.core.AnalysisService;
 import com.xebyte.core.BinaryComparisonService;
+import com.xebyte.core.ChangeTokenService;
 import com.xebyte.core.CommentService;
 import com.xebyte.core.DataTypeService;
 import com.xebyte.core.DebuggerService;
@@ -69,6 +70,7 @@ public final class ServiceFactory {
         FunctionBundleService functionBundleService =
             new FunctionBundleService(provider, ts, functionService);
         TypeReferenceService typeReferenceService = new TypeReferenceService(provider);
+        ChangeTokenService changeTokenService = new ChangeTokenService(provider);
 
         return new Object[] {
             listingService,
@@ -87,6 +89,7 @@ public final class ServiceFactory {
             promptPolicyService,
             functionBundleService,
             typeReferenceService,
+            changeTokenService,
         };
     }
 

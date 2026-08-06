@@ -61,6 +61,7 @@ public class HeadlessEndpointHandler {
     private final com.xebyte.core.EmulationService emulationService;
     private final com.xebyte.core.FunctionBundleService functionBundleService;
     private final com.xebyte.core.TypeReferenceService typeReferenceService;
+    private final com.xebyte.core.ChangeTokenService changeTokenService;
 
     public HeadlessEndpointHandler(ProgramProvider programProvider, ThreadingStrategy threadingStrategy) {
         this.programProvider = programProvider;
@@ -82,6 +83,7 @@ public class HeadlessEndpointHandler {
         this.emulationService = new com.xebyte.core.EmulationService(programProvider, threadingStrategy);
         this.functionBundleService = new com.xebyte.core.FunctionBundleService(programProvider, threadingStrategy, this.functionService);
         this.typeReferenceService = new com.xebyte.core.TypeReferenceService(programProvider);
+        this.changeTokenService = new com.xebyte.core.ChangeTokenService(programProvider);
     }
 
     // ==========================================================================
@@ -101,6 +103,7 @@ public class HeadlessEndpointHandler {
     public com.xebyte.core.EmulationService getEmulationService() { return emulationService; }
     public com.xebyte.core.FunctionBundleService getFunctionBundleService() { return functionBundleService; }
     public com.xebyte.core.TypeReferenceService getTypeReferenceService() { return typeReferenceService; }
+    public com.xebyte.core.ChangeTokenService getChangeTokenService() { return changeTokenService; }
     public ProgramProvider getProgramProvider() { return programProvider; }
 
     // ==========================================================================
