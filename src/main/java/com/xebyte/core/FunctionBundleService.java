@@ -1,5 +1,6 @@
 package com.xebyte.core;
 
+import ghidra.app.decompiler.ClangCommentToken;
 import ghidra.app.decompiler.ClangLine;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.app.decompiler.DecompileResults;
@@ -89,7 +90,9 @@ public class FunctionBundleService {
         description = "Everything about one function in a single call and a single decompilation: "
             + "decompiled code, signature, plate and inline comments, parameters, locals, labels, "
             + "callers (with a window of the caller's own decompiled source around each call site, "
-            + "3 lines by default), callees, and xrefs. "
+            + "3 lines by default), callees, and xrefs. Unlike decompile_function, the code text "
+            + "here renders EOL comments (// style), so comments written with set_comment are "
+            + "visible in the code rather than only as an address. "
             + "Replaces the decompile_function + get_function_variables + get_function_callers + "
             + "get_comment + get_function_xrefs sequence. Accepts a function name or address. "
             + "Completeness scoring is NOT included because it costs a second decompilation — "
@@ -149,6 +152,30 @@ public class FunctionBundleService {
         }
     }
 
+    /**
+     * The bundle's own decompiler settings: show EOL comments, in {@code //} style.
+     *
+     * <p>An agent writes EOL comments through {@code set_comment}/{@code batch_set_comments}
+     * and then reads the function back — and none of them appeared in the code, because the
+     * decompiler's EOL option is off by default and this program's saved options keep it off.
+     * They were only visible as an address in {@code comments[]}, which is exactly not where
+     * a reader is looking.
+     *
+     * <p>Scoped to this endpoint rather than {@code createConfiguredDecompiler}: the shared
+     * path feeds {@code analyze_function_completeness}, whose comment counter special-cases
+     * Ghidra's {@code WARNING:} banners in its {@code /*} branch but not its {@code //} one,
+     * and fun-doc's {@code port_pipeline._strip_comments}, which strips only {@code /* … *}{@code /}.
+     * Under {@code //} both would silently change behaviour, and both are scoring inputs.
+     *
+     * <p>Ghidra renders a comment on its own line above the statement, never trailing it, so
+     * this reads as {@code // note} then the code — {@code x = 1; // note} is not something
+     * the decompiler will produce.
+     */
+    private static void bundleDecompilerOptions(ghidra.app.decompiler.DecompileOptions opts) {
+        opts.setEOLCommentIncluded(true);
+        opts.setCommentStyle(ghidra.app.decompiler.DecompileOptions.CommentStyleEnum.CPPStyle);
+    }
+
     private Map<String, Object> buildBundle(Program program, Function func,
             boolean includeCallContext, int callContextLimit, int callContextLines,
             boolean includeDisasm) {
@@ -173,7 +200,8 @@ public class FunctionBundleService {
         }
 
         // The single decompilation. Everything downstream reuses this result.
-        DecompileResults decomp = functionService.decompileFunctionNoRetry(func, program);
+        DecompileResults decomp = functionService.decompileFunctionNoRetry(
+            func, program, FunctionBundleService::bundleDecompilerOptions);
         boolean decompiled = decomp != null && decomp.decompileCompleted()
             && decomp.getDecompiledFunction() != null;
         if (decompiled) {
@@ -439,7 +467,8 @@ public class FunctionBundleService {
             if (decompiled >= limit) break;
             Function caller = entry.getKey();
             decompiled++;
-            DecompileResults results = functionService.decompileFunctionNoRetry(caller, program);
+            DecompileResults results = functionService.decompileFunctionNoRetry(
+                caller, program, FunctionBundleService::bundleDecompilerOptions);
             List<ClangLine> lines = (results != null && results.decompileCompleted()
                 && results.getCCodeMarkup() != null)
                 ? DecompilerUtils.toLines(results.getCCodeMarkup())
@@ -491,6 +520,10 @@ public class FunctionBundleService {
     private int indexOfLineContaining(List<ClangLine> lines, Address site) {
         for (int i = 0; i < lines.size(); i++) {
             for (ClangToken token : lines.get(i).getAllTokens()) {
+                // Comment tokens carry the address they are attached to, so a rendered EOL
+                // comment at the call site would match before the call itself and centre the
+                // window on the note instead of the code it annotates.
+                if (token instanceof ClangCommentToken) continue;
                 Address min = token.getMinAddress();
                 if (min != null && min.equals(site)) return i;
             }
