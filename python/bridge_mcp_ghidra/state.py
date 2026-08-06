@@ -12,7 +12,8 @@ import concurrent.futures
 import contextvars
 import os
 import threading
-from dataclasses import dataclass
+import weakref
+from dataclasses import dataclass, field
 from functools import partial
 from contextlib import contextmanager
 
@@ -309,6 +310,179 @@ def notify_tools_changed_from_worker() -> None:
             for target in stale:
                 if target in _tools_changed_targets:
                     _tools_changed_targets.remove(target)
+
+
+# --------------------------------------------------------------------------
+# Resource subscription / cache-interest bookkeeping
+# --------------------------------------------------------------------------
+#
+# A client's `resources/read` cache is keyed by URI whether or not it ever
+# called `resources/subscribe`. We therefore track both subscribed and merely
+# read URIs, and only emit `resources/updated` for URIs a session already
+# knows about — so a write cannot storm every connected client with URIs it
+# never asked for.
+#
+# Held by weakref so a dropped session (stdio EOF, HTTP session GC) does not
+# pin the ServerSession forever the way `_tools_changed_targets` currently
+# can. Failed sends also prune the entry.
+
+_RESOURCE_NOTIFY_TIMEOUT_SECONDS = 2.0
+
+
+@dataclass
+class ResourceSessionInterest:
+    """One MCP session's interest in Ghidra resource URIs."""
+
+    loop: asyncio.AbstractEventLoop
+    session_ref: weakref.ref
+    subscribed_uris: set[str] = field(default_factory=set)
+    read_uris: set[str] = field(default_factory=set)
+
+
+_resource_interest_lock = threading.Lock()
+_resource_interest: dict[int, ResourceSessionInterest] = {}
+
+
+def _drop_resource_interest(session_id: int) -> None:
+    with _resource_interest_lock:
+        _resource_interest.pop(session_id, None)
+
+
+def remember_resource_interest(
+    session,
+    *,
+    uri: str | None = None,
+    subscribed: bool = False,
+    read: bool = False,
+) -> None:
+    """Record that ``session`` cares about ``uri`` (subscribe and/or read)."""
+    if session is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if loop.is_closed():
+        return
+
+    session_id = id(session)
+    with _resource_interest_lock:
+        entry = _resource_interest.get(session_id)
+        if entry is None or entry.session_ref() is None:
+            entry = ResourceSessionInterest(
+                loop=loop,
+                session_ref=weakref.ref(
+                    session, lambda _ref, sid=session_id: _drop_resource_interest(sid)
+                ),
+            )
+            _resource_interest[session_id] = entry
+        else:
+            entry.loop = loop
+        if uri:
+            if subscribed:
+                entry.subscribed_uris.add(uri)
+            if read:
+                entry.read_uris.add(uri)
+
+
+def forget_resource_subscription(session, uri: str) -> None:
+    """Drop a single subscription; read interest is kept (cache may still hold it)."""
+    if session is None:
+        return
+    with _resource_interest_lock:
+        entry = _resource_interest.get(id(session))
+        if entry is None:
+            return
+        entry.subscribed_uris.discard(uri)
+
+
+def iter_resource_interest(
+    *,
+    uri: str | None = None,
+    require_subscription: bool = False,
+) -> list[tuple[asyncio.AbstractEventLoop, object, ResourceSessionInterest]]:
+    """Live ``(loop, session, entry)`` triples, optionally filtered to a URI.
+
+    Dead weakrefs and closed loops are pruned as a side effect.
+    """
+    with _resource_interest_lock:
+        items = list(_resource_interest.items())
+    live: list[tuple[asyncio.AbstractEventLoop, object, ResourceSessionInterest]] = []
+    stale_ids: list[int] = []
+    for session_id, entry in items:
+        session = entry.session_ref()
+        if session is None or entry.loop.is_closed():
+            stale_ids.append(session_id)
+            continue
+        if uri is not None:
+            known = entry.subscribed_uris if require_subscription else (
+                entry.subscribed_uris | entry.read_uris
+            )
+            if uri not in known:
+                continue
+        live.append((entry.loop, session, entry))
+    if stale_ids:
+        with _resource_interest_lock:
+            for session_id in stale_ids:
+                current = _resource_interest.get(session_id)
+                if current is not None and current.session_ref() is None:
+                    _resource_interest.pop(session_id, None)
+                elif current is not None and current.loop.is_closed():
+                    _resource_interest.pop(session_id, None)
+    return live
+
+
+def known_resource_uris(session=None) -> set[str]:
+    """URIs this session (or every session) has read or subscribed to."""
+    with _resource_interest_lock:
+        if session is not None:
+            entry = _resource_interest.get(id(session))
+            if entry is None:
+                return set()
+            return set(entry.subscribed_uris | entry.read_uris)
+        out: set[str] = set()
+        for entry in _resource_interest.values():
+            if entry.session_ref() is None:
+                continue
+            out |= entry.subscribed_uris
+            out |= entry.read_uris
+        return out
+
+
+def schedule_on_session_loop(loop: asyncio.AbstractEventLoop, coro) -> bool:
+    """Run ``coro`` on ``loop`` from any thread; await the future with a short timeout.
+
+    Returns True on success. Failures (closed loop, timeout, send error) return
+    False so the caller can prune — unlike ``notify_tools_changed_from_worker``,
+    which fire-and-forgets and only notices ``loop.is_closed()``.
+    """
+    if loop.is_closed():
+        return False
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        # Already on the session loop (in-request invalidation). The caller
+        # should have awaited directly; scheduling here would deadlock.
+        raise RuntimeError(
+            "schedule_on_session_loop called from the target loop; await the "
+            "coroutine directly instead"
+        )
+    try:
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        future.result(timeout=_RESOURCE_NOTIFY_TIMEOUT_SECONDS)
+        return True
+    except Exception as e:
+        logger.debug("Resource notification on session loop failed: %s", e)
+        return False
+
+
+def drop_resource_interest(session) -> None:
+    """Forget a session entirely (used after a failed send)."""
+    if session is None:
+        return
+    _drop_resource_interest(id(session))
 
 
 def _get_worker_pool() -> concurrent.futures.ThreadPoolExecutor:
