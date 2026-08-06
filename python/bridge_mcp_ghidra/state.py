@@ -125,8 +125,6 @@ _reconnect_lock = threading.RLock()
 # name/group state. Keep those mutations serialized even though normal Ghidra
 # requests are concurrent.
 _tool_registry_lock = threading.RLock()
-_tools_changed_session_lock = threading.Lock()
-_tools_changed_targets: list[tuple[asyncio.AbstractEventLoop, object]] = []
 _active_request_handles_lock = threading.Lock()
 _active_request_handles: set[RequestCancelHandle] = set()
 
@@ -274,15 +272,7 @@ def remember_tools_changed_session(session) -> None:
     """
     if session is None:
         return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    with _tools_changed_session_lock:
-        for existing_loop, existing_session in _tools_changed_targets:
-            if existing_loop is loop and existing_session is session:
-                return
-        _tools_changed_targets.append((loop, session))
+    remember_resource_interest(session, tools_changed=True)
 
 
 def remember_tools_changed_context(ctx) -> None:
@@ -293,23 +283,16 @@ def remember_tools_changed_context(ctx) -> None:
 
 
 def notify_tools_changed_from_worker() -> None:
-    """Best-effort tools/list_changed notification from a worker thread."""
-    with _tools_changed_session_lock:
-        targets = list(_tools_changed_targets)
-    stale: list[tuple[asyncio.AbstractEventLoop, object]] = []
-    for loop, session in targets:
-        if loop.is_closed():
-            stale.append((loop, session))
-            continue
-        try:
-            asyncio.run_coroutine_threadsafe(session.send_tool_list_changed(), loop)
-        except Exception:
-            stale.append((loop, session))
-    if stale:
-        with _tools_changed_session_lock:
-            for target in stale:
-                if target in _tools_changed_targets:
-                    _tools_changed_targets.remove(target)
+    """Best-effort tools/list_changed notification from a worker thread.
+
+    Shares the session registry below, which holds sessions by weakref and
+    prunes on a failed send — this list used to be its own strong-reference
+    list that only noticed a *closed loop*, so a dropped session stayed in it
+    (and stayed alive) until the process exited.
+    """
+    for loop, session, _entry in iter_resource_interest(require_tools_changed=True):
+        if not schedule_on_session_loop(loop, session.send_tool_list_changed()):
+            drop_resource_interest(session)
 
 
 # --------------------------------------------------------------------------
@@ -323,8 +306,8 @@ def notify_tools_changed_from_worker() -> None:
 # never asked for.
 #
 # Held by weakref so a dropped session (stdio EOF, HTTP session GC) does not
-# pin the ServerSession forever the way `_tools_changed_targets` currently
-# can. Failed sends also prune the entry.
+# pin the ServerSession forever the way the strong-reference tools/list_changed
+# list this replaced did. Failed sends also prune the entry.
 
 _RESOURCE_NOTIFY_TIMEOUT_SECONDS = 2.0
 
@@ -337,6 +320,10 @@ class ResourceSessionInterest:
     session_ref: weakref.ref
     subscribed_uris: set[str] = field(default_factory=set)
     read_uris: set[str] = field(default_factory=set)
+    # tools/list_changed goes to every session that ran a tool, not only the
+    # ones that touched a resource, so it needs its own flag rather than
+    # "has any interest".
+    wants_tools_changed: bool = False
 
 
 _resource_interest_lock = threading.Lock()
@@ -354,6 +341,7 @@ def remember_resource_interest(
     uri: str | None = None,
     subscribed: bool = False,
     read: bool = False,
+    tools_changed: bool = False,
 ) -> None:
     """Record that ``session`` cares about ``uri`` (subscribe and/or read)."""
     if session is None:
@@ -369,12 +357,17 @@ def remember_resource_interest(
     with _resource_interest_lock:
         entry = _resource_interest.get(session_id)
         if entry is None or entry.session_ref() is None:
-            entry = ResourceSessionInterest(
-                loop=loop,
-                session_ref=weakref.ref(
+            try:
+                ref = weakref.ref(
                     session, lambda _ref, sid=session_id: _drop_resource_interest(sid)
-                ),
-            )
+                )
+            except TypeError:
+                # Bookkeeping is best-effort and must never break the call that
+                # triggered it. A real ServerSession is weak-referenceable; a
+                # substitute that is not simply goes untracked.
+                logger.debug("Session %r cannot be tracked (no weakref support)", type(session))
+                return
+            entry = ResourceSessionInterest(loop=loop, session_ref=ref)
             _resource_interest[session_id] = entry
         else:
             entry.loop = loop
@@ -383,6 +376,8 @@ def remember_resource_interest(
                 entry.subscribed_uris.add(uri)
             if read:
                 entry.read_uris.add(uri)
+        if tools_changed:
+            entry.wants_tools_changed = True
 
 
 def forget_resource_subscription(session, uri: str) -> None:
@@ -400,6 +395,7 @@ def iter_resource_interest(
     *,
     uri: str | None = None,
     require_subscription: bool = False,
+    require_tools_changed: bool = False,
 ) -> list[tuple[asyncio.AbstractEventLoop, object, ResourceSessionInterest]]:
     """Live ``(loop, session, entry)`` triples, optionally filtered to a URI.
 
@@ -413,6 +409,8 @@ def iter_resource_interest(
         session = entry.session_ref()
         if session is None or entry.loop.is_closed():
             stale_ids.append(session_id)
+            continue
+        if require_tools_changed and not entry.wants_tools_changed:
             continue
         if uri is not None:
             known = entry.subscribed_uris if require_subscription else (
@@ -449,6 +447,10 @@ def known_resource_uris(session=None) -> set[str]:
         return out
 
 
+# Strong refs for same-loop sends; a bare create_task may be collected mid-send.
+_same_loop_sends: set[asyncio.Task] = set()
+
+
 def schedule_on_session_loop(loop: asyncio.AbstractEventLoop, coro) -> bool:
     """Run ``coro`` on ``loop`` from any thread; await the future with a short timeout.
 
@@ -463,12 +465,14 @@ def schedule_on_session_loop(loop: asyncio.AbstractEventLoop, coro) -> bool:
     except RuntimeError:
         running = None
     if running is loop:
-        # Already on the session loop (in-request invalidation). The caller
-        # should have awaited directly; scheduling here would deadlock.
-        raise RuntimeError(
-            "schedule_on_session_loop called from the target loop; await the "
-            "coroutine directly instead"
-        )
+        # Already on the session loop: blocking on the future here would
+        # deadlock, so schedule and return. In-request paths should await the
+        # coroutine themselves — this branch only covers callers that cannot
+        # know which thread they are on.
+        task = loop.create_task(coro)
+        _same_loop_sends.add(task)
+        task.add_done_callback(_same_loop_sends.discard)
+        return True
     try:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         future.result(timeout=_RESOURCE_NOTIFY_TIMEOUT_SECONDS)
