@@ -87,7 +87,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_basic(self, http_client):
         """Test basic enhanced search and verify isThunk/isExternal fields."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "name_pattern": "FUN_",
             "limit": 10
         })
@@ -104,7 +104,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_with_filters(self, http_client):
         """Test search with multiple filters."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "name_pattern": "FUN_",
             "has_custom_name": "false",
             "min_xrefs": 1,
@@ -116,7 +116,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_pagination(self, http_client):
         """Test search pagination."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "offset": 0,
             "limit": 5
         })
@@ -125,7 +125,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_filter_is_thunk_true(self, http_client):
         """is_thunk=true should return only thunks."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "is_thunk": "true",
             "limit": 50
         })
@@ -137,7 +137,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_filter_is_thunk_false(self, http_client):
         """is_thunk=false should exclude thunks."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "is_thunk": "false",
             "limit": 50
         })
@@ -149,7 +149,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_filter_is_external_true(self, http_client):
         """is_external=true should return only externals (or nothing if fixture has none)."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "is_external": "true",
             "limit": 50
         })
@@ -161,7 +161,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_filter_is_external_false(self, http_client):
         """is_external=false should exclude externals."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "is_external": "false",
             "limit": 50
         })
@@ -173,7 +173,7 @@ class TestSearchFunctionsEnhanced:
     @pytest.mark.requires_program
     def test_search_functions_enhanced_filter_combined(self, http_client):
         """Combined is_thunk=false + is_external=false + min_xrefs filter composes correctly."""
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "is_thunk": "false",
             "is_external": "false",
             "min_xrefs": 1,
@@ -393,7 +393,7 @@ class TestPhase2Integration:
     def test_search_and_analyze_workflow(self, http_client):
         """Test searching then analyzing a function."""
         # Search for functions
-        response = http_client.get("/search_functions_enhanced", params={
+        response = http_client.get("/find_functions", params={
             "has_custom_name": "true",
             "min_xrefs": 1,
             "limit": 1

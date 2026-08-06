@@ -148,7 +148,7 @@ class TestResourceHandlers(unittest.TestCase):
         }
 
         async def fake_read(endpoint, **params):
-            self.assertEqual(endpoint, "/list_functions_enhanced")
+            self.assertEqual(endpoint, "/find_functions")
             self.assertEqual(params.get("limit"), _MAX_INDEX_FUNCTIONS)
             return json.dumps(listing)
 
@@ -173,7 +173,7 @@ class TestResourceHandlers(unittest.TestCase):
         ]
 
         async def fake_read(endpoint, **params):
-            if endpoint == "/list_functions_enhanced":
+            if endpoint == "/find_functions":
                 return json.dumps({"functions": rows, "count": len(rows)})
             if endpoint == "/get_current_program_info":
                 return json.dumps({"name": "ls", "function_count": 25514})

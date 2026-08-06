@@ -86,13 +86,13 @@ class TestListingEndpoints:
         if not server_available:
             pytest.skip("Server not available")
 
-        response = http_client.get("/list_functions")
+        response = http_client.get("/find_functions")
         assert response.status_code == 200
         # Response may be empty if no program loaded, but should not error
 
     @pytest.mark.requires_server
     def test_list_functions_enhanced_pagination(self, http_client, server_available):
-        """Pagination lives on /list_functions_enhanced, not /list_functions.
+        """Pagination lives on /find_functions, which replaced both.
 
         ListingService documents /list_functions as "List all functions (no
         pagination)" and declares only `program`, so the `offset`/`limit` this
@@ -101,9 +101,7 @@ class TestListingEndpoints:
         if not server_available:
             pytest.skip("Server not available")
 
-        response = http_client.get(
-            "/list_functions_enhanced", params={"offset": 0, "limit": 10}
-        )
+        response = http_client.get("/find_functions", params={"offset": 0, "limit": 10})
         assert response.status_code == 200
         assert len(response.json()["functions"]) <= 10
 
@@ -261,7 +259,7 @@ class TestSearchEndpoints:
             pytest.skip("No program loaded")
 
         response = http_client.get(
-            "/search_functions", params={"name_pattern": "a", "limit": 10}
+            "/find_functions", params={"query": "main", "limit": 10}
         )
         assert response.status_code == 200
         payload = response.json()
@@ -281,7 +279,7 @@ class TestSearchEndpoints:
         if not server_available:
             pytest.skip("Server not available")
 
-        response = http_client.get("/search_functions", params={"name_pattern": ""})
+        response = http_client.get("/find_functions", params={"query": ""})
         assert response.status_code == 200
         assert "required" in response.json()["error"].lower()
 
@@ -300,7 +298,7 @@ class TestResponseFormats:
         if not program_loaded:
             pytest.skip("No program loaded")
 
-        response = http_client.get("/list_functions")
+        response = http_client.get("/find_functions")
         if response.text.strip():
             lines = response.text.strip().split("\n")
             for line in lines[:5]:  # Check first few

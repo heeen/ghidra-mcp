@@ -195,10 +195,6 @@ public class HeadlessEndpointHandler {
         return listingService.getAllFunctionNames(offset, limit, programName).toJson();
     }
 
-    public String listFunctions(String programName) {
-        return listingService.listFunctions(programName).toJson();
-    }
-
     public String listClasses(int offset, int limit, String programName) {
         return listingService.getAllClassNames(offset, limit, programName).toJson();
     }
@@ -277,10 +273,6 @@ public class HeadlessEndpointHandler {
     // ==========================================================================
     // SEARCH ENDPOINTS
     // ==========================================================================
-
-    public String searchFunctions(String query, int offset, int limit, String programName) {
-        return listingService.searchFunctionsByName(query, offset, limit, programName).toJson();
-    }
 
     // ==========================================================================
     // RENAME ENDPOINTS
@@ -1174,16 +1166,6 @@ public class HeadlessEndpointHandler {
     }
 
     /**
-     * Enhanced function search with multiple filter options.
-     */
-    public String searchFunctionsEnhanced(String namePattern, Integer minXrefs, Integer maxXrefs,
-                                          Boolean hasCustomName, Boolean isThunk, Boolean isExternal,
-                                          boolean regex, String sortBy,
-                                          int offset, int limit, String programName) {
-        return analysisService.searchFunctionsEnhanced(namePattern, minXrefs, maxXrefs, null, hasCustomName, isThunk, isExternal, regex, sortBy, offset, limit, programName).toJson();
-    }
-
-    /**
      * Comprehensive function analysis in a single call.
      */
     public String analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
@@ -1860,10 +1842,6 @@ public class HeadlessEndpointHandler {
 
     public String listDataItemsByXrefs(int offset, int limit, String format, String programName) {
         return listingService.listDataItemsByXrefs(offset, limit, format, programName).toJson();
-    }
-
-    public String listFunctionsEnhanced(int offset, int limit, String programName) {
-        return listingService.listFunctionsEnhanced(offset, limit, programName).toJson();
     }
 
     public String getValidDataTypes(String category, String programName) {

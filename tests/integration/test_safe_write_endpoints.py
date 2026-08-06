@@ -39,13 +39,8 @@ def require_server_and_program(server_available, program_loaded):
 
 @pytest.fixture
 def first_function(http_client):
-    """Get the first function with its details.
-
-    /list_functions declares only `program` -- "List all functions (no
-    pagination)" -- so a `limit` sent here was dropped. The first match in the
-    full listing is what the regex below finds anyway.
-    """
-    response = http_client.get("/list_functions")
+    """Get the first function with its details."""
+    response = http_client.get("/find_functions", params={"limit": 1})
     if response.status_code != 200:
         pytest.skip("Cannot list functions")
 
@@ -73,12 +68,8 @@ def first_function(http_client):
 
 @pytest.fixture
 def first_named_function(http_client):
-    """Get the first function that has a non-default name.
-
-    /list_functions takes no `limit`; the whole listing is scanned and only
-    the first match is used.
-    """
-    response = http_client.get("/list_functions")
+    """Get the first function that has a non-default name."""
+    response = http_client.get("/find_functions", params={"limit": 50})
     if response.status_code != 200:
         pytest.skip("Cannot list functions")
 

@@ -11,6 +11,7 @@ import ghidra.program.model.symbol.*;
 import ghidra.util.Msg;
 
 import java.util.*;
+import java.util.Comparator;
 import java.util.regex.Pattern;
 
 /**
@@ -344,96 +345,123 @@ public class ListingService {
                 "defined", "all", 1, false, programName);
     }
 
-    @McpTool(path = "/search_functions", description = "Search functions by name pattern. Omit name_pattern to list all functions.", category = "listing", access = ToolAccess.READ_ONLY)
-    public Response searchFunctionsByName(
-            @Param(value = "name_pattern", description = "Substring to match against function names (omit or leave empty to return all functions)", defaultValue = "") String searchTerm,
+    @McpTool(path = "/find_functions",
+        description = "Find functions: every filter is optional, so with none it lists the whole "
+            + "program a page at a time. Filter by name (substring or regex=true), xref count, "
+            + "calling convention, whether the name is user-given, thunk or external; sort by "
+            + "address, name or xref_count. Replaces list_functions, list_functions_enhanced, "
+            + "search_functions and search_functions_enhanced, which returned four different "
+            + "shapes for the same question.",
+        category = "listing", access = ToolAccess.READ_ONLY)
+    public Response findFunctions(
+            @Param(value = "name_pattern", defaultValue = "",
+                   aliases = {"pattern", "query", "name"},
+                   description = "Substring to match, or a regex when regex=true. Omit to match "
+                               + "every function.") String namePattern,
+            @Param(value = "regex", defaultValue = "false",
+                   description = "Treat name_pattern as a regular expression.") boolean regex,
+            @Param(value = "min_xrefs", defaultValue = "",
+                   description = "Only functions with at least this many references to them.") Integer minXrefs,
+            @Param(value = "max_xrefs", defaultValue = "",
+                   description = "Only functions with at most this many references to them.") Integer maxXrefs,
+            @Param(value = "calling_convention", defaultValue = "",
+                   description = "Only functions with this calling convention (e.g. __stdcall).") String callingConvention,
+            @Param(value = "has_custom_name", defaultValue = "",
+                   description = "true = only functions somebody has named; false = only "
+                               + "auto-generated names (FUN_*, thunk_*).") Boolean hasCustomName,
+            @Param(value = "is_thunk", defaultValue = "",
+                   description = "true = only thunks, false = exclude them, omit for both.") Boolean isThunkFilter,
+            @Param(value = "is_external", defaultValue = "",
+                   description = "true = only external functions, false = exclude them.") Boolean isExternalFilter,
+            @Param(value = "sort_by", defaultValue = "address",
+                   description = "address | name | xref_count.") String sortBy,
             @Param(value = "offset", defaultValue = "0",
                    description = "Number of entries to skip before this page starts; 0 begins at the "
                                + "first entry. Page by adding `limit` each call until offset reaches the "
                                + "`total` the response reports.") int offset,
             @Param(value = "limit", defaultValue = "100",
-                   description = "Maximum entries returned in this page (default 100). Pass 0 or a "
-                               + "negative value for no limit; `total` in the response always reports the "
-                               + "full unpaged count.") int limit,
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+                   description = "Page size. 0 means no limit, which on a large binary is a "
+                               + "megabytes-long response — the old list_functions had no "
+                               + "pagination at all and returned 1.7MB on a stripped `ls`.") int limit,
+            @Param(value = "program", defaultValue = "",
+                   description = "Target program name (omit to use the active program — always "
+                               + "specify when multiple programs are open)") String programName) {
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 
-        if (searchTerm == null || searchTerm.isEmpty()) return Response.err("Search term is required");
+        Pattern pattern = null;
+        if (regex && namePattern != null && !namePattern.isEmpty()) {
+            try {
+                pattern = Pattern.compile(namePattern);
+            } catch (Exception e) {
+                return Response.err("Invalid regex pattern: " + e.getMessage());
+            }
+        }
 
-        List<String> matches = new ArrayList<>();
+        // Classification walks a function's instructions, so it is the one expensive test here.
+        // Only pay it during the scan when a caller actually filters on it; otherwise it is
+        // deferred to the returned page, turning 25,779 instruction walks into `limit` of them.
+        boolean classifyWhileScanning = isThunkFilter != null;
+
+        List<Map<String, Object>> matches = new ArrayList<>();
         for (Function func : program.getFunctionManager().getFunctions(true)) {
             String name = func.getName();
-            if (name.toLowerCase().contains(searchTerm.toLowerCase())) {
-                matches.add(String.format("%s @ %s", name, func.getEntryPoint()));
+            if (namePattern != null && !namePattern.isEmpty()) {
+                boolean hit = regex ? pattern.matcher(name).find() : name.contains(namePattern);
+                if (!hit) continue;
             }
-        }
-
-        Collections.sort(matches);
-
-        return ServiceUtils.paged("functions", matches, offset, limit);
-    }
-
-    @McpTool(path = "/list_functions", description = "List all functions (no pagination)", category = "listing", access = ToolAccess.READ_ONLY)
-    public Response listFunctions(
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
-        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
-        if (pe.hasError()) return pe.error();
-        Program program = pe.program();
-
-        List<Map<String, Object>> functions = new ArrayList<>();
-        for (Function func : program.getFunctionManager().getFunctions(true)) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("name", func.getName());
-            entry.put("address", func.getEntryPoint().toString(false));
-            functions.add(entry);
-        }
-        return ServiceUtils.listed("functions", functions);
-    }
-
-    @McpTool(path = "/list_functions_enhanced", description = "List functions with thunk/external flags as JSON", category = "listing", access = ToolAccess.READ_ONLY)
-    public Response listFunctionsEnhanced(
-            @Param(value = "offset", defaultValue = "0",
-                   description = "Number of entries to skip before this page starts; 0 begins at the "
-                               + "first entry. Page by adding `limit` each call until offset reaches the "
-                               + "`total` the response reports.") int offset,
-            @Param(value = "limit", defaultValue = "10000",
-                   description = "Maximum functions returned, counted after `offset` is applied "
-                               + "(default 10000, which covers most programs in one call). This endpoint "
-                               + "stops at the limit rather than treating 0 as unlimited, so 0 returns an "
-                               + "EMPTY list.") int limit,
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
-        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
-        if (pe.hasError()) return pe.error();
-        Program program = pe.program();
-
-        List<Map<String, Object>> functions = new ArrayList<>();
-        int count = 0;
-        int skipped = 0;
-
-        for (Function func : program.getFunctionManager().getFunctions(true)) {
-            if (skipped < offset) {
-                skipped++;
+            if (hasCustomName != null && hasCustomName == ServiceUtils.isAutoGeneratedName(name)) {
                 continue;
             }
-            if (count >= limit) break;
+            if (callingConvention != null && !callingConvention.isEmpty()
+                    && !callingConvention.equalsIgnoreCase(func.getCallingConventionName())) {
+                continue;
+            }
+            int xrefCount = func.getSymbol().getReferenceCount();
+            if (minXrefs != null && xrefCount < minXrefs) continue;
+            if (maxXrefs != null && xrefCount > maxXrefs) continue;
 
-            Map<String, Object> funcItem = new LinkedHashMap<>();
-            funcItem.putAll(ServiceUtils.addressToJson(func.getEntryPoint(), program));
-            funcItem.put("name", func.getName());
-            funcItem.put("isThunk", "thunk".equals(AnalysisService.classifyFunction(func, program)));
-            funcItem.put("isExternal", func.isExternal());
-            functions.add(funcItem);
-            count++;
+            boolean external = func.isExternal();
+            if (isExternalFilter != null && external != isExternalFilter) continue;
+            if (classifyWhileScanning) {
+                boolean thunk = "thunk".equals(AnalysisService.classifyFunction(func, program));
+                if (thunk != isThunkFilter) continue;
+            }
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", name);
+            row.putAll(ServiceUtils.addressToJson(func.getEntryPoint(), program));
+            row.put("xref_count", xrefCount);
+            row.put("is_external", external);
+            if (classifyWhileScanning) {
+                row.put("is_thunk", isThunkFilter);
+            }
+            matches.add(row);
         }
 
-        return Response.ok(JsonHelper.mapOf(
-                "functions", functions,
-                "count", count,
-                "offset", offset,
-                "limit", limit
-        ));
+        if ("name".equals(sortBy)) {
+            matches.sort(Comparator.comparing(m -> (String) m.get("name")));
+        } else if ("xref_count".equals(sortBy)) {
+            matches.sort((a, b) -> Integer.compare((Integer) b.get("xref_count"), (Integer) a.get("xref_count")));
+        } else {
+            matches.sort(Comparator.comparing(m -> (String) m.get("address")));
+        }
+
+        Response paged = ServiceUtils.paged("functions", matches, offset, limit);
+        if (!classifyWhileScanning && paged instanceof Response.Ok ok
+                && ok.data() instanceof Map<?, ?> map
+                && map.get("functions") instanceof List<?> rows) {
+            for (Object o : rows) {
+                if (!(o instanceof Map)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> row = (Map<String, Object>) o;
+                Function func = ServiceUtils.resolveFunction(program, String.valueOf(row.get("address")));
+                row.put("is_thunk", func != null
+                    && "thunk".equals(AnalysisService.classifyFunction(func, program)));
+            }
+        }
+        return paged;
     }
 
     @McpTool(path = "/list_calling_conventions", description = "List available calling conventions", category = "listing", access = ToolAccess.READ_ONLY)
