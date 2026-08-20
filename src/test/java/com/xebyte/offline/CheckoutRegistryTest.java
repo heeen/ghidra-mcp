@@ -81,6 +81,33 @@ public class CheckoutRegistryTest {
         assertTrue(result.error().contains("/Mods/PD2-S12/D2Common.dll"));
     }
 
+    /**
+     * One tree, one identity — regardless of how its root was expressed.
+     *
+     * <p>Regression: creating with no root and then re-creating from a config that
+     * had been persisted with the resolved absolute root minted a SECOND id for the
+     * same directory (co_7de33ad7 and co_adeb2a7d), each with its own resource URI.
+     * A client subscribed to the first would never hear about the checkout again.
+     */
+    @Test
+    public void createIsIdempotentHoweverTheDefaultRootIsExpressed() throws IOException {
+        CheckoutRegistry registry = CheckoutRegistry.getInstance();
+        String domain = "/Mods/PD2-S12/D2Common.dll";
+
+        Checkout first = registry.create(domain, "D2Common.dll", null);
+        Checkout again = registry.create(domain, "D2Common.dll", null);
+        assertEquals("repeat create must return the same identity", first.id(), again.id());
+
+        // Now the shape that actually broke: the persisted config carries the
+        // resolved absolute root, which used to take the explicit branch.
+        CheckoutConfig persisted =
+                CheckoutConfig.defaults().withRootPath(first.root().path().toString());
+        Checkout adopted = registry.create(domain, "D2Common.dll", persisted);
+        assertEquals("explicit default root must key like the default branch",
+                first.id(), adopted.id());
+        assertEquals("one tree must never hold two registrations", 1, registry.all().size());
+    }
+
     @Test
     public void resolveByIdAndDomainPathIsUnique() throws IOException {
         CheckoutRegistry registry = CheckoutRegistry.getInstance();

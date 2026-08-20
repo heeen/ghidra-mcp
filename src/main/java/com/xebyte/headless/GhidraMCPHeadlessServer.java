@@ -396,7 +396,8 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             endpointHandler.getFunctionBundleService(),
             endpointHandler.getTypeReferenceService(),
             endpointHandler.getChangeTokenService(),
-            endpointHandler.getPartitionService());
+            endpointHandler.getPartitionService(),
+            endpointHandler.getCheckoutService());
 
         for (EndpointDef ep : scanner.getEndpoints()) {
             safeContext(ep.path(), exchange -> {

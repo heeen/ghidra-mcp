@@ -69,16 +69,28 @@ public final class CheckoutRegistry {
         Objects.requireNonNull(programName, "programName");
         CheckoutConfig cfg = config != null ? config : CheckoutConfig.defaults();
 
+        // Key material uses the shared parent (not the unique child dir) so the
+        // directory suffix can be the same 8 hex chars as id().
+        CheckoutKey defaultKey = CheckoutKey.of(domainPath, defaultParent().toString());
+        CheckoutRoot defaultRoot = CheckoutRoot.defaultRoot(defaultKey.directoryName(programName));
+
         final CheckoutKey key;
         final CheckoutRoot root;
         if (cfg.rootPath() != null) {
             root = CheckoutRoot.explicit(cfg.rootPath());
-            key = CheckoutKey.of(domainPath, root.path());
+            // An explicit root that IS this program's default root must key the same
+            // way the default branch does. Otherwise one tree acquires two identities
+            // — measured: creating with no root and then re-creating from a config
+            // that had been persisted with the resolved absolute root produced
+            // co_7de33ad7 and co_adeb2a7d for the same directory, each with its own
+            // resource URI, so a client subscribed to the first stopped being told
+            // about changes.
+            key = root.path().equals(defaultRoot.path())
+                    ? defaultKey
+                    : CheckoutKey.of(domainPath, root.path());
         } else {
-            // Key material uses the shared parent (not the unique child dir) so
-            // the directory suffix can be the same 8 hex chars as id().
-            key = CheckoutKey.of(domainPath, defaultParent().toString());
-            root = CheckoutRoot.defaultRoot(key.directoryName(programName));
+            key = defaultKey;
+            root = defaultRoot;
         }
 
         Checkout existing = byId.get(key.id());
