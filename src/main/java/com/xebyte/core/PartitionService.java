@@ -1,13 +1,9 @@
 package com.xebyte.core;
 
-import com.xebyte.core.partition.AddressBandPartitioner;
-import com.xebyte.core.partition.LiteralLocalityPartitioner;
-import com.xebyte.core.partition.MmioPagePartitioner;
 import com.xebyte.core.partition.Partition;
 import com.xebyte.core.partition.PartitionCascade;
 import com.xebyte.core.partition.PartitionContext;
 import com.xebyte.core.partition.Partitioner;
-import com.xebyte.core.partition.QualifiedNamePartitioner;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 
@@ -41,8 +37,6 @@ import java.util.Map;
  */
 public class PartitionService {
 
-    /** ~20 functions at a measured mean of 1,564 bytes of C is about one comfortable read. */
-    private static final int DEFAULT_BAND_SIZE = 20;
     private static final int MAX_PARTITIONS_REPORTED = 400;
     private static final int SAMPLE_TOKENS = 5;
 
@@ -125,22 +119,16 @@ public class PartitionService {
     }
 
     private List<Partitioner> buildChain(int bandSize, String strategies) {
-        int band = bandSize > 0 ? bandSize : DEFAULT_BAND_SIZE;
-        List<Partitioner> all = List.of(
-                new QualifiedNamePartitioner(),
-                new MmioPagePartitioner(),
-                new LiteralLocalityPartitioner(),
-                new AddressBandPartitioner(band));
-        if (strategies == null || strategies.isBlank()) return all;
-
         List<String> wanted = new ArrayList<>();
-        for (String s : strategies.split(",")) {
-            String t = s.trim();
-            if (!t.isEmpty()) wanted.add(t);
+        if (strategies != null && !strategies.isBlank()) {
+            for (String s : strategies.split(",")) {
+                String t = s.trim();
+                if (!t.isEmpty()) {
+                    wanted.add(t);
+                }
+            }
         }
-        List<Partitioner> chosen = new ArrayList<>();
-        for (Partitioner p : all) if (wanted.contains(p.name())) chosen.add(p);
-        return chosen;
+        return PartitionCascade.buildChain(bandSize, wanted);
     }
 
     /** A few member names, so a row is recognisable without opening the compartment. */

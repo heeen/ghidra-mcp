@@ -1,6 +1,7 @@
 package com.xebyte.core.partition;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,11 +19,41 @@ import java.util.Map;
  */
 public final class PartitionCascade {
 
+    /** Matches {@link com.xebyte.core.PartitionService}'s default band width. */
+    public static final int DEFAULT_BAND_SIZE = 20;
+
     private final List<Partitioner> partitioners;
 
     public PartitionCascade(List<Partitioner> partitioners) {
         this.partitioners = new ArrayList<>(partitioners);
         this.partitioners.sort(Comparator.comparingInt(Partitioner::precedence));
+    }
+
+    /**
+     * Shared cascade chain for {@code /partition_program} and checkout sweeps.
+     *
+     * <p>Empty / null {@code strategyNames} means the full cascade. Unknown names
+     * are ignored (callers that need a hard error on an empty selection check
+     * the result themselves — the HTTP endpoint does, the sweep falls through
+     * to address bands only when every named strategy was unknown).
+     */
+    public static List<Partitioner> buildChain(int bandSize, Collection<String> strategyNames) {
+        int band = bandSize > 0 ? bandSize : DEFAULT_BAND_SIZE;
+        List<Partitioner> all = List.of(
+                new QualifiedNamePartitioner(),
+                new MmioPagePartitioner(),
+                new LiteralLocalityPartitioner(),
+                new AddressBandPartitioner(band));
+        if (strategyNames == null || strategyNames.isEmpty()) {
+            return all;
+        }
+        List<Partitioner> chosen = new ArrayList<>();
+        for (Partitioner p : all) {
+            if (strategyNames.contains(p.name())) {
+                chosen.add(p);
+            }
+        }
+        return chosen;
     }
 
     public Result run(PartitionContext ctx) {

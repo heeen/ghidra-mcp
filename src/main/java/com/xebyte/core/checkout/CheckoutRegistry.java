@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -24,14 +25,14 @@ import java.util.concurrent.ThreadFactory;
  *
  * <p>One single-thread daemon executor runs sweeps; throughput is
  * {@code ProgramDB}-lock-bound, so a second concurrent sweep would only halve
- * the first. SweepJob itself lands in a later step — {@link #enqueue(Runnable)}
- * is the hook.
+ * the first. {@link SweepJob} submits via {@link #enqueueSweep(SweepJob)}.
  */
 public final class CheckoutRegistry {
 
     private static final CheckoutRegistry INSTANCE = new CheckoutRegistry();
 
     private final Map<String, Checkout> byId = new LinkedHashMap<>();
+    private final Map<String, SweepJob> activeJobs = new ConcurrentHashMap<>();
     private final ExecutorService sweepExecutor;
 
     private CheckoutRegistry() {
@@ -178,9 +179,36 @@ public final class CheckoutRegistry {
     }
 
     /**
-     * Enqueue work on the single JVM-wide sweep thread.
-     * SweepJob (step 5) submits here; this step only provides the hook.
+     * Enqueue a {@link SweepJob} on the single JVM-wide sweep thread.
+     * Tracks the job so {@link #cancelSweep} can flip its flag and
+     * {@code stopProcess()} the in-flight decompile.
      */
+    public void enqueueSweep(SweepJob job) {
+        Objects.requireNonNull(job, "job");
+        activeJobs.put(job.checkoutId(), job);
+        sweepExecutor.execute(job);
+    }
+
+    /**
+     * Cancel a queued or running sweep. A job still queued is marked cancelled
+     * before {@link SweepJob#run()} does any work.
+     */
+    public void cancelSweep(String checkoutId, String reason) {
+        if (checkoutId == null) {
+            return;
+        }
+        SweepJob job = activeJobs.get(checkoutId);
+        if (job != null) {
+            job.requestCancel(reason != null ? reason : "cancelled by /checkout_stop");
+        }
+    }
+
+    /** Called from {@link SweepJob} finally — only clears if still this job. */
+    void clearActiveJob(String checkoutId, SweepJob job) {
+        activeJobs.remove(checkoutId, job);
+    }
+
+    /** Test / raw hook: enqueue arbitrary work on the sweep thread. */
     public void enqueue(Runnable job) {
         Objects.requireNonNull(job, "job");
         sweepExecutor.execute(job);
@@ -189,6 +217,7 @@ public final class CheckoutRegistry {
     /** Test helper: drop all registrations without touching disk. */
     public synchronized void clearForTests() {
         byId.clear();
+        activeJobs.clear();
     }
 
     private static boolean basenameEquals(String selector, String pathOrName) {
