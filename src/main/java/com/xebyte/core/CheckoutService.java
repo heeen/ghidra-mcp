@@ -7,9 +7,16 @@ import com.xebyte.core.checkout.CheckoutLayout;
 import com.xebyte.core.checkout.CheckoutRegistry;
 import com.xebyte.core.checkout.CheckoutRoot;
 import com.xebyte.core.checkout.CheckoutStatusMd;
+import com.xebyte.core.checkout.CheckoutTreeNarrower;
+import com.xebyte.core.checkout.ExclusionEvaluator;
 import com.xebyte.core.checkout.ExclusionRule;
 import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
+import com.xebyte.core.partition.Partition;
+import com.xebyte.core.partition.PartitionCascade;
+import com.xebyte.core.partition.PartitionContext;
+import com.xebyte.core.partition.Partitioner;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 
 import java.io.IOException;
@@ -158,6 +165,12 @@ public class CheckoutService {
                 .throttlePercent(throttlePercent)
                 .build();
 
+        try {
+            ExclusionEvaluator.validateRanges(program, requested);
+        } catch (IllegalArgumentException e) {
+            return Response.err(e.getMessage());
+        }
+
         String domainPath = domainPathOf(program);
         String resolvedName = program.getName();
 
@@ -189,9 +202,10 @@ public class CheckoutService {
     // =========================================================================
 
     @McpTool(path = "/checkout_configure", method = "POST",
-        description = "Update checkout configuration fields (all optional). Persists "
-            + "checkout.json and classifies the change as narrowing / widening / "
-            + "repartitioning. Does not delete files or start a resweep.",
+        description = "Update checkout configuration (all optional). Classifies the change "
+            + "and acts: narrowing deletes now-out-of-scope function bodies immediately; "
+            + "widening marks phase STALE with pending_functions (no auto-sweep); "
+            + "repartitioning sets requires_full_resweep and STALE. Never starts a sweep.",
         category = "checkout", access = ToolAccess.WRITE)
     public Response checkoutConfigure(
             @Param(value = "checkout", source = ParamSource.BODY,
@@ -273,6 +287,20 @@ public class CheckoutService {
         // bridge (empty strings are dropped). Callers that need to clear must pass
         // a sentinel later; for now "omit" means leave unchanged.
         CheckoutConfig updated = b.build();
+
+        Program live = findOpenProgram(checkout);
+        // RANGE bounds need AddressFactory — reject here, not mid-sweep.
+        if (live != null && !live.isClosed()) {
+            try {
+                ExclusionEvaluator.validateRanges(live, updated);
+            } catch (IllegalArgumentException e) {
+                return Response.err(e.getMessage());
+            }
+        } else if (hasRangeRules(updated)) {
+            return Response.err(
+                    "program is closed; cannot validate range exclusions against AddressFactory");
+        }
+
         String change = classifyConfigChange(old, updated,
                 strategiesTouched, bandSize != null, exclusionsTouched, includeTouched);
 
@@ -285,7 +313,28 @@ public class CheckoutService {
 
         Map<String, Object> out = statusMap(checkout);
         out.put("config_change", change);
-        return Response.ok(out);
+        out.put("behaviour", change);
+
+        try {
+            applyConfigBehaviour(checkout, live, old, updated, change, out);
+        } catch (IOException e) {
+            return Response.err("config behaviour failed: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return Response.err(e.getMessage());
+        }
+
+        // Refresh status fields after phase / file mutations.
+        Map<String, Object> refreshed = statusMap(checkout);
+        refreshed.put("config_change", change);
+        refreshed.put("behaviour", change);
+        for (String key : List.of(
+                "functions_removed", "modules_touched", "pending_functions",
+                "requires_full_resweep", "action")) {
+            if (out.containsKey(key)) {
+                refreshed.put(key, out.get(key));
+            }
+        }
+        return Response.ok(refreshed);
     }
 
     // =========================================================================
@@ -523,6 +572,17 @@ public class CheckoutService {
         out.put("functions_done", progress.functionsDone());
         out.put("functions_failed", progress.functionsFailed());
         out.put("bytes_written", progress.bytesWritten());
+        out.put("eligible_functions", progress.eligibleFunctions());
+        out.put("functions_in_scope", progress.functionsInScope());
+        // Per-rule counts, not just the aggregate: "3230 became 2036" invites the
+        // question this answers. Without it a rule that silently matched far more
+        // than intended is indistinguishable from one that worked. index.md carries
+        // the same breakdown, but an agent polling status should not have to open a
+        // file to find out what its own configure call did.
+        if (!progress.exclusionRemovals().isEmpty()) {
+            out.put("removed_by_rule", new LinkedHashMap<>(progress.exclusionRemovals()));
+        }
+        out.put("exclusion_removals", progress.exclusionRemovals());
         out.put("current_partition", progress.currentPartition());
         out.put("started_epoch_ms", progress.startedEpochMs());
         out.put("eta_seconds", progress.etaSeconds());
@@ -774,9 +834,203 @@ public class CheckoutService {
     }
 
     /**
-     * Classify a config edit for the response. File deletion / resweep semantics
-     * are step 7 — here we only name the change so the agent knows what a later
-     * start would imply.
+     * Act on a classified config edit. Narrowing deletes now-excluded bodies
+     * immediately (Grep must not hit a lie). Widening / repartitioning mark
+     * STALE and never auto-start a sweep — 200 s of work must not begin from a
+     * config call.
+     */
+    private void applyConfigBehaviour(
+            Checkout checkout,
+            Program live,
+            CheckoutConfig old,
+            CheckoutConfig updated,
+            String change,
+            Map<String, Object> out) throws IOException {
+
+        switch (change) {
+            case "narrowing" -> {
+                if (live == null || live.isClosed()) {
+                    throw new IllegalArgumentException(
+                            "program is closed; cannot narrow on-disk checkout files");
+                }
+                ExclusionEvaluator evaluator = ExclusionEvaluator.of(live, updated);
+                CheckoutTreeNarrower.NarrowResult nr =
+                        CheckoutTreeNarrower.narrow(checkout, live, evaluator);
+                out.put("action", "deleted_out_of_scope_functions");
+                out.put("functions_removed", nr.functionsRemoved());
+                out.put("modules_touched", nr.modulesTouched());
+                // Tree now matches the narrower config — keep phase if it was
+                // complete; only stamp STALE when there was nothing to remove
+                // but the agent still needs a resweep signal (shouldn't happen).
+                if (nr.functionsRemoved() > 0) {
+                    checkout.setProgress(checkout.progress()
+                            .withScope(
+                                    checkout.progress().eligibleFunctions(),
+                                    nr.functionsRemaining(),
+                                    Map.of()));
+                    try {
+                        CheckoutStatusMd.write(checkout,
+                                CheckoutStatusMd.stateForPhase(checkout.progress().phase()),
+                                null);
+                    } catch (IOException ignored) {
+                        // status on disk is best-effort after a successful rewrite
+                    }
+                }
+            }
+            case "widening" -> {
+                int pending = estimatePendingFunctions(checkout, live, updated);
+                checkout.setProgress(checkout.progress()
+                        .withPhase(SweepProgress.Phase.STALE)
+                        .withLastError("config widened; resweep needed for pending functions"));
+                out.put("action", "marked_stale");
+                out.put("pending_functions", pending);
+                CheckoutStatusMd.write(checkout, "dirty", null);
+            }
+            case "repartitioning" -> {
+                checkout.setProgress(checkout.progress()
+                        .withPhase(SweepProgress.Phase.STALE)
+                        .withLastError(
+                                "config repartitions compartments; /checkout_start will wipe "
+                                        + "modules/ and rewrite"));
+                out.put("action", "marked_stale_full_resweep");
+                out.put("requires_full_resweep", true);
+                int pending = estimatePendingFunctions(checkout, live, updated);
+                out.put("pending_functions", pending);
+                CheckoutStatusMd.write(checkout, "dirty", null);
+            }
+            case "mixed" -> {
+                // Apply the narrow half immediately, then mark STALE for the
+                // newly-included remainder — never auto-sweep.
+                if (live != null && !live.isClosed()) {
+                    ExclusionEvaluator evaluator = ExclusionEvaluator.of(live, updated);
+                    CheckoutTreeNarrower.NarrowResult nr =
+                            CheckoutTreeNarrower.narrow(checkout, live, evaluator);
+                    out.put("functions_removed", nr.functionsRemoved());
+                    out.put("modules_touched", nr.modulesTouched());
+                }
+                int pending = estimatePendingFunctions(checkout, live, updated);
+                checkout.setProgress(checkout.progress()
+                        .withPhase(SweepProgress.Phase.STALE)
+                        .withLastError("config mixed narrow+widen; resweep needed"));
+                out.put("action", "narrowed_and_marked_stale");
+                out.put("pending_functions", pending);
+                CheckoutStatusMd.write(checkout, "dirty", null);
+            }
+            default -> out.put("action", "none");
+        }
+    }
+
+    /**
+     * How many in-scope functions are missing from the on-disk index. Runs the
+     * cascade when PARTITION rules are in play (slugs required); otherwise
+     * TAG/RANGE alone are enough. Returns 0 when the program is closed — the
+     * agent still gets STALE and must open before starting.
+     */
+    private int estimatePendingFunctions(
+            Checkout checkout, Program live, CheckoutConfig cfg) {
+        if (live == null || live.isClosed()) {
+            return 0;
+        }
+        try {
+            ExclusionEvaluator evaluator = ExclusionEvaluator.of(live, cfg);
+            Set<String> onDisk = loadIndexAddresses(checkout.root().path());
+
+            boolean needsSlugs = hasPartitionRules(cfg);
+            int pending = 0;
+            if (needsSlugs) {
+                List<Partitioner> chain = PartitionCascade.buildChain(
+                        cfg.bandSize(), cfg.enabledStrategies());
+                if (chain.isEmpty()) {
+                    chain = PartitionCascade.buildChain(cfg.bandSize(), List.of("address-band"));
+                }
+                PartitionContext ctx = new PartitionContext(live);
+                PartitionCascade.Result cascade = new PartitionCascade(chain).run(ctx);
+                ExclusionEvaluator.FilterResult filtered =
+                        evaluator.filterPartitions(cascade.partitions(), ctx.size());
+                for (Partition part : filtered.partitions()) {
+                    for (Function func : part.members()) {
+                        String hex = normalizeHex(func.getEntryPoint().toString(false));
+                        if (!onDisk.contains(hex)) {
+                            pending++;
+                        }
+                    }
+                }
+            } else {
+                PartitionContext ctx = new PartitionContext(live);
+                for (Function func : ctx.functions()) {
+                    if (!evaluator.isInScope(func, null)) {
+                        continue;
+                    }
+                    String hex = normalizeHex(func.getEntryPoint().toString(false));
+                    if (!onDisk.contains(hex)) {
+                        pending++;
+                    }
+                }
+            }
+            return pending;
+        } catch (RuntimeException e) {
+            // Pending is advisory — a cascade failure must not fail configure.
+            return 0;
+        }
+    }
+
+    private static Set<String> loadIndexAddresses(Path root) {
+        Path index = root.resolve(CheckoutLayout.byAddressTsv());
+        if (!Files.isRegularFile(index)) {
+            return Set.of();
+        }
+        try {
+            Set<String> out = new LinkedHashSet<>();
+            for (String line : Files.readAllLines(index, StandardCharsets.UTF_8)) {
+                if (line.isBlank() || line.startsWith("address\t")) {
+                    continue;
+                }
+                int tab = line.indexOf('\t');
+                if (tab > 0) {
+                    out.add(normalizeHex(line.substring(0, tab)));
+                }
+            }
+            return out;
+        } catch (IOException e) {
+            return Set.of();
+        }
+    }
+
+    private static String normalizeHex(String hex) {
+        return CheckoutTreeNarrower.normalizeHex(hex);
+    }
+
+    private static boolean hasRangeRules(CheckoutConfig cfg) {
+        for (ExclusionRule r : cfg.exclusions()) {
+            if (r.kind() == ExclusionRule.Kind.RANGE) {
+                return true;
+            }
+        }
+        for (ExclusionRule r : cfg.includeOnly()) {
+            if (r.kind() == ExclusionRule.Kind.RANGE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasPartitionRules(CheckoutConfig cfg) {
+        for (ExclusionRule r : cfg.exclusions()) {
+            if (r.kind() == ExclusionRule.Kind.PARTITION) {
+                return true;
+            }
+        }
+        for (ExclusionRule r : cfg.includeOnly()) {
+            if (r.kind() == ExclusionRule.Kind.PARTITION) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Classify a config edit. File deletion / STALE / full-resweep semantics
+     * are applied by {@link #applyConfigBehaviour} using this name.
      */
     private static String classifyConfigChange(
             CheckoutConfig old,

@@ -61,10 +61,29 @@ public record ExclusionRule(Kind kind, String value) {
             default -> throw new IllegalArgumentException(
                     "unknown exclusion kind '" + kindToken + "' (" + ACCEPTED_FORMS + ")");
         };
-        if (kind == Kind.RANGE && !value.contains("-")) {
+        if (kind == Kind.RANGE) {
+            validateRangeSyntax(trimmed, value);
+        }
+        return new ExclusionRule(kind, value);
+    }
+
+    /**
+     * Syntax-only gate so {@code range:onlylo} / empty sides fail at parse time.
+     * Address resolvability against a live program is {@link ExclusionEvaluator}'s
+     * job — that needs an {@code AddressFactory} and is what catches
+     * {@code range:zzzz-wwww} at configure, not mid-sweep.
+     */
+    private static void validateRangeSyntax(String trimmed, String value) {
+        int dash = value.lastIndexOf('-');
+        if (dash <= 0 || dash >= value.length() - 1) {
             throw new IllegalArgumentException(
                     "malformed range exclusion '" + trimmed + "' (" + ACCEPTED_FORMS + ")");
         }
-        return new ExclusionRule(kind, value);
+        String lo = value.substring(0, dash).trim();
+        String hi = value.substring(dash + 1).trim();
+        if (lo.isEmpty() || hi.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "malformed range exclusion '" + trimmed + "' (" + ACCEPTED_FORMS + ")");
+        }
     }
 }
