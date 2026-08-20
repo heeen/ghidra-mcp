@@ -1,11 +1,18 @@
 package com.xebyte.core.checkout;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Immutable, lock-free progress snapshot for a checkout sweep.
  *
  * <p>Swapped onto a {@code volatile} field so {@code /checkout_status} never
  * needs a lock. {@code statusRevision} is monotonic and is the bridge poller's
  * change key — bump it on every swap.
+ *
+ * <p>{@code eligibleFunctions} is {@link com.xebyte.core.partition.PartitionContext}'s
+ * floor; {@code functionsInScope} is after exclusion/includeOnly. Reporting both
+ * makes a surprising exclusion visible rather than mysterious.
  */
 public record SweepProgress(
         Phase phase,
@@ -18,7 +25,10 @@ public record SweepProgress(
         Long etaSeconds,
         int rootRecreated,
         String lastError,
-        long statusRevision) {
+        long statusRevision,
+        int eligibleFunctions,
+        int functionsInScope,
+        Map<String, Integer> exclusionRemovals) {
 
     public enum Phase {
         IDLE,
@@ -54,51 +64,76 @@ public record SweepProgress(
         if (statusRevision < 0) {
             statusRevision = 0;
         }
+        if (eligibleFunctions < 0) {
+            eligibleFunctions = 0;
+        }
+        if (functionsInScope < 0) {
+            functionsInScope = 0;
+        }
+        exclusionRemovals = exclusionRemovals == null
+                ? Map.of()
+                : Map.copyOf(exclusionRemovals);
     }
 
     public static SweepProgress idle() {
         return new SweepProgress(
-                Phase.IDLE, 0, 0, 0, 0L, null, 0L, null, 0, null, 0L);
+                Phase.IDLE, 0, 0, 0, 0L, null, 0L, null, 0, null, 0L,
+                0, 0, Map.of());
     }
 
     public SweepProgress withPhase(Phase newPhase) {
         return copy(newPhase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError);
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withCounts(int total, int done, int failed) {
         return copy(phase, total, done, failed, bytesWritten,
-                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError);
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withBytesWritten(long bytes) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytes,
-                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError);
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withCurrentPartition(String partition) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                partition, startedEpochMs, etaSeconds, rootRecreated, lastError);
+                partition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withStartedEpochMs(long epochMs) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                currentPartition, epochMs, etaSeconds, rootRecreated, lastError);
+                currentPartition, epochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withEtaSeconds(Long eta) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                currentPartition, startedEpochMs, eta, rootRecreated, lastError);
+                currentPartition, startedEpochMs, eta, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withRootRecreated(int count) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                currentPartition, startedEpochMs, etaSeconds, count, lastError);
+                currentPartition, startedEpochMs, etaSeconds, count, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
     }
 
     public SweepProgress withLastError(String error) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
-                currentPartition, startedEpochMs, etaSeconds, rootRecreated, error);
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, error,
+                eligibleFunctions, functionsInScope, exclusionRemovals);
+    }
+
+    public SweepProgress withScope(int eligible, int inScope, Map<String, Integer> removals) {
+        Map<String, Integer> map = removals == null ? Map.of() : new LinkedHashMap<>(removals);
+        return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligible, inScope, map);
     }
 
     private SweepProgress copy(
@@ -111,9 +146,12 @@ public record SweepProgress(
             long started,
             Long eta,
             int recreated,
-            String error) {
+            String error,
+            int eligible,
+            int inScope,
+            Map<String, Integer> removals) {
         return new SweepProgress(
                 newPhase, total, done, failed, bytes, partition, started, eta, recreated, error,
-                statusRevision + 1);
+                statusRevision + 1, eligible, inScope, removals);
     }
 }

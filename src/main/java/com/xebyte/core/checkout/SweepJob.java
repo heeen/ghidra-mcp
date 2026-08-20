@@ -150,14 +150,22 @@ public final class SweepJob implements Runnable {
             List<Partition> partitions = new ArrayList<>(cascade.partitions());
             partitions.sort(Comparator.comparing(p -> p.members().get(0).getEntryPoint()));
 
-            int total = 0;
-            for (Partition p : partitions) {
-                total += p.size();
-            }
+            // Partition → PARTITION exclusions (need slugs) → TAG/RANGE + includeOnly
+            // → decompile. One evaluator so /checkout_configure cannot disagree.
+            ExclusionEvaluator evaluator = ExclusionEvaluator.of(program, cfg);
+            ExclusionEvaluator.FilterResult filtered =
+                    evaluator.filterPartitions(partitions, ctx.size());
+            partitions = new ArrayList<>(filtered.partitions());
+            ExclusionEvaluator.ScopeStats scope = filtered.stats();
+
+            int total = scope.functionsInScope();
             publish(checkout.progress()
                     .withPhase(SweepProgress.Phase.DECOMPILING)
                     .withCounts(total, 0, 0)
-                    .withBytesWritten(0L), "dirty", null);
+                    .withBytesWritten(0L)
+                    .withScope(scope.eligibleFunctions(), scope.functionsInScope(),
+                            scope.removedByRule()),
+                    "dirty", null);
 
             wipePriorTree();
 
@@ -257,7 +265,7 @@ public final class SweepJob implements Runnable {
                         "dirty", null);
             }
 
-            writeIndexes(indexRows, ctx, cascade, partitions, total);
+            writeIndexes(indexRows, ctx, cascade, partitions, total, scope);
             writeTopReadme(total, partitions.size());
 
             if (cancel.isCancelled()) {
@@ -622,7 +630,8 @@ public final class SweepJob implements Runnable {
             PartitionContext ctx,
             PartitionCascade.Result cascade,
             List<Partition> partitions,
-            int total) throws IOException {
+            int total,
+            ExclusionEvaluator.ScopeStats scope) throws IOException {
 
         StringBuilder byAddr = new StringBuilder(byAddressHeader());
         rows.sort(Comparator.comparing(IndexRow::addressHex));
@@ -638,7 +647,7 @@ public final class SweepJob implements Runnable {
 
         checkout.root().writeFile(
                 Path.of(CheckoutLayout.modulesIndexMd()),
-                renderModulesIndex(ctx, cascade, partitions, total));
+                renderModulesIndex(ctx, cascade, partitions, total, scope));
     }
 
     private String renderCallgraph(PartitionContext ctx) {
@@ -668,18 +677,29 @@ public final class SweepJob implements Runnable {
             PartitionContext ctx,
             PartitionCascade.Result cascade,
             List<Partition> partitions,
-            int total) {
+            int total,
+            ExclusionEvaluator.ScopeStats scope) {
         PartitionContext.LiteralIndex li = ctx.literals();
         int withStrings = li.functionsWithStrings();
-        int eligible = ctx.size();
+        int eligible = scope.eligibleFunctions();
+        int inScope = scope.functionsInScope();
         double pct = eligible == 0 ? 0.0 : (100.0 * withStrings / eligible);
 
         StringBuilder sb = new StringBuilder();
         sb.append("# Modules\n\n");
         sb.append("eligible_functions: ").append(eligible).append('\n');
+        sb.append("functions_in_scope: ").append(inScope).append('\n');
         sb.append("assigned_functions: ").append(cascade.assignedFunctions()).append('\n');
         sb.append("partitions: ").append(partitions.size()).append('\n');
         sb.append("functions_in_tree: ").append(total).append('\n');
+        if (!scope.removedByRule().isEmpty()) {
+            sb.append('\n');
+            sb.append("## Exclusions removed\n\n");
+            for (Map.Entry<String, Integer> e : scope.removedByRule().entrySet()) {
+                sb.append("- ").append(e.getKey()).append(": removed ")
+                        .append(e.getValue()).append('\n');
+            }
+        }
         sb.append('\n');
 
         sb.append("## Coverage\n\n");
