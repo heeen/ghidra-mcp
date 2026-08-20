@@ -191,6 +191,36 @@ class TestEmitUpdated(unittest.TestCase):
 
         _run(body())
 
+    def test_emit_sends_zero_for_unread_uri_when_only_known(self):
+        """Unread URIs get zero notifications under only_known=True.
+
+        This is deliberate, not a gap: resources/updated exists to invalidate
+        a cached resources/read. A URI no session has read has nothing to
+        invalidate, so fan-out is wasted work and trains clients to treat
+        push as discovery. only_known=True is the default; flipping it to
+        notify every connected session about unread checkout/function URIs
+        would look like a "fix" and silently reintroduce notification
+        storms. Reading a URI registers interest and kicks the poller —
+        that is the discovery path.
+        """
+        session = MagicMock()
+        session.send_notification = AsyncMock()
+
+        async def body():
+            # Interest in an unrelated URI must not leak notifications to
+            # an unread checkout URI.
+            state.remember_resource_interest(
+                session, uri="ghidra://programs", read=True
+            )
+            n = await subscriptions.emit_resource_updated(
+                "ghidra://checkout/co_unread",
+                only_known=True,
+            )
+            self.assertEqual(n, 0)
+            session.send_notification.assert_not_awaited()
+
+        _run(body())
+
 
 if __name__ == "__main__":
     unittest.main()

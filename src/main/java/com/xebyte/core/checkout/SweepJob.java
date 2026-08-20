@@ -313,6 +313,7 @@ public final class SweepJob implements Runnable {
 
             writeIndexes(indexRows, ctx, cascade, partitions, total, scope);
             writeTopReadme(total, partitions.size());
+            writeAgentsMd(partitions);
 
             if (cancel.isCancelled()) {
                 finishTerminal(SweepProgress.Phase.CANCELLED,
@@ -328,6 +329,26 @@ public final class SweepJob implements Runnable {
                     e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
                     null);
         } finally {
+            // Belt: no path may leave the sweep without a terminal phase. Several
+            // early returns exit on cancel (the outer partition-loop check
+            // short-circuits before ensureProgramOpen, and waitForAnalysisIfNeeded
+            // ends with `return !cancel.isCancelled()`), and each one left STATUS.md
+            // saying "dirty" — which reads as "a sweep died", not "someone stopped
+            // it". Found by tests/integration/test_checkout.py, intermittently:
+            // cancelling BETWEEN partitions took the bare-return path.
+            SweepProgress.Phase reached = checkout.progress().phase();
+            if (reached != SweepProgress.Phase.COMPLETE
+                    && reached != SweepProgress.Phase.CANCELLED
+                    && reached != SweepProgress.Phase.FAILED) {
+                finishTerminal(
+                        cancel.isCancelled()
+                                ? SweepProgress.Phase.CANCELLED
+                                : SweepProgress.Phase.FAILED,
+                        cancel.isCancelled()
+                                ? (cancelReason != null ? cancelReason : "cancelled")
+                                : "sweep ended without reaching a terminal state",
+                        null);
+            }
             decomp = null;
             if (localDecomp != null) {
                 try {
@@ -748,6 +769,11 @@ public final class SweepJob implements Runnable {
                 .append(String.format(Locale.ROOT, "%.2f", part.confidence())).append('\n');
         sb.append("functions: ").append(memberCount).append('\n');
         sb.append("files: ").append(files.size()).append('\n');
+        // What the grouping asserts, in the reader's terms. Without this an
+        // address-band compartment reads as a defect rather than as the expected
+        // outcome for code that carries no signal.
+        sb.append('\n').append(CheckoutGuidance.interpretation(part.method(), part.confidence()))
+                .append('\n');
         sb.append("\n## Files\n\n");
         sb.append("| file | first | last | functions |\n");
         sb.append("| --- | --- | --- | ---: |\n");
@@ -912,6 +938,8 @@ public final class SweepJob implements Runnable {
         sb.append("functions: ").append(total).append('\n');
         sb.append("partitions: ").append(partitionCount).append('\n');
         sb.append("\n## How to read\n\n");
+        sb.append("- `AGENTS.md` — **start here**: what this tree is, whether it is current, "
+                + "and how to search it\n");
         sb.append("- `modules/index.md` — strategy log (including not-applicable reasons) "
                 + "and compartment table\n");
         sb.append("- `modules/<slug>/*.c` — Read-budget files inside each compartment "
@@ -921,6 +949,43 @@ public final class SweepJob implements Runnable {
                 + "(failed decompiles still appear)\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
         checkout.root().writeFile(Path.of(CheckoutLayout.readmeMd()), sb.toString());
+    }
+
+    /**
+     * The reading contract. Two of its caveats are conditional on this binary, so
+     * a tree that cannot hit them does not carry the warning as noise.
+     */
+    private void writeAgentsMd(List<Partition> partitions) throws IOException {
+        boolean hasPeripherals = partitions.stream()
+                .anyMatch(p -> "mmio-page".equals(p.method()));
+        checkout.root().writeFile(
+                Path.of(CheckoutLayout.agentsMd()),
+                CheckoutGuidance.agentsMd(
+                        checkout.programName(),
+                        checkout.id(),
+                        checkout.root().path().toString(),
+                        isStripped(),
+                        hasPeripherals));
+    }
+
+    /**
+     * True when almost every name is Ghidra's own, which makes name-based Grep
+     * useless: measured, `ls` carries 12 real names across 25,231 functions.
+     */
+    private boolean isStripped() {
+        int auto = 0;
+        int total = 0;
+        for (Function f : program.getFunctionManager().getFunctions(true)) {
+            if (f.isExternal() || f.isThunk()) {
+                continue;
+            }
+            total++;
+            String n = f.getName();
+            if (n.startsWith("FUN_") || n.startsWith("SUB_")) {
+                auto++;
+            }
+        }
+        return total > 0 && auto / (double) total >= 0.9;
     }
 
     private void publish(SweepProgress progress, String state, Long sweptAt) {

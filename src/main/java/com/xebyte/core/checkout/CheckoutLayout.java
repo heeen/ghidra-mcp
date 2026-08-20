@@ -109,6 +109,11 @@ public final class CheckoutLayout {
         return "modules/index.md";
     }
 
+    /** The contract an agent reads first; generated, never shipped in the repo. */
+    public static String agentsMd() {
+        return "AGENTS.md";
+    }
+
     public static String moduleReadme(String slug) {
         return "modules/" + requireSlug(slug) + "/README.md";
     }
