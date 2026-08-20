@@ -572,14 +572,25 @@ class TestSessionlessRequestsAreRefusedEarly(unittest.TestCase):
             registry.register_tools_from_schema([tool])
             # Stub the write itself and its fan-out: this test is about
             # delivery, not about resolving which function moved.
-            async def only_the_subscribed_uri(program, kwargs):
-                return {uri}
+            async def only_the_subscribed_uri(endpoint, tier, kwargs):
+                return invalidation.BlastRadius(
+                    endpoint=endpoint,
+                    tier=tier,
+                    program="ls",
+                    addresses=frozenset({"00401000"}),
+                    uris=frozenset({uri}),
+                    list_changed=False,
+                    degraded=False,
+                )
 
             with mock.patch.object(
-                invalidation, "_local_uris", only_the_subscribed_uri
+                invalidation, "resolve_blast_radius", only_the_subscribed_uri
             ), mock.patch(
                 "bridge_mcp_ghidra.dispatch.dispatch_post",
                 return_value='{"status": "success"}',
+            ), mock.patch(
+                "bridge_mcp_ghidra.dispatch.dispatch_get",
+                return_value='{"error": "no checkout"}',
             ):
                 called = self.client.post(
                     "/mcp",

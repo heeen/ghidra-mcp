@@ -10,12 +10,18 @@ target, CALLERS adds ``/get_function_callers``, TYPE asks ``/find_type_users``
 URIs if that errors or times out. UNBOUNDED always degrades, plus list_changed.
 NONE is for writes no resource body reports — saving above all, which happens
 after nearly every other write.
+
+Checkout trees are kept honest by a second consumer of the same blast radius:
+``/checkout_refresh`` splices only the affected blocks. That path must NOT inherit
+the notification caps (64-URI fan-out, interest intersection) — those are correct
+for SSE noise and a silent correctness bug for on-disk files.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 from urllib.parse import quote
@@ -28,6 +34,8 @@ from .resources import canonical_function_uri
 
 # Cap per-write fan-out. Beyond this, a single list_changed is cheaper than a
 # storm of updated notifications the client will re-list for anyway.
+# Checkout refresh must NEVER use this — a 200-caller rename would leave 136
+# files carrying the old name with nothing saying so.
 _MAX_URI_FANOUT = 64
 
 
@@ -62,6 +70,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/checkout_start": InvalidationTier.NONE,
     "/checkout_stop": InvalidationTier.NONE,
     "/checkout_delete": InvalidationTier.NONE,
+    "/checkout_refresh": InvalidationTier.NONE,
     # Debugger writes land in a trace, never in the program database.
     "/debugger/launch": InvalidationTier.NONE,
     "/debugger/set_breakpoint": InvalidationTier.NONE,
@@ -171,7 +180,26 @@ _CHECKOUT_WRITE_ENDPOINTS = frozenset({
     "/checkout_start",
     "/checkout_stop",
     "/checkout_delete",
+    "/checkout_refresh",
 })
+
+
+@dataclass(frozen=True)
+class BlastRadius:
+    """Resolved invalidation scope for one successful write.
+
+    ``uris`` is the pre-filter notification set (interest intersect + fan-out
+    collapse still happen in ``_invalidate``). ``addresses`` is the checkout
+    splice set — uncapped, and never interest-filtered.
+    """
+
+    endpoint: str
+    tier: InvalidationTier
+    program: str | None
+    addresses: frozenset[str]
+    uris: frozenset[str]
+    list_changed: bool
+    degraded: bool
 
 
 async def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str) -> None:
@@ -283,55 +311,98 @@ async def _invalidate_guarded(
 ) -> None:
     """Invalidation is best-effort: it must never turn a successful write into an error."""
     try:
-        await _invalidate(endpoint, tier, kwargs, related_request_id)
+        blast = await resolve_blast_radius(endpoint, tier, kwargs)
+        await _invalidate(blast, related_request_id)
+        await _refresh_checkout_guarded(blast)
     except Exception as e:
         logger.debug("Resource invalidation after %s failed: %s", endpoint, e)
 
 
-async def _invalidate(
+async def resolve_blast_radius(
     endpoint: str,
     tier: InvalidationTier,
     kwargs: dict,
-    related_request_id,
-) -> None:
+) -> BlastRadius:
+    """Compute notification URIs and the uncapped checkout address set."""
     program = _program_name(kwargs)
     uris: set[str] = set()
+    addresses: set[str] = set()
     list_changed = False
+    degraded = False
 
     if tier is InvalidationTier.LOCAL:
-        uris |= await _local_uris(program, kwargs)
+        addr = await _resolve_target_address(program, kwargs)
+        if addr:
+            addresses.add(addr)
+            if program:
+                uris.add(canonical_function_uri(program, addr))
     elif tier is InvalidationTier.CALLERS:
-        uris |= await _local_uris(program, kwargs)
-        uris |= await _caller_uris(program, kwargs)
-        # Renames change the index row label and any by-name URI the client held.
+        addr = await _resolve_target_address(program, kwargs)
+        callers = await _caller_entries(program, kwargs)
+        if addr:
+            addresses.add(addr)
+            if program:
+                uris.add(canonical_function_uri(program, addr))
+        # Notification path stays capped at _MAX_URI_FANOUT (byte-identical to
+        # the pre-blast-radius behaviour). Checkout gets every caller.
+        uri_callers = 0
+        for entry in callers:
+            caddr = entry.get("address")
+            if not caddr:
+                continue
+            addresses.add(str(caddr))
+            if program and uri_callers < _MAX_URI_FANOUT:
+                uris.add(canonical_function_uri(program, str(caddr)))
+                uri_callers += 1
         if endpoint in ("/rename_function", "/rename_symbol"):
             list_changed = True
             uris |= _by_name_uris(program, kwargs)
     elif tier is InvalidationTier.TYPE:
-        # Precise fan-out via /find_type_users (DataTypeReferenceFinder, off EDT).
-        # On timeout/error, degrade to the program's known URIs.
-        type_uris = await _type_user_uris(program, kwargs)
-        if type_uris is None:
+        type_addrs = await _type_user_addresses(program, kwargs)
+        if type_addrs is None:
             uris |= _known_uris_for_program(program)
             list_changed = True
+            degraded = True
         else:
-            # No list_changed: index rows are {name, address, uri} and a type
-            # edit moves none of them.
-            uris |= type_uris
+            addresses |= type_addrs
+            if program:
+                for a in type_addrs:
+                    uris.add(canonical_function_uri(program, a))
     else:  # UNBOUNDED
         uris |= _known_uris_for_program(program)
         list_changed = True
+        degraded = True
 
-    # Always refresh the discovery root when the program set may have moved.
     if endpoint in ("/open_program", "/close_program", "/switch_program", "/import_file"):
         uris.add("ghidra://programs")
         list_changed = True
+
+    return BlastRadius(
+        endpoint=endpoint,
+        tier=tier,
+        program=program,
+        addresses=frozenset(addresses),
+        uris=frozenset(uris),
+        list_changed=list_changed,
+        degraded=degraded,
+    )
+
+
+async def _invalidate(blast: BlastRadius, related_request_id) -> None:
+    """Emit notifications from a resolved blast radius.
+
+    Interest intersection and the 64-URI collapse live HERE — not in
+    ``resolve_blast_radius`` — so the checkout consumer can use the uncapped
+    address set without inheriting notification-path truncations.
+    """
+    uris = set(blast.uris)
+    list_changed = blast.list_changed
 
     uris = _intersect_with_interest(uris)
     if len(uris) > _MAX_URI_FANOUT:
         logger.debug(
             "Invalidation fan-out for %s is %d (>%d); collapsing to list_changed",
-            endpoint, len(uris), _MAX_URI_FANOUT,
+            blast.endpoint, len(uris), _MAX_URI_FANOUT,
         )
         list_changed = True
         uris = set()
@@ -344,6 +415,74 @@ async def _invalidate(
         await subscriptions.emit_resource_list_changed(
             related_request_id=related_request_id
         )
+
+
+async def _refresh_checkout_guarded(blast: BlastRadius) -> None:
+    """Checkout splice is best-effort — never fail the originating write."""
+    try:
+        await _refresh_checkout(blast)
+    except Exception as e:
+        logger.debug("Checkout refresh after %s failed: %s", blast.endpoint, e)
+
+
+async def _refresh_checkout(blast: BlastRadius) -> None:
+    if blast.tier is InvalidationTier.NONE:
+        return
+    program = blast.program
+    if not program:
+        return
+
+    checkout_id = await _checkout_id_for_program(program)
+    if not checkout_id:
+        return
+
+    if blast.tier is InvalidationTier.UNBOUNDED:
+        # 25k inline decompiles is not a refresh — ask Java to mark STALE.
+        await state.run_blocking_ghidra_call(
+            lambda: dispatch.raise_on_failure(
+                dispatch.dispatch_post(
+                    "/checkout_refresh",
+                    {"checkout": checkout_id, "mark_stale": True},
+                    query_params={"program": program},
+                )
+            )
+        )
+        return
+
+    if not blast.addresses:
+        return
+
+    # Deliberately uncapped: notification fan-out must not reach this path.
+    addr_csv = ",".join(sorted(blast.addresses))
+    await state.run_blocking_ghidra_call(
+        lambda: dispatch.raise_on_failure(
+            dispatch.dispatch_post(
+                "/checkout_refresh",
+                {"checkout": checkout_id, "addresses": addr_csv},
+                query_params={"program": program},
+            )
+        )
+    )
+
+
+async def _checkout_id_for_program(program: str) -> str | None:
+    """One status call; silent skip when no checkout exists for this program."""
+    try:
+        raw = await state.run_blocking_ghidra_call(
+            lambda: dispatch.dispatch_get(
+                "/checkout_status", params={"checkout": program}
+            )
+        )
+        payload = json.loads(raw)
+    except Exception as e:
+        logger.debug("checkout_status for refresh failed: %s", e)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error"):
+        return None
+    cid = payload.get("checkout_id")
+    return str(cid) if cid else None
 
 
 def _program_name(kwargs: dict) -> str | None:
@@ -369,15 +508,6 @@ def _known_uris_for_program(program: str | None) -> set[str]:
     return {u for u in known if any(m in u for m in markers) or u == "ghidra://programs"}
 
 
-async def _local_uris(program: str | None, kwargs: dict) -> set[str]:
-    addr = await _resolve_target_address(program, kwargs)
-    if not addr or not program:
-        # A canonical URI needs both halves. Writes that omit `program` are
-        # caught coarsely by the change-token poller instead.
-        return set()
-    return {canonical_function_uri(program, addr)}
-
-
 def _by_name_uris(program: str | None, kwargs: dict) -> set[str]:
     if not program:
         return set()
@@ -391,20 +521,21 @@ def _by_name_uris(program: str | None, kwargs: dict) -> set[str]:
     return out
 
 
-async def _caller_uris(program: str | None, kwargs: dict) -> set[str]:
+async def _caller_entries(program: str | None, kwargs: dict) -> list[dict]:
+    """Uncapped caller list (limit=0). Sort is server-side by name."""
     if not program:
-        return set()
+        return []
     name = _first(kwargs, "old_name", "name", "function", "function_name")
     address = _first(
         kwargs, "function_address", "address", "entry", "entry_point"
     )
-    params: dict[str, Any] = {"program": program, "limit": _MAX_URI_FANOUT}
+    params: dict[str, Any] = {"program": program, "limit": 0}
     if address:
         params["address"] = address
     elif name:
         params["name"] = name
     else:
-        return set()
+        return []
     try:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
@@ -414,25 +545,19 @@ async def _caller_uris(program: str | None, kwargs: dict) -> set[str]:
         payload = json.loads(raw)
     except Exception as e:
         logger.debug("get_function_callers for invalidation failed: %s", e)
-        return set()
+        return []
     callers = payload.get("callers", []) if isinstance(payload, dict) else []
-    uris: set[str] = set()
-    if isinstance(callers, list):
-        for item in callers:
-            if not isinstance(item, dict):
-                continue
-            caddr = item.get("address")
-            if caddr:
-                uris.add(canonical_function_uri(program, str(caddr)))
-    return uris
+    if not isinstance(callers, list):
+        return []
+    return [c for c in callers if isinstance(c, dict)]
 
 
-async def _type_user_uris(program: str | None, kwargs: dict) -> set[str] | None:
-    """Return precise URIs for a TYPE-tier write, or None to degrade.
+async def _type_user_addresses(program: str | None, kwargs: dict) -> set[str] | None:
+    """Return precise addresses for a TYPE-tier write, or None to degrade.
 
     ``None`` means the finder timed out / errored / could not resolve the type
-    name from the write kwargs — the caller should fall back to known URIs.
-    An empty set means the finder ran and found no users (nothing to invalidate).
+    name — the notification path falls back to known URIs; checkout skips.
+    An empty set means the finder ran and found no users.
     """
     type_name = _first(
         kwargs,
@@ -470,13 +595,13 @@ async def _type_user_uris(program: str | None, kwargs: dict) -> set[str] | None:
         logger.debug("find_type_users timed out for %s; degrading", type_name)
         return None
     functions = payload.get("functions", [])
-    uris: set[str] = set()
+    addrs: set[str] = set()
     if isinstance(functions, list):
         for item in functions:
             if not isinstance(item, dict) or not item.get("address"):
                 continue
-            uris.add(canonical_function_uri(program, str(item["address"])))
-    return uris
+            addrs.add(str(item["address"]))
+    return addrs
 
 
 async def _resolve_target_address(program: str | None, kwargs: dict) -> str | None:

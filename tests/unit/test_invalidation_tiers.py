@@ -147,7 +147,8 @@ class TestLocalTierEmitsBeforeReturning(unittest.TestCase):
             emitted.append(uri)
             return 1
 
-        async def fake_get(endpoint, params=None):
+        async def fake_blocking(func, *a, **kw):
+            # Resolve-target path; checkout_status has no checkout_id → no refresh.
             return json.dumps({"name": "FUN_1000", "address": "00001000"})
 
         async def run():
@@ -158,7 +159,7 @@ class TestLocalTierEmitsBeforeReturning(unittest.TestCase):
                 lambda: {"ghidra://function/ls/00001000"},
             ), mock.patch.object(
                 invalidation.state, "run_blocking_ghidra_call",
-                lambda func, *a, **kw: fake_get("", None),
+                fake_blocking,
             ):
                 await invalidation.after_successful_write(
                     {"endpoint": "/set_comment", "read_only": False},
@@ -170,6 +171,424 @@ class TestLocalTierEmitsBeforeReturning(unittest.TestCase):
                 self.assertEqual(emitted, ["ghidra://function/ls/00001000"])
 
         asyncio.run(run())
+
+
+class TestBlastRadiusNotificationsByteIdentical(unittest.TestCase):
+    """``_invalidate`` emit behaviour must match the pre-refactor path per tier."""
+
+    def _capture(self, endpoint, kwargs, known, ghidra_replies):
+        emitted: list[tuple] = []
+        reply_iter = iter(ghidra_replies)
+
+        async def fake_updated(uri, **kw):
+            emitted.append(("updated", uri))
+            return 1
+
+        async def fake_list_changed(**kw):
+            emitted.append(("list_changed", None))
+            return 1
+
+        async def fake_blocking(func, *a, **kw):
+            try:
+                return next(reply_iter)
+            except StopIteration:
+                return json.dumps({"error": "no checkout"})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated", fake_updated
+            ), mock.patch.object(
+                invalidation.subscriptions, "emit_resource_list_changed", fake_list_changed
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris", lambda: known
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ):
+                await invalidation.after_successful_write(
+                    {"endpoint": endpoint, "read_only": False},
+                    kwargs,
+                    None,
+                    "{}",
+                )
+            return emitted
+
+        return asyncio.run(run())
+
+    def test_local_emits_only_interested_uri(self):
+        emitted = self._capture(
+            "/set_comment",
+            {"program": "ls", "address": "00001004"},
+            {"ghidra://function/ls/00001000"},
+            [json.dumps({"address": "00001000"})],
+        )
+        self.assertEqual(emitted, [("updated", "ghidra://function/ls/00001000")])
+
+    def test_local_emits_nothing_when_uri_not_of_interest(self):
+        emitted = self._capture(
+            "/set_comment",
+            {"program": "ls", "address": "00001004"},
+            {"ghidra://function/ls/99999999"},
+            [json.dumps({"address": "00001000"})],
+        )
+        self.assertEqual(emitted, [])
+
+    def test_callers_caps_notification_uris_at_64(self):
+        callers = [
+            {"name": f"C{i:03d}", "address": f"{i:08x}"}
+            for i in range(100)
+        ]
+        known = {f"ghidra://function/ls/{i:08x}" for i in range(100)}
+        known.add("ghidra://function/ls/0000aaaa")
+        emitted = self._capture(
+            "/rename_function",
+            {"program": "ls", "old_name": "Target", "address": "0000aaaa"},
+            known,
+            [
+                json.dumps({"address": "0000aaaa"}),
+                json.dumps({"callers": callers, "total": 100}),
+            ],
+        )
+        updated = [u for kind, u in emitted if kind == "updated"]
+        # target + 64 callers = 65 interested URIs → collapse to list_changed.
+        self.assertEqual(updated, [])
+        self.assertIn(("list_changed", None), emitted)
+
+    def test_unbounded_degrades_to_list_changed(self):
+        emitted = self._capture(
+            "/reanalyze",
+            {"program": "ls"},
+            {"ghidra://function/ls/00001000"},
+            # checkout_status: no id → skip refresh (still notification-only)
+            [json.dumps({"error": "no checkout"})],
+        )
+        self.assertEqual(emitted, [
+            ("updated", "ghidra://function/ls/00001000"),
+            ("list_changed", None),
+        ])
+
+    def test_none_still_silent(self):
+        emitted = self._capture(
+            "/save_program",
+            {"program": "ls"},
+            {"ghidra://function/ls/00001000"},
+            [],
+        )
+        self.assertEqual(emitted, [])
+
+
+class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
+    """Checkout splice uses the uncapped address set — never notification caps."""
+
+    def test_callers_refresh_requests_limit_zero_and_all_addresses(self):
+        posted: list[dict] = []
+        gets: list[dict] = []
+
+        callers = [
+            {"name": f"C{i:03d}", "address": f"{i:08x}"}
+            for i in range(200)
+        ]
+
+        async def fake_blocking(func, *a, **kw):
+            # Execute the callable so we can observe dispatch params.
+            return func()
+
+        def fake_get(endpoint, params=None):
+            gets.append({"endpoint": endpoint, "params": dict(params or {})})
+            if endpoint == "/get_function_by_address":
+                return json.dumps({"address": "0000aaaa"})
+            if endpoint == "/get_function_callers":
+                return json.dumps({"callers": callers, "total": 200})
+            if endpoint == "/checkout_status":
+                return json.dumps({"checkout_id": "co_deadbeef", "phase": "complete"})
+            return json.dumps({"error": "unexpected get " + endpoint})
+
+        def fake_post(endpoint, data, retries=3, query_params=None):
+            posted.append({
+                "endpoint": endpoint,
+                "data": dict(data),
+                "query": dict(query_params or {}),
+            })
+            return json.dumps({"refreshed": 201, "busy": False})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.subscriptions, "emit_resource_list_changed",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris",
+                lambda: set(),  # interest empty ⇒ zero notification URIs
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_post", fake_post
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                await invalidation.after_successful_write(
+                    {"endpoint": "/rename_function", "read_only": False},
+                    {"program": "ls", "old_name": "Target", "address": "0000aaaa"},
+                    None,
+                    "{}",
+                )
+
+        asyncio.run(run())
+
+        caller_gets = [g for g in gets if g["endpoint"] == "/get_function_callers"]
+        self.assertEqual(len(caller_gets), 1)
+        # THE TRAP: notification path used limit=64; checkout must request uncapped.
+        self.assertEqual(caller_gets[0]["params"].get("limit"), 0)
+
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0]["endpoint"], "/checkout_refresh")
+        addr_csv = posted[0]["data"]["addresses"]
+        addrs = set(addr_csv.split(","))
+        self.assertEqual(len(addrs), 201)  # target + 200 callers
+        self.assertIn("0000aaaa", addrs)
+
+    def test_interest_filter_does_not_shrink_checkout_addresses(self):
+        """Unread URIs drop from notifications but must still refresh on disk."""
+        posted: list[dict] = []
+
+        async def fake_blocking(func, *a, **kw):
+            return func()
+
+        def fake_get(endpoint, params=None):
+            if endpoint == "/get_function_by_address":
+                return json.dumps({"address": "00001000"})
+            if endpoint == "/checkout_status":
+                return json.dumps({"checkout_id": "co_abc", "phase": "complete"})
+            return json.dumps({})
+
+        def fake_post(endpoint, data, retries=3, query_params=None):
+            posted.append(dict(data))
+            return json.dumps({"ok": True})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris",
+                lambda: set(),  # nothing of interest → no SSE
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_post", fake_post
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                blast = await invalidation.resolve_blast_radius(
+                    "/set_comment",
+                    InvalidationTier.LOCAL,
+                    {"program": "ls", "address": "00001000"},
+                )
+                await invalidation._invalidate(blast, None)
+                await invalidation._refresh_checkout(blast)
+                return blast
+
+        blast = asyncio.run(run())
+        self.assertEqual(blast.addresses, frozenset({"00001000"}))
+        self.assertEqual(len(posted), 1)
+        self.assertIn("00001000", posted[0]["addresses"])
+
+    def test_unbounded_marks_stale_instead_of_refreshing(self):
+        posted: list[dict] = []
+
+        async def fake_blocking(func, *a, **kw):
+            return func()
+
+        def fake_get(endpoint, params=None):
+            if endpoint == "/checkout_status":
+                return json.dumps({"checkout_id": "co_abc", "phase": "complete"})
+            return json.dumps({})
+
+        def fake_post(endpoint, data, retries=3, query_params=None):
+            posted.append(dict(data))
+            return json.dumps({"marked_stale": True})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.subscriptions, "emit_resource_list_changed",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris",
+                lambda: {"ghidra://function/ls/1"},
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_post", fake_post
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                await invalidation.after_successful_write(
+                    {"endpoint": "/reanalyze", "read_only": False},
+                    {"program": "ls"},
+                    None,
+                    "{}",
+                )
+
+        asyncio.run(run())
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].get("mark_stale"))
+        self.assertNotIn("addresses", posted[0])
+
+    def test_no_checkout_skips_silently(self):
+        posted: list[dict] = []
+
+        async def fake_blocking(func, *a, **kw):
+            return func()
+
+        def fake_get(endpoint, params=None):
+            if endpoint == "/get_function_by_address":
+                return json.dumps({"address": "00001000"})
+            if endpoint == "/checkout_status":
+                return json.dumps({"error": "no checkout matches selector: ls"})
+            return json.dumps({})
+
+        def fake_post(endpoint, data, retries=3, query_params=None):
+            posted.append(dict(data))
+            return json.dumps({})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris",
+                lambda: {"ghidra://function/ls/00001000"},
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_post", fake_post
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                await invalidation.after_successful_write(
+                    {"endpoint": "/set_comment", "read_only": False},
+                    {"program": "ls", "address": "00001000"},
+                    None,
+                    "{}",
+                )
+
+        asyncio.run(run())
+        self.assertEqual(posted, [])
+
+    def test_refresh_failure_does_not_raise(self):
+        async def fake_blocking(func, *a, **kw):
+            return func()
+
+        def fake_get(endpoint, params=None):
+            if endpoint == "/get_function_by_address":
+                return json.dumps({"address": "00001000"})
+            if endpoint == "/checkout_status":
+                return json.dumps({"checkout_id": "co_abc"})
+            return json.dumps({})
+
+        def fake_post(endpoint, data, retries=3, query_params=None):
+            raise RuntimeError("boom")
+
+        async def run():
+            with mock.patch.object(
+                invalidation.subscriptions, "emit_resource_updated",
+                mock.AsyncMock(return_value=1),
+            ), mock.patch.object(
+                invalidation.state, "known_resource_uris",
+                lambda: {"ghidra://function/ls/00001000"},
+            ), mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_post", fake_post
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                # Must not propagate — same contract as _invalidate_guarded.
+                await invalidation.after_successful_write(
+                    {"endpoint": "/set_comment", "read_only": False},
+                    {"program": "ls", "address": "00001000"},
+                    None,
+                    "{}",
+                )
+
+        asyncio.run(run())
+
+    def test_checkout_refresh_is_none_tier(self):
+        self.assertEqual(
+            ENDPOINT_TIER["/checkout_refresh"], InvalidationTier.NONE
+        )
+
+    def test_resolve_blast_radius_local_callers_type_mapping(self):
+        async def fake_blocking(func, *a, **kw):
+            return func()
+
+        def fake_get(endpoint, params=None):
+            if endpoint == "/get_function_by_address":
+                return json.dumps({"address": "00001000"})
+            if endpoint == "/get_function_callers":
+                return json.dumps({
+                    "callers": [
+                        {"name": "A", "address": "00002000"},
+                        {"name": "B", "address": "00003000"},
+                    ]
+                })
+            if endpoint == "/find_type_users":
+                return json.dumps({
+                    "functions": [
+                        {"address": "00004000"},
+                        {"address": "00005000"},
+                    ]
+                })
+            return json.dumps({})
+
+        async def run():
+            with mock.patch.object(
+                invalidation.state, "run_blocking_ghidra_call", fake_blocking
+            ), mock.patch.object(
+                invalidation.dispatch, "dispatch_get", fake_get
+            ), mock.patch.object(
+                invalidation.dispatch, "raise_on_failure", lambda text: text
+            ):
+                local = await invalidation.resolve_blast_radius(
+                    "/set_comment", InvalidationTier.LOCAL,
+                    {"program": "ls", "address": "00001000"},
+                )
+                callers = await invalidation.resolve_blast_radius(
+                    "/rename_function", InvalidationTier.CALLERS,
+                    {"program": "ls", "address": "00001000"},
+                )
+                typ = await invalidation.resolve_blast_radius(
+                    "/create_struct", InvalidationTier.TYPE,
+                    {"program": "ls", "name": "Foo"},
+                )
+                unbounded = await invalidation.resolve_blast_radius(
+                    "/reanalyze", InvalidationTier.UNBOUNDED,
+                    {"program": "ls"},
+                )
+                return local, callers, typ, unbounded
+
+        local, callers, typ, unbounded = asyncio.run(run())
+        self.assertEqual(local.addresses, frozenset({"00001000"}))
+        self.assertEqual(
+            callers.addresses, frozenset({"00001000", "00002000", "00003000"})
+        )
+        self.assertEqual(typ.addresses, frozenset({"00004000", "00005000"}))
+        self.assertEqual(unbounded.addresses, frozenset())
+        self.assertTrue(unbounded.degraded)
 
 
 if __name__ == "__main__":
