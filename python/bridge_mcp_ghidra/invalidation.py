@@ -161,6 +161,19 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
 }
 
 
+# Checkout writes are NONE in ENDPOINT_TIER (they never move a function body)
+# but the checkout *resource* itself must refresh. Emitting here — before the
+# NONE early-return — rides the write's own request so related_request_id still
+# reaches a streamable-HTTP client before its SSE stream is torn down.
+_CHECKOUT_WRITE_ENDPOINTS = frozenset({
+    "/checkout_create",
+    "/checkout_configure",
+    "/checkout_start",
+    "/checkout_stop",
+    "/checkout_delete",
+})
+
+
 async def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str) -> None:
     """Awaited by the registry hook once ``raise_on_failure`` accepted ``result``.
 
@@ -177,6 +190,11 @@ async def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str)
     if tool_def.get("read_only"):
         return
     endpoint = tool_def.get("endpoint") or ""
+
+    if endpoint in _CHECKOUT_WRITE_ENDPOINTS:
+        await _emit_checkout_updated(kwargs, result, ctx)
+        return
+
     tier = ENDPOINT_TIER.get(endpoint)
     if tier is None:
         logger.debug("No invalidation tier for %s; skipping", endpoint)
@@ -198,6 +216,48 @@ async def after_successful_write(tool_def: dict, kwargs: dict, ctx, result: str)
         _spawn(_invalidate_guarded(endpoint, tier, kwargs, None))
         return
     await _invalidate_guarded(endpoint, tier, kwargs, related_id)
+
+
+async def _emit_checkout_updated(kwargs: dict, result: str, ctx) -> None:
+    """Best-effort: a failed emit must never turn a successful checkout write into an error."""
+    try:
+        related_id = None
+        if ctx is not None and getattr(ctx, "_request_context", None) is not None:
+            try:
+                state.remember_resource_interest(ctx.request_context.session)
+                related_id = ctx.request_context.request_id
+            except Exception:
+                pass
+        uri = _checkout_uri_from_write(kwargs, result)
+        if not uri:
+            return
+        # only_known=True (default): unread checkout URIs get zero notifications.
+        await subscriptions.emit_resource_updated(
+            uri, related_request_id=related_id
+        )
+    except Exception as e:
+        logger.debug("Checkout resource invalidation failed: %s", e)
+
+
+def _checkout_uri_from_write(kwargs: dict, result: str) -> str | None:
+    # Prefer the response: create has no checkout kwarg, and the selector may
+    # be a program name rather than the id that forms the URI.
+    if isinstance(result, str) and result:
+        try:
+            payload = json.loads(result)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            uri = payload.get("resource_uri")
+            if isinstance(uri, str) and uri.startswith("ghidra://checkout/"):
+                return uri
+            cid = payload.get("checkout_id")
+            if cid:
+                return f"ghidra://checkout/{cid}"
+    selector = kwargs.get("checkout")
+    if isinstance(selector, str) and selector.startswith("co_"):
+        return f"ghidra://checkout/{selector}"
+    return None
 
 
 # Strong references: a bare create_task() may be garbage-collected mid-flight.

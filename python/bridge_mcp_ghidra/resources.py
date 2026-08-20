@@ -148,12 +148,17 @@ async def programs_resource() -> str:
             "function_by_name": "ghidra://function/{program}/by-name/{name}",
             "search": "ghidra://search/{program}/functions/{pattern}",
             "changes": "ghidra://program/{program}/changes",
+            # Templates never appear in resources/list — this is how an agent
+            # learns the checkout URI exists at all.
+            "checkouts": "ghidra://checkout/{checkout_id}",
             "notes": [
                 "Addresses are lowercase hex without 0x, exactly as Ghidra reports them "
                 "(use space:hex on programs with several address spaces).",
                 "The address form is canonical and stable across renames; the by-name form "
                 "is a redirect that returns the canonical URI.",
                 "Percent-encode a program name that contains / or spaces.",
+                "A checkout is a host-filesystem decompilation tree; read its resource for "
+                "status/config, then Glob/Grep the root it names.",
             ],
         },
     })
@@ -331,6 +336,35 @@ async def function_by_name_resource(program: str, name: str) -> str:
 
 
 @mcp.resource(
+    "ghidra://checkout/{checkout_id}",
+    name="Ghidra decompilation checkout",
+    title="Checkout status, config, and how to Grep the on-disk tree",
+    description="Status and configuration for one decompilation checkout. The tree itself "
+                "lives on disk under the root this document names — Glob/Grep that; read "
+                "this resource to learn whether the tree is still trustworthy.",
+    mime_type=_MARKDOWN,
+)
+async def checkout_resource(checkout_id: str) -> str:
+    """STATUS-shaped: never raise. An agent polls this while a sweep runs."""
+    cid = unquote(checkout_id)
+    uri = f"ghidra://checkout/{quote(cid, safe='')}"
+    subscriptions.note_resource_read(uri)
+    payload: dict = {"checkout_id": cid}
+    try:
+        raw = await _read_async("/checkout_status", checkout=cid)
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            payload = data
+        else:
+            payload["detail"] = data
+    except Exception as e:
+        # Transient upstream failure must land in the body, not as a broken
+        # resource — the client is often mid-sweep when this fires.
+        payload["error"] = str(e)
+    return render.checkout_markdown(payload)
+
+
+@mcp.resource(
     "ghidra://search/{program}/functions/{pattern}",
     name="Ghidra function search",
     description="Functions whose name matches a pattern, as {name, address} plus a "
@@ -378,7 +412,7 @@ _COMPLETION_LIMIT = 40
 
 @mcp.completion()
 async def complete_resource_argument(ref, argument, context):
-    """Offer candidate values for {program}, {name} and {pattern}."""
+    """Offer candidate values for {program}, {name}, {pattern} and {checkout_id}."""
     from mcp.types import Completion, ResourceTemplateReference
 
     if not isinstance(ref, ResourceTemplateReference):
@@ -390,6 +424,18 @@ async def complete_resource_argument(ref, argument, context):
             entries = payload if isinstance(payload, list) else payload.get("programs", [])
             names = [e.get("name") for e in entries if isinstance(e, dict) and e.get("name")]
             return Completion(values=_prefixed(names, argument.value))
+
+        if argument.name == "checkout_id":
+            # No-selector /checkout_status is the live registry; templates are
+            # invisible in resources/list so this is the only discovery path.
+            raw = await _read_async("/checkout_status")
+            payload = json.loads(raw)
+            ids = []
+            if isinstance(payload, dict):
+                for row in payload.get("checkouts") or []:
+                    if isinstance(row, dict) and row.get("checkout_id"):
+                        ids.append(str(row["checkout_id"]))
+            return Completion(values=_prefixed(ids, argument.value))
 
         if argument.name in ("name", "pattern"):
             program = (context.arguments or {}).get("program") if context else None

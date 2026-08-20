@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "python")
 
 from bridge_mcp_ghidra.render import (  # noqa: E402
     _AUTO_NAMED,
+    checkout_markdown,
     function_bundle_markdown,
 )
 
@@ -92,6 +93,101 @@ class TestBundleShape(unittest.TestCase):
         })
         self.assertIn("Truncated sections: callers", body)
         self.assertNotIn("xrefs", body)
+
+
+class TestCheckoutMarkdown(unittest.TestCase):
+    def test_single_status_golden_shape(self):
+        body = checkout_markdown({
+            "checkout_id": "co_7de33ad7",
+            "program_name": "synaWudfBioUsb.dll",
+            "program": "synaWudfBioUsb.dll",
+            "live_modification_number": 3,
+            "root": "/tmp/ghidra-mcp-checkout/synaWudfBioUsb.dll-7de33ad7",
+            "root_present": True,
+            "root_recreated": 0,
+            "phase": "complete",
+            "functions_total": 3230,
+            "functions_done": 3230,
+            "functions_failed": 0,
+            "bytes_written": 5886248,
+            "eta_seconds": 0,
+            "last_error": None,
+            "status_revision": 311,
+            "resource_uri": "ghidra://checkout/co_7de33ad7",
+            "config": {
+                "enabled_strategies": [],
+                "band_size": 20,
+                "exclusions": [],
+                "include_only": [],
+                "throttle_percent": 10,
+                "decompile_timeout_seconds": 30,
+                "analysis_wait_seconds": 600,
+            },
+            "status_state": "clean",
+            "swept_at_modification_number": 3,
+        })
+        self.assertTrue(body.startswith("# Checkout co_7de33ad7 — synaWudfBioUsb.dll"))
+        self.assertIn("complete · 3230/3230", body)
+        self.assertIn("## Status", body)
+        self.assertIn("freshness: fresh (mod 3)", body)
+        self.assertIn("## Configuration", body)
+        self.assertIn("band size: 20", body)
+        self.assertIn("## How to read this checkout", body)
+        self.assertIn(
+            "Glob /tmp/ghidra-mcp-checkout/synaWudfBioUsb.dll-7de33ad7/modules/*/*.c",
+            body,
+        )
+        self.assertIn("uri: ghidra://function/<program>/<address>", body)
+        self.assertLess(body.index("## Status"), body.index("## Configuration"))
+        self.assertLess(body.index("## Configuration"), body.index("## How to read"))
+
+    def test_list_shape_renders_compact_table(self):
+        body = checkout_markdown({
+            "checkouts": [
+                {
+                    "checkout_id": "co_aaa",
+                    "program_name": "ls",
+                    "phase": "idle",
+                    "functions_done": 0,
+                    "functions_total": 100,
+                    "root": "/tmp/a",
+                },
+                {
+                    "checkout_id": "co_bbb",
+                    "program_name": "driver.dll",
+                    "phase": "complete",
+                    "functions_done": 50,
+                    "functions_total": 50,
+                    "root": "/tmp/b",
+                },
+            ],
+            "adoptable_on_disk": [
+                {
+                    "checkout_id": "co_orphan",
+                    "program_name": "old.bin",
+                    "status_state": "dirty",
+                    "files_on_disk": 12,
+                    "root": "/tmp/orphan",
+                },
+            ],
+            "checkout_count": 2,
+            "adoptable_count": 1,
+        })
+        self.assertTrue(body.startswith("# Checkouts"))
+        self.assertIn("| co_aaa | ls | idle | 0/100 |", body)
+        self.assertIn("| co_bbb | driver.dll | complete | 50/50 |", body)
+        self.assertIn("## Adoptable on disk", body)
+        self.assertIn("co_orphan", body)
+
+    def test_missing_every_optional_key_never_raises(self):
+        body = checkout_markdown({"checkout_id": "co_empty"})
+        self.assertIn("# Checkout co_empty", body)
+        self.assertIn("## Status", body)
+        self.assertIn("## Configuration", body)
+        self.assertIn("## How to read this checkout", body)
+        # Empty dict / non-dict must also survive.
+        self.assertIn("Checkouts", checkout_markdown({"checkouts": []}))
+        self.assertIn("Unexpected", checkout_markdown("not-a-dict"))
 
 
 if __name__ == "__main__":
