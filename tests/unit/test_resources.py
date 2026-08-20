@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "python")
 from bridge_mcp_ghidra.resources import (  # noqa: E402
     _MAX_INDEX_FUNCTIONS,
     canonical_function_uri,
+    checkout_resource,
     function_by_name_resource,
     function_bundle_resource,
     function_index_resource,
@@ -91,6 +92,16 @@ class TestResourceRegistration(unittest.TestCase):
         self.assertIn("ghidra://function/{program}/by-name/{name}", uris)
         self.assertIn("ghidra://search/{program}/functions/{pattern}", uris)
         self.assertIn("ghidra://program/{program}/changes", uris)
+        self.assertIn("ghidra://checkout/{checkout_id}", uris)
+
+    def test_checkout_template_is_markdown(self):
+        for template in mcp._resource_manager.list_templates():
+            uri = str(getattr(template, "uriTemplate", None) or template.uri_template)
+            if uri == "ghidra://checkout/{checkout_id}":
+                self.assertEqual(template.mime_type, "text/markdown")
+                break
+        else:
+            self.fail("checkout template not registered")
 
 
 class TestResourceHandlers(unittest.TestCase):
@@ -111,6 +122,10 @@ class TestResourceHandlers(unittest.TestCase):
             "ghidra://program/ls/functions",
         )
         self.assertIn("function_by_address", body["uri_contract"])
+        self.assertEqual(
+            body["uri_contract"]["checkouts"],
+            "ghidra://checkout/{checkout_id}",
+        )
 
     def test_changes_resource_publishes_the_token_and_its_caveats(self):
         """The token is published, not only polled: a lost notification must
@@ -270,6 +285,64 @@ class TestResourceHandlers(unittest.TestCase):
                 break
         else:
             self.fail("bundle template not registered")
+
+    def test_checkout_resource_renders_markdown(self):
+        payload = {
+            "checkout_id": "co_7de33ad7",
+            "program_name": "synaWudfBioUsb.dll",
+            "program": "synaWudfBioUsb.dll",
+            "live_modification_number": 3,
+            "root": "/tmp/ghidra-mcp-checkout/synaWudfBioUsb.dll-7de33ad7",
+            "root_present": True,
+            "root_recreated": 0,
+            "phase": "complete",
+            "functions_total": 3230,
+            "functions_done": 3230,
+            "functions_failed": 0,
+            "bytes_written": 5886248,
+            "status_revision": 311,
+            "resource_uri": "ghidra://checkout/co_7de33ad7",
+            "config": {
+                "enabled_strategies": [],
+                "band_size": 20,
+                "exclusions": [],
+                "include_only": [],
+                "throttle_percent": 10,
+                "decompile_timeout_seconds": 30,
+                "analysis_wait_seconds": 600,
+            },
+            "status_state": "clean",
+            "swept_at_modification_number": 3,
+        }
+
+        async def fake_read(endpoint, **params):
+            self.assertEqual(endpoint, "/checkout_status")
+            self.assertEqual(params.get("checkout"), "co_7de33ad7")
+            return json.dumps(payload)
+
+        with patch(
+            "bridge_mcp_ghidra.resources._read_async",
+            new=AsyncMock(side_effect=fake_read),
+        ), patch(
+            "bridge_mcp_ghidra.resources.subscriptions.note_resource_read",
+        ) as note:
+            body = _run(checkout_resource("co_7de33ad7"))
+        note.assert_called_once_with("ghidra://checkout/co_7de33ad7")
+        self.assertTrue(body.startswith("# Checkout co_7de33ad7"))
+        self.assertIn("## Status", body)
+        self.assertIn("## How to read this checkout", body)
+        self.assertIn("Glob /tmp/ghidra-mcp-checkout/synaWudfBioUsb.dll-7de33ad7/modules/*/*.c", body)
+
+    def test_checkout_resource_degrades_upstream_failure_into_body(self):
+        """A transient failure mid-sweep must not look like a broken resource."""
+        with patch(
+            "bridge_mcp_ghidra.resources._read_async",
+            new=AsyncMock(side_effect=RuntimeError("connection reset")),
+        ):
+            body = _run(checkout_resource("co_deadbeef"))
+        self.assertIn("error", body.lower())
+        self.assertIn("connection reset", body)
+        self.assertTrue(body.startswith("# Checkout co_deadbeef"))
 
 
 if __name__ == "__main__":

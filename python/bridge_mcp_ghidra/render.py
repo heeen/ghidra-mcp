@@ -229,3 +229,213 @@ def function_bundle_markdown(bundle: dict) -> str:
     if bundle.get("canonical_uri"):
         out += ["", f"_Resource: {bundle['canonical_uri']}_"]
     return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Checkout status — same Markdown-not-JSON reason as the function bundle
+# ---------------------------------------------------------------------------
+
+def checkout_markdown(payload: dict | object) -> str:
+    """Render ``/checkout_status`` JSON as Markdown.
+
+    Markdown here is **not** the size win it is for the function bundle, and the
+    module docstring's 56% measurement must not be read as applying to this
+    payload. Measured on a real completed checkout, as delivered inside a JSON
+    string: markdown 988 chars / 0 escape chars, compact JSON 830 / 72. The
+    bundle saves because it is mostly C code, where every quote and newline is
+    escaped twice; a status payload is small scalars with almost nothing to
+    escape, so prose framing costs slightly more than escaping saves.
+
+    It is still Markdown, for the reasons that survive: zero escapes is readable
+    rather than a wall of ``\\"``, and the body can carry the "How to read this
+    checkout" guidance — the Glob/Grep incantations and the per-file
+    ``ghidra://function`` pointer — which is the whole reason an agent reads this
+    instead of the raw endpoint.
+
+    Handles both shapes: a single checkout (has ``checkout_id``) and the
+    no-selector list (has ``checkouts``). Missing optional keys never raise —
+    a mid-sweep poll can arrive before every field is populated.
+    """
+    if not isinstance(payload, dict):
+        return f"_Unexpected checkout payload: {payload!r}_\n"
+    # List shape is the no-selector response; a single status always carries
+    # checkout_id even when it also nests config.
+    if "checkouts" in payload and "checkout_id" not in payload:
+        return _checkout_list_markdown(payload)
+    return _checkout_single_markdown(payload)
+
+
+def _checkout_single_markdown(payload: dict) -> str:
+    cid = payload.get("checkout_id") or "?"
+    program = payload.get("program_name") or payload.get("program") or "?"
+    out = [f"# Checkout {cid} — {program}", _checkout_headline(payload)]
+
+    if payload.get("error"):
+        out += ["", f"**error:** {payload['error']}"]
+
+    out += ["", "## Status"]
+    program_field = payload.get("program")
+    if program_field == "closed":
+        out.append("- program: closed")
+    elif program_field is not None:
+        out.append(f"- program: open (`{program_field}`)")
+    else:
+        out.append("- program: unknown")
+
+    root_present = payload.get("root_present")
+    root = payload.get("root")
+    recreated = payload.get("root_recreated") or 0
+    root_line = f"- root present: {root_present}"
+    if root:
+        root_line += f" (`{root}`)"
+    if recreated:
+        # Non-zero means /tmp vanished mid-flight and was healed — silent
+        # healing of a vanishing temp dir is worse than saying so.
+        root_line += f" · recreated {recreated}×"
+    out.append(root_line)
+
+    if payload.get("phase") is not None:
+        out.append(f"- phase: {payload['phase']}")
+    failed = payload.get("functions_failed")
+    if failed is not None:
+        out.append(f"- failures: {failed}")
+    out.append(f"- freshness: {_checkout_freshness(payload)}")
+    if payload.get("status_state") is not None:
+        out.append(f"- status_state: {payload['status_state']}")
+    if payload.get("last_error"):
+        out.append(f"- last error: {payload['last_error']}")
+    elif "last_error" in payload:
+        out.append("- last error: _(none)_")
+
+    out += ["", "## Configuration"]
+    cfg = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+    strategies = cfg.get("enabled_strategies") if cfg else None
+    if strategies is None:
+        out.append("- strategies: _(cascade default)_")
+    elif not strategies:
+        out.append("- strategies: [] (full cascade)")
+    else:
+        out.append(f"- strategies: {', '.join(str(s) for s in strategies)}")
+    if cfg.get("band_size") is not None:
+        out.append(f"- band size: {cfg['band_size']}")
+    if cfg.get("throttle_percent") is not None:
+        out.append(f"- throttle: {cfg['throttle_percent']}%")
+    timeouts = []
+    if cfg.get("decompile_timeout_seconds") is not None:
+        timeouts.append(f"decompile {cfg['decompile_timeout_seconds']}s")
+    if cfg.get("analysis_wait_seconds") is not None:
+        timeouts.append(f"analysis wait {cfg['analysis_wait_seconds']}s")
+    if timeouts:
+        out.append(f"- timeouts: {', '.join(timeouts)}")
+    exclusions = cfg.get("exclusions") or []
+    include_only = cfg.get("include_only") or []
+    out.append(f"- exclusions: {exclusions if exclusions else '[]'}")
+    out.append(f"- include_only: {include_only if include_only else '[]'}")
+
+    root_path = payload.get("root") or "<root>"
+    out += [
+        "",
+        "## How to read this checkout",
+        "The tree is the corpus; this resource is the microscope.",
+        "",
+        f"- Glob the decompilations: `Glob {root_path}/modules/*/*.c`",
+        f"- Grep across them: `Grep <pattern> {root_path}/modules`",
+        "- Every file header carries `uri: ghidra://function/<program>/<address>` — "
+        "readable as an MCP resource for callers and call-site context once Grep "
+        "finds the hit.",
+    ]
+    if payload.get("resource_uri"):
+        out += ["", f"_Resource: {payload['resource_uri']}_"]
+    return "\n".join(out) + "\n"
+
+
+def _checkout_list_markdown(payload: dict) -> str:
+    rows = payload.get("checkouts") or []
+    adoptable = payload.get("adoptable_on_disk") or []
+    out = [
+        "# Checkouts",
+        f"{payload.get('checkout_count', len(rows))} registered · "
+        f"{payload.get('adoptable_count', len(adoptable))} adoptable on disk",
+        "",
+        "| id | program | phase | done/total | root |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            done = row.get("functions_done", "?")
+            total = row.get("functions_total", "?")
+            out.append(
+                f"| {row.get('checkout_id', '?')} "
+                f"| {row.get('program_name') or row.get('program') or '?'} "
+                f"| {row.get('phase', '?')} "
+                f"| {done}/{total} "
+                f"| `{row.get('root', '')}` |"
+            )
+    if not rows:
+        out.append("| _(none)_ | | | | |")
+    if isinstance(adoptable, list) and adoptable:
+        out += ["", "## Adoptable on disk",
+                "| id | program | status | files | root |",
+                "| --- | --- | --- | --- | --- |"]
+        for row in adoptable:
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                f"| {row.get('checkout_id', '?')} "
+                f"| {row.get('program_name', '?')} "
+                f"| {row.get('status_state', '?')} "
+                f"| {row.get('files_on_disk', '?')} "
+                f"| `{row.get('root', '')}` |"
+            )
+    if payload.get("error"):
+        out += ["", f"**error:** {payload['error']}"]
+    return "\n".join(out) + "\n"
+
+
+def _checkout_headline(payload: dict) -> str:
+    bits: list[str] = []
+    if payload.get("phase") is not None:
+        bits.append(str(payload["phase"]))
+    done, total = payload.get("functions_done"), payload.get("functions_total")
+    if done is not None or total is not None:
+        bits.append(f"{_q(done)}/{_q(total)}")
+    comps = payload.get("compartment_count", payload.get("compartments"))
+    if isinstance(comps, list):
+        bits.append(f"{len(comps)} compartments")
+    elif comps is not None:
+        bits.append(f"{comps} compartments")
+    if payload.get("bytes_written") is not None:
+        bits.append(_human_bytes(payload["bytes_written"]))
+    if payload.get("eta_seconds") is not None:
+        bits.append(f"eta {payload['eta_seconds']}s")
+    return " · ".join(bits) if bits else "(no status yet)"
+
+
+def _checkout_freshness(payload: dict) -> str:
+    swept = payload.get("swept_at_modification_number")
+    live = payload.get("live_modification_number")
+    if swept is None or live is None:
+        return "unknown"
+    if swept == live:
+        return f"fresh (mod {live})"
+    return f"stale (swept at {swept}, live {live})"
+
+
+def _human_bytes(n) -> str:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return str(n)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 ** 2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 ** 3:
+        return f"{n / 1024 ** 2:.1f} MB"
+    return f"{n / 1024 ** 3:.1f} GB"
+
+
+def _q(value) -> str:
+    return "?" if value is None else str(value)

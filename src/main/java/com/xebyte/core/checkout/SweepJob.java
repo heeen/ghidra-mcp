@@ -687,10 +687,16 @@ public final class SweepJob implements Runnable {
                 "%d of %d eligible functions (%.1f%%) carry a referenced-string signal; "
                         + "the rest inherit their compartment by address containment.\n\n",
                 withStrings, eligible, pct));
-        // Honest measured ceiling from the plan specimen — quality is coherent but
-        // unscored until MoJoFM lands; agents must not read 100% coverage into the tree.
-        sb.append("Measured on the driver DLL specimen: 1299/3230 = 40% carry the literal "
-                + "signal; the rest inherit by containment.\n\n");
+        // The caveat has to be about THIS binary. An earlier version restated one
+        // specimen's numbers (1299/3230 = 40%) verbatim into every tree, which on a
+        // 25k-function ELF whose real figure is 9.9% was simply a false claim — in
+        // the one file whose whole purpose is to be honest about coverage.
+        sb.append("Compartments are structural, not semantic: they are coherent but "
+                + "unscored (no ground-truth comparison exists yet). A slug names no "
+                + "meaning — read each compartment's README.md for the rule and evidence "
+                + "that formed it, and treat a low evidence-backed count as a boundary "
+                + "around a poorly-evidenced interior rather than a claim about its "
+                + "contents.\n\n");
 
         sb.append("## Strategy log\n\n");
         for (Map.Entry<String, Object> e : cascade.strategyLog().entrySet()) {

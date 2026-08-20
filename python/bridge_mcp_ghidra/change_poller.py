@@ -1,7 +1,8 @@
-"""Adaptive poller for ``/get_change_token``.
+"""Adaptive poller for program change tokens and checkout status revisions.
 
 Catches GUI edits, undo/redo and ``run_ghidra_script`` — everything the
-write-hook invalidation path is blind to — at program coarseness. Runs only
+write-hook invalidation path is blind to — at program coarseness, plus the
+checkout lane that watches ``status_revision`` while a sweep runs. Runs only
 while at least one resource URI is known to some session; backs off when quiet
 and **exits** when the known set empties (``kick()`` restarts it on the next
 read/subscribe).
@@ -24,6 +25,7 @@ _QUIET_AFTER_CYCLES = 4  # ~6s of no change before backing off
 
 _poll_task: asyncio.Task | None = None
 _last_tokens: dict[str, int] = {}
+_last_checkout_revisions: dict[str, int] = {}
 _quiet_cycles = 0
 
 
@@ -55,6 +57,7 @@ def stop() -> None:
         _poll_task.cancel()
     _poll_task = None
     _last_tokens.clear()
+    _last_checkout_revisions.clear()
 
 
 async def _poll_loop() -> None:
@@ -63,6 +66,7 @@ async def _poll_loop() -> None:
         known = state.known_resource_uris()
         if not known:
             _last_tokens.clear()
+            _last_checkout_revisions.clear()
             _quiet_cycles = 0
             # Exit rather than sleep forever: asyncio.run() in tests (and a
             # quiet process with no sessions) must not keep a zombie task.
@@ -75,8 +79,9 @@ async def _poll_loop() -> None:
             await asyncio.sleep(_ACTIVE_INTERVAL)
             continue
 
-        programs = _programs_from_uris(known)
         any_change = False
+
+        programs = _programs_from_uris(known)
         for program in programs:
             token = await _fetch_token(program)
             if token is None:
@@ -91,6 +96,23 @@ async def _poll_loop() -> None:
                 program, previous, token,
             )
             await _invalidate_program(program)
+
+        # Second lane: a running sweep moves status_revision without touching
+        # the program modification number, so the token lane alone is blind.
+        for uri in _checkout_uris(known):
+            revision = await _fetch_checkout_revision(uri)
+            if revision is None:
+                continue
+            previous = _last_checkout_revisions.get(uri)
+            _last_checkout_revisions[uri] = revision
+            if previous is None or previous == revision:
+                continue
+            any_change = True
+            logger.debug(
+                "Checkout status_revision for %s moved %s → %s",
+                uri, previous, revision,
+            )
+            await subscriptions.emit_resource_updated(uri)
 
         if any_change:
             _quiet_cycles = 0
@@ -120,6 +142,24 @@ async def _fetch_token(program: str) -> int | None:
     return None
 
 
+async def _fetch_checkout_revision(uri: str) -> int | None:
+    checkout_id = uri[len("ghidra://checkout/") :]
+    try:
+        raw = await state.run_blocking_ghidra_call(
+            lambda: dispatch.raise_on_failure(
+                dispatch.dispatch_get(
+                    "/checkout_status", params={"checkout": checkout_id}
+                )
+            )
+        )
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and "status_revision" in payload:
+            return int(payload["status_revision"])
+    except Exception as e:
+        logger.debug("checkout_status(%s) failed: %s", checkout_id, e)
+    return None
+
+
 async def _invalidate_program(program: str) -> None:
     from .invalidation import _known_uris_for_program  # local import: avoid cycle at load
 
@@ -143,7 +183,25 @@ def _programs_from_uris(uris: set[str]) -> set[str]:
             continue
         rest = uri[len("ghidra://") :]
         parts = rest.split("/")
-        # authority is function|program|search; next segment is the program.
-        if len(parts) >= 2 and parts[0] in ("function", "program", "search"):
+        if len(parts) < 2:
+            continue
+        # Segment 2 of ghidra://checkout/<id> is the id, not a program —
+        # treating it as one would burn /get_change_token every cycle.
+        if parts[0] == "checkout":
+            continue
+        if parts[0] in ("function", "program", "search"):
             programs.add(unquote(parts[1]))
     return programs
+
+
+def _checkout_uris(uris: set[str]) -> set[str]:
+    """Known ``ghidra://checkout/{id}`` URIs (no deeper path)."""
+    out: set[str] = set()
+    prefix = "ghidra://checkout/"
+    for uri in uris:
+        if not uri.startswith(prefix):
+            continue
+        rest = uri[len(prefix) :]
+        if rest and "/" not in rest:
+            out.add(uri)
+    return out
