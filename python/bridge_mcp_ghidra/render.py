@@ -318,6 +318,8 @@ def _checkout_single_markdown(payload: dict) -> str:
         out.append(f"- strategies: {', '.join(str(s) for s in strategies)}")
     if cfg.get("band_size") is not None:
         out.append(f"- band size: {cfg['band_size']}")
+    if cfg.get("max_file_bytes") is not None:
+        out.append(f"- max file bytes: {cfg['max_file_bytes']}")
     if cfg.get("throttle_percent") is not None:
         out.append(f"- throttle: {cfg['throttle_percent']}%")
     timeouts = []

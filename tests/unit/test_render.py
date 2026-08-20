@@ -117,6 +117,7 @@ class TestCheckoutMarkdown(unittest.TestCase):
             "config": {
                 "enabled_strategies": [],
                 "band_size": 20,
+                "max_file_bytes": 32768,
                 "exclusions": [],
                 "include_only": [],
                 "throttle_percent": 10,
@@ -132,6 +133,7 @@ class TestCheckoutMarkdown(unittest.TestCase):
         self.assertIn("freshness: fresh (mod 3)", body)
         self.assertIn("## Configuration", body)
         self.assertIn("band size: 20", body)
+        self.assertIn("max file bytes: 32768", body)
         self.assertIn("## How to read this checkout", body)
         self.assertIn(
             "Glob /tmp/ghidra-mcp-checkout/synaWudfBioUsb.dll-7de33ad7/modules/*/*.c",

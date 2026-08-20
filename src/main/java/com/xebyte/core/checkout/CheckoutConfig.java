@@ -8,6 +8,8 @@ import java.util.List;
  * <p>Clamps on construction rather than rejecting silently: a caller that
  * asks for {@code throttlePercent=150} still gets a usable config (90), and
  * {@code bandSize=0} floors to 1 so partitioning never divides by zero.
+ * {@code maxFileBytes} floors at {@link #MIN_MAX_FILE_BYTES} so a mis-set
+ * budget cannot produce unreadable multi-megabyte compartment files.
  *
  * @param rootPath                 absolute checkout root, or {@code null} to
  *                                 use the default under {@code java.io.tmpdir}
@@ -18,6 +20,9 @@ import java.util.List;
  * @param throttlePercent          interactive yield 0..90 (default 10)
  * @param decompileTimeoutSeconds  per-function decompile budget
  * @param analysisWaitSeconds      cap on waiting for auto-analysis before sweeping
+ * @param maxFileBytes             Read-budget for each {@code .c} inside a
+ *                                 compartment (default 32 KiB); changing it
+ *                                 moves file paths → repartitioning
  */
 public record CheckoutConfig(
         String rootPath,
@@ -27,12 +32,17 @@ public record CheckoutConfig(
         List<ExclusionRule> includeOnly,
         int throttlePercent,
         int decompileTimeoutSeconds,
-        int analysisWaitSeconds) {
+        int analysisWaitSeconds,
+        int maxFileBytes) {
 
     public static final int DEFAULT_BAND_SIZE = 20;
     public static final int DEFAULT_THROTTLE_PERCENT = 10;
     public static final int DEFAULT_DECOMPILE_TIMEOUT_SECONDS = 30;
     public static final int DEFAULT_ANALYSIS_WAIT_SECONDS = 600;
+    /** ~8K tokens — one comfortable agent Read. */
+    public static final int DEFAULT_MAX_FILE_BYTES = 32768;
+    /** Floor so a typo cannot recreate the 1.9 MB compartment-file bug. */
+    public static final int MIN_MAX_FILE_BYTES = 4096;
 
     public CheckoutConfig {
         enabledStrategies = enabledStrategies == null
@@ -48,12 +58,15 @@ public record CheckoutConfig(
         if (analysisWaitSeconds < 1) {
             analysisWaitSeconds = DEFAULT_ANALYSIS_WAIT_SECONDS;
         }
+        if (maxFileBytes < MIN_MAX_FILE_BYTES) {
+            maxFileBytes = MIN_MAX_FILE_BYTES;
+        }
         if (rootPath != null && rootPath.isBlank()) {
             rootPath = null;
         }
     }
 
-    /** Defaults: full cascade, no exclusions, band 20, throttle 10%. */
+    /** Defaults: full cascade, no exclusions, band 20, throttle 10%, 32 KiB files. */
     public static CheckoutConfig defaults() {
         return new CheckoutConfig(
                 null,
@@ -63,7 +76,8 @@ public record CheckoutConfig(
                 List.of(),
                 DEFAULT_THROTTLE_PERCENT,
                 DEFAULT_DECOMPILE_TIMEOUT_SECONDS,
-                DEFAULT_ANALYSIS_WAIT_SECONDS);
+                DEFAULT_ANALYSIS_WAIT_SECONDS,
+                DEFAULT_MAX_FILE_BYTES);
     }
 
     public static Builder builder() {
@@ -73,49 +87,55 @@ public record CheckoutConfig(
     public CheckoutConfig withRootPath(String newRootPath) {
         return new CheckoutConfig(
                 newRootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withEnabledStrategies(List<String> strategies) {
         return new CheckoutConfig(
                 rootPath, strategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withBandSize(int newBandSize) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, newBandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withExclusions(List<ExclusionRule> rules) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, rules, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withIncludeOnly(List<ExclusionRule> rules) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, rules,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withThrottlePercent(int percent) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                percent, decompileTimeoutSeconds, analysisWaitSeconds);
+                percent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withDecompileTimeoutSeconds(int seconds) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, seconds, analysisWaitSeconds);
+                throttlePercent, seconds, analysisWaitSeconds, maxFileBytes);
     }
 
     public CheckoutConfig withAnalysisWaitSeconds(int seconds) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, seconds);
+                throttlePercent, decompileTimeoutSeconds, seconds, maxFileBytes);
+    }
+
+    public CheckoutConfig withMaxFileBytes(int bytes) {
+        return new CheckoutConfig(
+                rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, bytes);
     }
 
     public static final class Builder {
@@ -127,6 +147,7 @@ public record CheckoutConfig(
         private int throttlePercent = DEFAULT_THROTTLE_PERCENT;
         private int decompileTimeoutSeconds = DEFAULT_DECOMPILE_TIMEOUT_SECONDS;
         private int analysisWaitSeconds = DEFAULT_ANALYSIS_WAIT_SECONDS;
+        private int maxFileBytes = DEFAULT_MAX_FILE_BYTES;
 
         public Builder rootPath(String rootPath) {
             this.rootPath = rootPath;
@@ -168,6 +189,11 @@ public record CheckoutConfig(
             return this;
         }
 
+        public Builder maxFileBytes(int maxFileBytes) {
+            this.maxFileBytes = maxFileBytes;
+            return this;
+        }
+
         public CheckoutConfig build() {
             return new CheckoutConfig(
                     rootPath,
@@ -177,7 +203,8 @@ public record CheckoutConfig(
                     includeOnly,
                     throttlePercent,
                     decompileTimeoutSeconds,
-                    analysisWaitSeconds);
+                    analysisWaitSeconds,
+                    maxFileBytes);
         }
     }
 }

@@ -79,6 +79,15 @@ public class CheckoutConfigTest {
         assertTrue(cfg.includeOnly().isEmpty());
         assertEquals(30, cfg.decompileTimeoutSeconds());
         assertEquals(600, cfg.analysisWaitSeconds());
+        assertEquals(32768, cfg.maxFileBytes());
+    }
+
+    @Test
+    public void maxFileBytesFloorsAt4096AndDefaultsTo32768() {
+        assertEquals(4096, CheckoutConfig.defaults().withMaxFileBytes(100).maxFileBytes());
+        assertEquals(4096, CheckoutConfig.defaults().withMaxFileBytes(0).maxFileBytes());
+        assertEquals(32768, CheckoutConfig.defaults().maxFileBytes());
+        assertEquals(65536, CheckoutConfig.builder().maxFileBytes(65536).build().maxFileBytes());
     }
 
     @Test

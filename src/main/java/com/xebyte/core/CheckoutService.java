@@ -130,6 +130,10 @@ public class CheckoutService {
             @Param(value = "band_size", source = ParamSource.BODY, defaultValue = "20",
                    description = "Address-band width when bands apply.")
             int bandSize,
+            @Param(value = "max_file_bytes", source = ParamSource.BODY, defaultValue = "32768",
+                   description = "Read-budget bytes per .c file inside a compartment "
+                       + "(floored at 4096). Changing this repartitions file paths.")
+            int maxFileBytes,
             @Param(value = "exclusions", source = ParamSource.BODY, defaultValue = "",
                    description = "CSV of tag:/partition:/range: exclusion specs.")
             String exclusions,
@@ -161,6 +165,7 @@ public class CheckoutService {
                 .rootPath(blankToNull(root))
                 .enabledStrategies(strategyList)
                 .bandSize(bandSize)
+                .maxFileBytes(maxFileBytes)
                 .exclusions(exclRules)
                 .includeOnly(includeRules)
                 .throttlePercent(throttlePercent)
@@ -221,6 +226,10 @@ public class CheckoutService {
             @Param(value = "band_size", source = ParamSource.BODY, defaultValue = "",
                    description = "Address-band width. Omit to leave unchanged.")
             Integer bandSize,
+            @Param(value = "max_file_bytes", source = ParamSource.BODY, defaultValue = "",
+                   description = "Read-budget bytes per .c file. Omit to leave unchanged. "
+                       + "Changing this repartitions file paths.")
+            Integer maxFileBytes,
             @Param(value = "exclusions", source = ParamSource.BODY, defaultValue = "",
                    description = "CSV of exclusion specs. Omit to leave unchanged.")
             String exclusions,
@@ -258,7 +267,8 @@ public class CheckoutService {
                 .includeOnly(old.includeOnly())
                 .throttlePercent(old.throttlePercent())
                 .decompileTimeoutSeconds(old.decompileTimeoutSeconds())
-                .analysisWaitSeconds(old.analysisWaitSeconds());
+                .analysisWaitSeconds(old.analysisWaitSeconds())
+                .maxFileBytes(old.maxFileBytes());
 
         boolean strategiesTouched = strategies != null && !strategies.isBlank();
         boolean exclusionsTouched = exclusions != null && !exclusions.isBlank();
@@ -270,6 +280,9 @@ public class CheckoutService {
             }
             if (bandSize != null) {
                 b.bandSize(bandSize);
+            }
+            if (maxFileBytes != null) {
+                b.maxFileBytes(maxFileBytes);
             }
             if (exclusionsTouched) {
                 b.exclusions(parseRuleCsv(exclusions));
@@ -303,7 +316,8 @@ public class CheckoutService {
         }
 
         String change = classifyConfigChange(old, updated,
-                strategiesTouched, bandSize != null, exclusionsTouched, includeTouched);
+                strategiesTouched, bandSize != null, maxFileBytes != null,
+                exclusionsTouched, includeTouched);
 
         checkout.setConfig(updated);
         try {
@@ -857,6 +871,10 @@ public class CheckoutService {
         if (band != null) {
             b.bandSize(band);
         }
+        Integer maxFile = intField(disk, "max_file_bytes");
+        if (maxFile != null) {
+            b.maxFileBytes(maxFile);
+        }
         Integer throttle = intField(disk, "throttle_percent");
         if (throttle != null) {
             b.throttlePercent(throttle);
@@ -902,6 +920,7 @@ public class CheckoutService {
         m.put("root", cfg.rootPath());
         m.put("enabled_strategies", cfg.enabledStrategies());
         m.put("band_size", cfg.bandSize());
+        m.put("max_file_bytes", cfg.maxFileBytes());
         m.put("exclusions", rulesToSpecs(cfg.exclusions()));
         m.put("include_only", rulesToSpecs(cfg.includeOnly()));
         m.put("throttle_percent", cfg.throttlePercent());
@@ -1122,6 +1141,7 @@ public class CheckoutService {
             CheckoutConfig updated,
             boolean strategiesTouched,
             boolean bandTouched,
+            boolean maxFileBytesTouched,
             boolean exclusionsTouched,
             boolean includeTouched) {
 
@@ -1131,6 +1151,11 @@ public class CheckoutService {
             repartitioning = true;
         }
         if (bandTouched && old.bandSize() != updated.bandSize()) {
+            repartitioning = true;
+        }
+        // File paths are derived from the byte budget; a change moves every
+        // modules/<slug>/*.c name → full resweep, same as band/strategy edits.
+        if (maxFileBytesTouched && old.maxFileBytes() != updated.maxFileBytes()) {
             repartitioning = true;
         }
         if (partitionRulesChanged(old.exclusions(), updated.exclusions())

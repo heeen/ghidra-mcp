@@ -305,6 +305,7 @@ class TestResourceHandlers(unittest.TestCase):
             "config": {
                 "enabled_strategies": [],
                 "band_size": 20,
+                "max_file_bytes": 32768,
                 "exclusions": [],
                 "include_only": [],
                 "throttle_percent": 10,

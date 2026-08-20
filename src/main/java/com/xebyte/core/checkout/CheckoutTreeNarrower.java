@@ -25,8 +25,9 @@ import java.util.regex.Pattern;
  * Immediate on-disk narrowing for {@code /checkout_configure}.
  *
  * <p>Leaving an excluded function's body on disk would be a lie {@code Grep}
- * would still hit. Files are one-per-partition, so a compartment that loses
- * only some members is rewritten without them — never deleted wholesale.
+ * would still hit. A compartment may span many Read-budget files, so every
+ * file that held a removed member is rewritten (or deleted when emptied) —
+ * never only the first remaining row's path.
  */
 public final class CheckoutTreeNarrower {
 
@@ -89,23 +90,41 @@ public final class CheckoutTreeNarrower {
 
         List<String> rewritten = new ArrayList<>();
         Set<String> touchedSlugs = new LinkedHashSet<>(perPartitionRemoved.keySet());
+
+        // Every file that belonged to a touched slug — including ones that
+        // lose ALL members — must be rewritten or deleted. Indexing only the
+        // remaining rows would leave dead bodies in sibling budget files.
+        Map<String, Set<String>> filesBySlug = new LinkedHashMap<>();
+        for (IndexEntry e : entries) {
+            if (touchedSlugs.contains(e.slug())) {
+                filesBySlug.computeIfAbsent(e.slug(), s -> new LinkedHashSet<>()).add(e.file());
+            }
+        }
+
         for (String slug : touchedSlugs) {
             List<IndexEntry> remaining = bySlug.getOrDefault(slug, List.of());
             if (remaining.isEmpty()) {
                 deleteModuleDir(root.resolve("modules").resolve(slug));
                 rewritten.add(slug + " (deleted)");
-            } else {
-                Path relative = Path.of(remaining.get(0).file());
-                Path file = root.resolve(relative);
-                if (Files.isRegularFile(file)) {
-                    String body = Files.readString(file, StandardCharsets.UTF_8);
-                    String filtered = rewritePartitionFile(body, removedAddresses);
-                    checkout.root().writeFile(relative, filtered);
-                }
-                rewriteModuleReadme(checkout, slug, remaining.size(),
-                        remaining.get(0).file());
-                rewritten.add(slug + " (rewritten, " + remaining.size() + " kept)");
+                continue;
             }
+
+            Set<String> files = filesBySlug.getOrDefault(slug, Set.of());
+            for (String relative : files) {
+                Path file = root.resolve(relative);
+                if (!Files.isRegularFile(file)) {
+                    continue;
+                }
+                String body = Files.readString(file, StandardCharsets.UTF_8);
+                String filtered = rewritePartitionFile(body, removedAddresses);
+                if (filtered.isBlank()) {
+                    Files.deleteIfExists(file);
+                } else {
+                    checkout.root().writeFile(Path.of(relative), filtered);
+                }
+            }
+            rewriteModuleReadme(checkout, slug, remaining);
+            rewritten.add(slug + " (rewritten, " + remaining.size() + " kept)");
         }
 
         writeIndex(checkout, kept);
@@ -256,24 +275,45 @@ public final class CheckoutTreeNarrower {
         sb.append("note: narrowed by /checkout_configure — full strategy log "
                 + "rewritten on next sweep\n\n");
         sb.append("## Compartments\n\n");
-        sb.append("| slug | functions |\n");
-        sb.append("| --- | ---: |\n");
+        sb.append("| slug | functions | files |\n");
+        sb.append("| --- | ---: | ---: |\n");
         for (Map.Entry<String, List<IndexEntry>> e : bySlug.entrySet()) {
+            Set<String> files = new LinkedHashSet<>();
+            for (IndexEntry row : e.getValue()) {
+                files.add(row.file());
+            }
             sb.append("| ").append(e.getKey())
                     .append(" | ").append(e.getValue().size())
+                    .append(" | ").append(files.size())
                     .append(" |\n");
         }
         checkout.root().writeFile(Path.of(CheckoutLayout.modulesIndexMd()), sb.toString());
     }
 
     private static void rewriteModuleReadme(
-            Checkout checkout, String slug, int memberCount, String sourceFile)
-            throws IOException {
+            Checkout checkout, String slug, List<IndexEntry> remaining) throws IOException {
+        Map<String, List<IndexEntry>> byFile = new LinkedHashMap<>();
+        for (IndexEntry e : remaining) {
+            byFile.computeIfAbsent(e.file(), f -> new ArrayList<>()).add(e);
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("# Module ").append(slug).append("\n\n");
-        sb.append("functions: ").append(memberCount).append('\n');
-        sb.append("source: ").append(sourceFile).append('\n');
+        sb.append("functions: ").append(remaining.size()).append('\n');
+        sb.append("files: ").append(byFile.size()).append('\n');
         sb.append("note: member list narrowed by /checkout_configure\n");
+        sb.append("\n## Files\n\n");
+        sb.append("| file | first | last | functions |\n");
+        sb.append("| --- | --- | --- | ---: |\n");
+        for (Map.Entry<String, List<IndexEntry>> e : byFile.entrySet()) {
+            List<IndexEntry> rows = e.getValue();
+            String first = rows.get(0).addressHex();
+            String last = rows.get(rows.size() - 1).addressHex();
+            sb.append("| ").append(e.getKey())
+                    .append(" | ").append(first)
+                    .append(" | ").append(last)
+                    .append(" | ").append(rows.size())
+                    .append(" |\n");
+        }
         checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(slug)), sb.toString());
     }
 
