@@ -6,7 +6,9 @@ import com.xebyte.core.checkout.CheckoutKey;
 import com.xebyte.core.checkout.CheckoutLayout;
 import com.xebyte.core.checkout.CheckoutRegistry;
 import com.xebyte.core.checkout.CheckoutRoot;
+import com.xebyte.core.checkout.CheckoutStatusMd;
 import com.xebyte.core.checkout.ExclusionRule;
+import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
 import ghidra.program.model.listing.Program;
 
@@ -15,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -36,8 +37,8 @@ import java.util.stream.Stream;
  * mutate program state, which is why the bridge marks them {@code NONE} for
  * resource invalidation.
  *
- * <p>SweepJob (actual decompilation) lands in a later step — {@code /checkout_start}
- * only registers intent ({@link SweepProgress.Phase#QUEUED}).
+ * <p>Sweeps run as {@link SweepJob} on {@link CheckoutRegistry}'s daemon thread —
+ * never through {@code ThreadingStrategy}.
  *
  * @since 7.2.0
  */
@@ -288,12 +289,12 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_start — WRITE, intent only (SweepJob is step 5)
+    // /checkout_start — WRITE, enqueue SweepJob
     // =========================================================================
 
     @McpTool(path = "/checkout_start", method = "POST",
         description = "Enqueue a checkout sweep. Returns immediately with phase queued "
-            + "and the resource URI to poll. The actual SweepJob lands in a later release.",
+            + "and the resource URI to poll via /checkout_status.",
         category = "checkout", access = ToolAccess.WRITE)
     public Response checkoutStart(
             @Param(value = "checkout", source = ParamSource.BODY,
@@ -315,15 +316,20 @@ public class CheckoutService {
             return Response.ok(startResponse(checkout));
         }
 
-        // TODO(step 5): submit SweepJob via CheckoutRegistry.enqueue(...).
-        // For now only register intent so /checkout_status and the resource poller
-        // have a phase to watch; no decompilation runs yet.
+        Program live = findOpenProgram(checkout);
+        if (live == null || live.isClosed()) {
+            return Response.err("program is closed; cannot start checkout sweep");
+        }
+
         checkout.setProgress(checkout.progress().withPhase(SweepProgress.Phase.QUEUED));
         try {
-            writeStatusMd(checkout, statusStateForPhase(SweepProgress.Phase.QUEUED), null);
+            CheckoutStatusMd.write(checkout, "dirty", null);
         } catch (IOException e) {
             return Response.err("failed to update STATUS.md: " + e.getMessage());
         }
+
+        SweepJob job = new SweepJob(checkout, live);
+        CheckoutRegistry.getInstance().enqueueSweep(job);
 
         return Response.ok(startResponse(checkout));
     }
@@ -354,12 +360,15 @@ public class CheckoutService {
                 || phase == SweepProgress.Phase.WAITING_FOR_ANALYSIS
                 || phase == SweepProgress.Phase.PARTITIONING
                 || phase == SweepProgress.Phase.DECOMPILING) {
+            // Flag + stopProcess on the in-flight decompile — do not wait out the timeout.
+            CheckoutRegistry.getInstance()
+                    .cancelSweep(checkout.id(), "cancelled by /checkout_stop");
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.CANCELLED)
                     .withLastError("cancelled by /checkout_stop"));
             cancelled = true;
             try {
-                writeStatusMd(checkout, "cancelled", null);
+                CheckoutStatusMd.write(checkout, "cancelled", null);
             } catch (IOException e) {
                 return Response.err("failed to update STATUS.md: " + e.getMessage());
             }
@@ -420,7 +429,7 @@ public class CheckoutService {
                 .create(domainPath, programName, requested);
         writeCheckoutJson(checkout);
         // Nothing has been swept yet — "dirty" would mean a crash mid-sweep.
-        writeStatusMd(checkout, "empty", null);
+        CheckoutStatusMd.write(checkout, "empty", null);
 
         Map<String, Object> out = statusMap(checkout);
         out.put("adopted", false);
@@ -654,24 +663,6 @@ public class CheckoutService {
         checkout.root().writeFile(Path.of(CheckoutLayout.checkoutJson()), json);
     }
 
-    private static void writeStatusMd(Checkout checkout, String state, Long sweptAt)
-            throws IOException {
-        SweepProgress p = checkout.progress();
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Checkout STATUS\n\n");
-        sb.append("state: ").append(state).append('\n');
-        sb.append("phase: ").append(p.phase().name().toLowerCase(Locale.ROOT)).append('\n');
-        sb.append("checkout_id: ").append(checkout.id()).append('\n');
-        sb.append("swept_at_modification_number: ")
-                .append(sweptAt != null ? sweptAt : "").append('\n');
-        sb.append("functions_total: ").append(p.functionsTotal()).append('\n');
-        sb.append("functions_done: ").append(p.functionsDone()).append('\n');
-        sb.append("functions_failed: ").append(p.functionsFailed()).append('\n');
-        sb.append("bytes_written: ").append(p.bytesWritten()).append('\n');
-        sb.append("updated: ").append(Instant.now()).append('\n');
-        checkout.root().writeFile(Path.of(CheckoutLayout.statusMd()), sb.toString());
-    }
-
     private static StatusFile readStatusMd(Path root) {
         Path statusPath = root.resolve(CheckoutLayout.statusMd());
         if (!Files.isRegularFile(statusPath)) {
@@ -872,17 +863,6 @@ public class CheckoutService {
             }
         }
         return !oldP.equals(newP);
-    }
-
-    private static String statusStateForPhase(SweepProgress.Phase phase) {
-        return switch (phase) {
-            case QUEUED, WAITING_FOR_ANALYSIS, PARTITIONING, DECOMPILING -> "dirty";
-            case COMPLETE -> "clean";
-            case CANCELLED -> "cancelled";
-            case FAILED -> "failed";
-            case STALE -> "dirty";
-            case IDLE -> "empty";
-        };
     }
 
     private static List<ExclusionRule> parseRuleCsv(String csv) {

@@ -9,7 +9,7 @@ import java.util.Objects;
  * reference — that would pin a {@code ProgramDB} and break program close.
  * The key stores domain path and root as strings only; callers re-resolve
  * through {@code ProgramProvider} when they need a live Program. Only a
- * running sweep job pins via {@code addConsumer}/{@code removeConsumer}.
+ * running sweep job pins via {@code addConsumer}/{@code release}.
  */
 public final class Checkout {
 
