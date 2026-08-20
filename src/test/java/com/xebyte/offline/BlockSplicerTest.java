@@ -132,13 +132,59 @@ public class BlockSplicerTest {
     @Test
     public void updateIndexNamesRewritesNameColumnOnly() {
         String index = SweepJob.byAddressHeader()
-                + SweepJob.formatByAddressRow("00100000", "Foo", "c05", "modules/c05/c05.c", false)
-                + SweepJob.formatByAddressRow("00100100", "Bar", "c05", "modules/c05/c05.c", false);
+                + SweepJob.formatByAddressRow(
+                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false)
+                + SweepJob.formatByAddressRow(
+                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false);
         String updated = BlockSplicer.updateIndexNames(
                 index, Map.of("00100100", "BarRenamed"));
         assertTrue(updated.contains("00100100\tBarRenamed\tc05\t"));
         assertTrue(updated.contains("00100000\tFoo\tc05\t"));
         assertFalse(updated.contains("00100100\tBar\t"));
+    }
+
+    @Test
+    public void spliceFindsBlockWhenCompartmentHasManyFiles() {
+        // Regression for Read-budget split: index points at the sibling file,
+        // and spliceFile must still locate the block inside that file alone.
+        String fileA = rebuildBlock("Foo", "00100000", "aaaaaaaaaaaa", "void Foo(void) {}\n")
+                + "\n"
+                + rebuildBlock("Bar", "00100100", "bbbbbbbbbbbb", "void Bar(void) {}\n")
+                + "\n";
+        String fileB = rebuildBlock("Baz", "00100200", "cccccccccccc", "void Baz(void) {}\n")
+                + "\n"
+                + rebuildBlock("Qux", "00100300", "dddddddddddd", "void Qux(void) {}\n")
+                + "\n";
+
+        String index = SweepJob.byAddressHeader()
+                + SweepJob.formatByAddressRow(
+                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false)
+                + SweepJob.formatByAddressRow(
+                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false)
+                + SweepJob.formatByAddressRow(
+                        "00100200", "Baz", "c05", "modules/c05/00100200.c", false)
+                + SweepJob.formatByAddressRow(
+                        "00100300", "Qux", "c05", "modules/c05/00100200.c", false);
+
+        // Lookup as BlockSplicer.refresh does: index → file body → findBlock.
+        assertTrue(index.contains("00100200\tBaz\tc05\tmodules/c05/00100200.c\t"));
+        assertNull("Baz must not be found in the sibling budget file",
+                BlockSplicer.findBlock(fileA, "00100200"));
+        String found = BlockSplicer.findBlock(fileB, "00100200");
+        assertNotNull(found);
+        assertTrue(found.startsWith("// fn: Baz @ 00100200"));
+
+        String newBaz = rebuildBlock("BazRenamed", "00100200", "eeeeeeeeeeee",
+                "void BazRenamed(void) { return; }\n");
+        BlockSplicer.SpliceResult result = BlockSplicer.spliceFile(
+                fileB, Map.of("00100200", newBaz));
+        assertTrue(result.rewritten());
+        assertTrue(result.newBody().contains("// fn: BazRenamed @ 00100200"));
+        assertTrue(result.newBody().contains("// fn: Qux @ 00100300"));
+        assertFalse(result.newBody().contains("// fn: Baz @ 00100200"));
+        // Sibling file untouched by construction (splice is per-file).
+        assertTrue(fileA.contains("// fn: Foo @ 00100000"));
+        assertTrue(fileA.contains("// fn: Bar @ 00100100"));
     }
 
     private static String rebuildBlock(String name, String addr, String fp, String body) {

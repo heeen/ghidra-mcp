@@ -23,11 +23,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Splice refreshed decompilations into existing checkout partition files.
+ * Splice refreshed decompilations into existing checkout compartment files.
  *
- * <p>One compartment is one file (measured: 904 functions / 1.95 MB). Rewriting
- * a caller's file by re-decompiling every member costs ~7 s; splicing one block
+ * <p>A compartment is many Read-budget files (measured bug: 904 functions /
+ * 1.95 MB in one file). Rewriting a caller's file by re-decompiling every
+ * member of a multi-megabyte compartment costs seconds; splicing one block
  * costs ~8 ms. Never re-decompile a whole partition to refresh one function.
+ * Lookup is index-driven ({@code by-address.tsv} → relative path), so multi-file
+ * compartments need no special splice logic.
  *
  * <p>Block boundaries reuse {@link CheckoutTreeNarrower#splitFunctionChunks}: a
  * block starts only at a line beginning with {@code // fn: }, so a string

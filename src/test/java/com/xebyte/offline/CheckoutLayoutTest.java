@@ -17,6 +17,32 @@ import static org.junit.Assert.assertTrue;
 public class CheckoutLayoutTest {
 
     @Test
+    public void compartmentFileNamePaddingGivesLexicalOrderEqualToAddressOrder() {
+        int pointerSize = 4;
+        long[] addresses = {0x10L, 0x100L, 0x1000L, 0xffffL, 0x10000L, 0x6fdd1234L};
+        List<String> names = new ArrayList<>();
+        for (long addr : addresses) {
+            names.add(CheckoutLayout.compartmentFileName(addr, pointerSize));
+        }
+        List<String> sorted = new ArrayList<>(names);
+        Collections.sort(sorted);
+        assertEquals(
+                "zero-padded hex must make lexical order match address order",
+                names, sorted);
+        assertEquals("00000010.c", names.get(0));
+        assertEquals("6fdd1234.c", names.get(5));
+        // No function name — the file holds several functions.
+        assertFalse(names.get(0).contains("_"));
+    }
+
+    @Test
+    public void compartmentFileNameFor64BitPointers() {
+        assertEquals(
+                "0000000180001000.c",
+                CheckoutLayout.compartmentFileName(0x180001000L, 8));
+    }
+
+    @Test
     public void filenamePaddingGivesLexicalOrderEqualToAddressOrder() {
         int pointerSize = 4; // 8 hex chars
         long[] addresses = {0x10L, 0x100L, 0x1000L, 0xffffL, 0x10000L, 0x6fdd1234L};
@@ -75,8 +101,8 @@ public class CheckoutLayoutTest {
         assertEquals("modules/index.md", CheckoutLayout.modulesIndexMd());
         assertEquals("modules/c05/README.md", CheckoutLayout.moduleReadme("c05"));
         assertEquals(
-                "modules/c05/00001000_Foo.c",
-                CheckoutLayout.moduleFunctionFile("c05", "00001000_Foo.c"));
+                "modules/c05/00001000.c",
+                CheckoutLayout.moduleFunctionFile("c05", "00001000.c"));
         assertEquals("index/by-address.tsv", CheckoutLayout.byAddressTsv());
         assertEquals("callgraph.tsv", CheckoutLayout.callgraphTsv());
         assertEquals("strings.txt", CheckoutLayout.stringsTxt());

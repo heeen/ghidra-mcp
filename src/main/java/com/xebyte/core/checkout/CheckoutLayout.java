@@ -18,22 +18,35 @@ public final class CheckoutLayout {
     }
 
     /**
-     * {@code <zero-padded-address>_<SanitisedName>.c} — collision-free by
-     * construction; zero-padding makes lexical sort match address order.
+     * {@code <zero-padded-address>.c} — one Read-budget file inside a compartment,
+     * named by its first function. No function name in the path: the file holds
+     * several functions, so naming it after one would be a lie. Zero-padding
+     * makes lexical sort match address order.
      *
-     * @param address           function entry as an unsigned offset
-     * @param functionName      raw Ghidra / demangled name
+     * @param address           first function entry as an unsigned offset
      * @param pointerSizeBytes  program pointer size ({@code 4} or {@code 8});
      *                          hex width is {@code pointerSizeBytes * 2}
      */
+    public static String compartmentFileName(long address, int pointerSizeBytes) {
+        return paddedAddressHex(address, pointerSizeBytes) + ".c";
+    }
+
+    /**
+     * Legacy one-function form ({@code <addr>_<name>.c}). Prefer
+     * {@link #compartmentFileName} for checkout trees — grouping is deliberate.
+     */
     public static String functionFileName(long address, String functionName, int pointerSizeBytes) {
+        return paddedAddressHex(address, pointerSizeBytes) + "_" + sanitiseName(functionName) + ".c";
+    }
+
+    /** Zero-pad to pointer width; truncate on overflow so paths stay fixed-width. */
+    public static String paddedAddressHex(long address, int pointerSizeBytes) {
         int hexWidth = Math.max(1, pointerSizeBytes) * 2;
         String hex = String.format(Locale.ROOT, "%0" + hexWidth + "x", address);
-        // Cap at hexWidth in case a larger address was passed (mask not applied).
         if (hex.length() > hexWidth) {
             hex = hex.substring(hex.length() - hexWidth);
         }
-        return hex + "_" + sanitiseName(functionName) + ".c";
+        return hex;
     }
 
     /**

@@ -57,6 +57,12 @@ public final class SweepJob implements Runnable {
     /** Re-check auto-analysis this often; {@code /reanalyze} can fire mid-sweep. */
     private static final int ANALYSIS_POLL_EVERY = 64;
 
+    /**
+     * Secondary per-file cap: a compartment of tiny stubs must not produce one
+     * enormous-count file even when each stub is well under the byte budget.
+     */
+    public static final int MAX_FUNCTIONS_PER_FILE = 200;
+
     private static final String FAILED_MARKER_PREFIX = "// DECOMPILATION FAILED: ";
 
     private final Checkout checkout;
@@ -201,40 +207,80 @@ public final class SweepJob implements Runnable {
                 List<Function> members = new ArrayList<>(part.members());
                 members.sort(Comparator.comparing(Function::getEntryPoint));
 
-                String relativeFile = CheckoutLayout.moduleFunctionFile(
-                        part.slug(), part.slug() + ".c");
+                // Compartment → N Read-budget files. Bytes (not function count)
+                // decide the split: median C is ~386 B but max is 23 KB, so a
+                // fixed count of 20 swings between ~8 KB and ~460 KB.
+                int pointerSize = Math.max(1, program.getDefaultPointerSize());
+                int maxFileBytes = cfg.maxFileBytes();
                 StringBuilder fileBody = new StringBuilder();
+                int fileBytes = 0;
+                int fileFnCount = 0;
+                String relativeFile = null;
+                String fileFirstHex = null;
+                String fileLastHex = null;
+                List<EmittedFile> emitted = new ArrayList<>();
 
                 for (Function func : members) {
                     if (cancel.isCancelled()) {
-                        writePartialPartition(relativeFile, fileBody);
+                        flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex, fileLastHex,
+                                fileFnCount, emitted);
                         finishTerminal(SweepProgress.Phase.CANCELLED,
                                 cancelReason != null ? cancelReason : "cancelled",
                                 null);
                         return;
                     }
                     if (!ensureProgramOpen()) {
-                        writePartialPartition(relativeFile, fileBody);
+                        flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex, fileLastHex,
+                                fileFnCount, emitted);
                         return;
                     }
 
                     if (functionsSinceAnalysisCheck >= ANALYSIS_POLL_EVERY) {
                         functionsSinceAnalysisCheck = 0;
                         if (!waitForAnalysisIfNeeded()) {
-                            writePartialPartition(relativeFile, fileBody);
+                            flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex,
+                                    fileLastHex, fileFnCount, emitted);
                             return;
                         }
                     }
 
                     boolean evidenceBacked = isEvidenceBacked(part, func, ctx);
                     FunctionEmit emit = decompileOne(func, part, evidenceBacked, sweptMod);
-                    fileBody.append(emit.text());
-                    if (!emit.text().endsWith("\n")) {
-                        fileBody.append('\n');
+                    int addition = encodedBlockBytes(emit.text());
+
+                    // Close BEFORE adding so the budget is a hard Read ceiling;
+                    // an empty file always accepts the next block (oversized
+                    // single function → its own file, never split).
+                    if (fileFnCount > 0
+                            && (fileBytes + addition > maxFileBytes
+                                || fileFnCount >= MAX_FUNCTIONS_PER_FILE)) {
+                        flushOpenFile(relativeFile, fileBody, fileFirstHex, fileLastHex,
+                                fileFnCount, emitted);
+                        fileBody.setLength(0);
+                        fileBytes = 0;
+                        fileFnCount = 0;
+                        relativeFile = null;
+                        fileFirstHex = null;
+                        fileLastHex = null;
                     }
-                    fileBody.append('\n');
+
+                    if (relativeFile == null) {
+                        relativeFile = CheckoutLayout.moduleFunctionFile(
+                                part.slug(),
+                                CheckoutLayout.compartmentFileName(
+                                        func.getEntryPoint().getOffset(), pointerSize));
+                    }
+
+                    appendBlock(fileBody, emit.text());
+                    fileBytes += addition;
+                    fileFnCount++;
 
                     String addrHex = func.getEntryPoint().toString(false);
+                    if (fileFirstHex == null) {
+                        fileFirstHex = addrHex;
+                    }
+                    fileLastHex = addrHex;
+
                     indexRows.add(new IndexRow(
                             addrHex,
                             func.getName(),
@@ -252,9 +298,9 @@ public final class SweepJob implements Runnable {
                     sliceStartNs = maybeThrottle(sliceStartNs, cfg.throttlePercent());
                 }
 
-                checkout.root().writeFile(Path.of(relativeFile), fileBody.toString());
-                // bytes already counted per function into accum
-                writeModuleReadme(part, relativeFile, members.size());
+                flushOpenFile(relativeFile, fileBody, fileFirstHex, fileLastHex,
+                        fileFnCount, emitted);
+                writeModuleReadme(part, members.size(), emitted);
                 publish(checkout.progress()
                         .withCounts(total, accum.done, accum.failed)
                         .withBytesWritten(accum.bytes)
@@ -367,6 +413,62 @@ public final class SweepJob implements Runnable {
         } catch (NoSuchAlgorithmException e) {
             return "000000000000";
         }
+    }
+
+    /**
+     * Assign each block to a file index under a byte budget + function-count
+     * cap. Pure so offline tests pin the split without a Program.
+     *
+     * <p>Close <em>before</em> adding when the next block would exceed the
+     * budget or the open file already holds {@code maxFunctionsPerFile}
+     * members. An oversized first block still opens a file alone — the block
+     * is atomic for {@link BlockSplicer}.
+     *
+     * @param blockBytes           UTF-8 size of each encoded block (header+body
+     *                             + the blank-line separator the writer adds)
+     * @param maxFileBytes         Read budget (already clamped by config)
+     * @param maxFunctionsPerFile  secondary cap (typically {@link #MAX_FUNCTIONS_PER_FILE})
+     * @return parallel array of 0-based file indices, one per block
+     */
+    public static int[] assignBlocksToFiles(
+            int[] blockBytes, int maxFileBytes, int maxFunctionsPerFile) {
+        if (blockBytes == null || blockBytes.length == 0) {
+            return new int[0];
+        }
+        int budget = Math.max(1, maxFileBytes);
+        int fnCap = Math.max(1, maxFunctionsPerFile);
+        int[] out = new int[blockBytes.length];
+        int fileIdx = 0;
+        int fileBytes = 0;
+        int fileCount = 0;
+        for (int i = 0; i < blockBytes.length; i++) {
+            int addition = Math.max(0, blockBytes[i]);
+            if (fileCount > 0
+                    && (fileBytes + addition > budget || fileCount >= fnCap)) {
+                fileIdx++;
+                fileBytes = 0;
+                fileCount = 0;
+            }
+            out[i] = fileIdx;
+            fileBytes += addition;
+            fileCount++;
+        }
+        return out;
+    }
+
+    /**
+     * Bytes the sweep will write for one function block: body UTF-8, a trailing
+     * newline if missing, then the blank-line separator between functions.
+     */
+    public static int encodedBlockBytes(String blockText) {
+        if (blockText == null) {
+            return 1; // just the separator newline
+        }
+        int n = blockText.getBytes(StandardCharsets.UTF_8).length;
+        if (!blockText.endsWith("\n")) {
+            n += 1;
+        }
+        return n + 1; // blank-line separator
     }
 
     /**
@@ -598,18 +700,46 @@ public final class SweepJob implements Runnable {
         });
     }
 
-    private void writePartialPartition(String relativeFile, StringBuilder body) {
-        if (body == null || body.isEmpty()) {
+    private static void appendBlock(StringBuilder fileBody, String text) {
+        if (text == null) {
+            text = "";
+        }
+        fileBody.append(text);
+        if (!text.endsWith("\n")) {
+            fileBody.append('\n');
+        }
+        fileBody.append('\n');
+    }
+
+    private void flushOpenFile(
+            String relativeFile,
+            StringBuilder body,
+            String firstHex,
+            String lastHex,
+            int fnCount,
+            List<EmittedFile> emitted) throws IOException {
+        if (relativeFile == null || body == null || body.isEmpty() || fnCount <= 0) {
             return;
         }
+        checkout.root().writeFile(Path.of(relativeFile), body.toString());
+        emitted.add(new EmittedFile(relativeFile, firstHex, lastHex, fnCount));
+    }
+
+    private void flushOpenFileBestEffort(
+            String relativeFile,
+            StringBuilder body,
+            String firstHex,
+            String lastHex,
+            int fnCount,
+            List<EmittedFile> emitted) {
         try {
-            checkout.root().writeFile(Path.of(relativeFile), body.toString());
+            flushOpenFile(relativeFile, body, firstHex, lastHex, fnCount, emitted);
         } catch (IOException ignored) {
             // Cancel/close path — best effort so Grep still sees what finished.
         }
     }
 
-    private void writeModuleReadme(Partition part, String sourceFile, int memberCount)
+    private void writeModuleReadme(Partition part, int memberCount, List<EmittedFile> files)
             throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("# Module ").append(part.slug()).append("\n\n");
@@ -617,7 +747,17 @@ public final class SweepJob implements Runnable {
         sb.append("confidence: ")
                 .append(String.format(Locale.ROOT, "%.2f", part.confidence())).append('\n');
         sb.append("functions: ").append(memberCount).append('\n');
-        sb.append("source: ").append(sourceFile).append('\n');
+        sb.append("files: ").append(files.size()).append('\n');
+        sb.append("\n## Files\n\n");
+        sb.append("| file | first | last | functions |\n");
+        sb.append("| --- | --- | --- | ---: |\n");
+        for (EmittedFile f : files) {
+            sb.append("| ").append(f.relativePath())
+                    .append(" | ").append(f.firstAddressHex())
+                    .append(" | ").append(f.lastAddressHex())
+                    .append(" | ").append(f.functionCount())
+                    .append(" |\n");
+        }
         sb.append("\n## Evidence\n\n");
         for (Map.Entry<String, Object> e : part.evidence().entrySet()) {
             sb.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append('\n');
@@ -647,7 +787,7 @@ public final class SweepJob implements Runnable {
 
         checkout.root().writeFile(
                 Path.of(CheckoutLayout.modulesIndexMd()),
-                renderModulesIndex(ctx, cascade, partitions, total, scope));
+                renderModulesIndex(ctx, cascade, partitions, total, scope, rows));
     }
 
     private String renderCallgraph(PartitionContext ctx) {
@@ -678,12 +818,15 @@ public final class SweepJob implements Runnable {
             PartitionCascade.Result cascade,
             List<Partition> partitions,
             int total,
-            ExclusionEvaluator.ScopeStats scope) {
+            ExclusionEvaluator.ScopeStats scope,
+            List<IndexRow> rows) {
         PartitionContext.LiteralIndex li = ctx.literals();
         int withStrings = li.functionsWithStrings();
         int eligible = scope.eligibleFunctions();
         int inScope = scope.functionsInScope();
         double pct = eligible == 0 ? 0.0 : (100.0 * withStrings / eligible);
+
+        Map<String, Integer> filesPerSlug = countDistinctFilesPerSlug(rows);
 
         StringBuilder sb = new StringBuilder();
         sb.append("# Modules\n\n");
@@ -734,16 +877,31 @@ public final class SweepJob implements Runnable {
         }
 
         sb.append("## Compartments\n\n");
-        sb.append("| slug | method | functions | confidence |\n");
-        sb.append("| --- | --- | ---: | ---: |\n");
+        sb.append("| slug | method | functions | files | confidence |\n");
+        sb.append("| --- | --- | ---: | ---: | ---: |\n");
         for (Partition p : partitions) {
             sb.append("| ").append(p.slug())
                     .append(" | ").append(p.method())
                     .append(" | ").append(p.size())
+                    .append(" | ").append(filesPerSlug.getOrDefault(p.slug(), 0))
                     .append(" | ").append(String.format(Locale.ROOT, "%.2f", p.confidence()))
                     .append(" |\n");
         }
         return sb.toString();
+    }
+
+    /** Distinct {@code .c} paths per compartment — what the Files column reports. */
+    static Map<String, Integer> countDistinctFilesPerSlug(List<IndexRow> rows) {
+        Map<String, Set<String>> sets = new java.util.LinkedHashMap<>();
+        for (IndexRow row : rows) {
+            sets.computeIfAbsent(row.slug(), s -> new java.util.LinkedHashSet<>())
+                    .add(row.file());
+        }
+        Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> e : sets.entrySet()) {
+            out.put(e.getKey(), e.getValue().size());
+        }
+        return out;
     }
 
     private void writeTopReadme(int total, int partitionCount) throws IOException {
@@ -756,8 +914,9 @@ public final class SweepJob implements Runnable {
         sb.append("\n## How to read\n\n");
         sb.append("- `modules/index.md` — strategy log (including not-applicable reasons) "
                 + "and compartment table\n");
-        sb.append("- `modules/<slug>/*.c` — one file per partition; each function has a "
-                + "7-line header with a resolvable `ghidra://function/...` uri\n");
+        sb.append("- `modules/<slug>/*.c` — Read-budget files inside each compartment "
+                + "(named by first-function address); each function has a 7-line header "
+                + "with a resolvable `ghidra://function/...` uri\n");
         sb.append("- `index/by-address.tsv` — complete address → file map "
                 + "(failed decompiles still appear)\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
@@ -859,6 +1018,13 @@ public final class SweepJob implements Runnable {
             String slug,
             String file,
             boolean evidenceBacked) {}
+
+    /** One Read-budget {@code .c} flushed during a compartment sweep. */
+    private record EmittedFile(
+            String relativePath,
+            String firstAddressHex,
+            String lastAddressHex,
+            int functionCount) {}
 
     private static final class SweepAccum {
         int done;
