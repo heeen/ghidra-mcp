@@ -6,7 +6,7 @@ import java.util.Map;
 /**
  * Immutable, lock-free progress snapshot for a checkout sweep.
  *
- * <p>Swapped onto a {@code volatile} field so {@code /checkout_status} never
+ * <p>Swapped onto a {@code volatile} field so {@code /decompile_checkout_status} never
  * needs a lock. {@code statusRevision} is monotonic and is the bridge poller's
  * change key — bump it on every swap.
  *

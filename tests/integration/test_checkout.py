@@ -62,12 +62,12 @@ def require_server_and_checkout(server_available, server_url):
         if isinstance(t, dict)
     }
     required = {
-        "/checkout_create",
-        "/checkout_start",
-        "/checkout_status",
-        "/checkout_stop",
-        "/checkout_delete",
-        "/checkout_refresh",
+        "/decompile_checkout_create",
+        "/decompile_checkout_start",
+        "/decompile_checkout_status",
+        "/decompile_checkout_stop",
+        "/decompile_checkout_delete",
+        "/decompile_checkout_refresh",
     }
     missing = sorted(required - paths)
     if missing:
@@ -124,7 +124,7 @@ def _create(http_client, program_name, root: Path, **body_extra):
     body = {"root": str(root.resolve()), **body_extra}
     resp = _post_json(
         http_client,
-        "/checkout_create",
+        "/decompile_checkout_create",
         params={"program": program_name},
         body=body,
     )
@@ -137,7 +137,7 @@ def _create(http_client, program_name, root: Path, **body_extra):
 def _delete(http_client, checkout_id, *, delete_files=True):
     resp = _post_json(
         http_client,
-        "/checkout_delete",
+        "/decompile_checkout_delete",
         body={"checkout": checkout_id, "delete_files": delete_files},
     )
     # Already-gone is fine during teardown.
@@ -152,12 +152,12 @@ def _delete(http_client, checkout_id, *, delete_files=True):
 
 
 def _status(http_client, checkout_id):
-    return _get_json(http_client, "/checkout_status", params={"checkout": checkout_id})
+    return _get_json(http_client, "/decompile_checkout_status", params={"checkout": checkout_id})
 
 
 def _start(http_client, checkout_id):
     resp = _post_json(
-        http_client, "/checkout_start", body={"checkout": checkout_id}
+        http_client, "/decompile_checkout_start", body={"checkout": checkout_id}
     )
     assert resp.status_code == 200, resp.text[:500]
     data = resp.json()
@@ -167,7 +167,7 @@ def _start(http_client, checkout_id):
 
 def _stop(http_client, checkout_id):
     resp = _post_json(
-        http_client, "/checkout_stop", body={"checkout": checkout_id}
+        http_client, "/decompile_checkout_stop", body={"checkout": checkout_id}
     )
     assert resp.status_code == 200, resp.text[:500]
     data = resp.json()
@@ -534,7 +534,7 @@ class TestCheckoutRefresh:
         )
         refresh = _post_json(
             http_client,
-            "/checkout_refresh",
+            "/decompile_checkout_refresh",
             params={"program": program},
             body={"checkout": checkout_id, "addresses": addr_csv},
         )

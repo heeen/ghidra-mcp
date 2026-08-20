@@ -199,7 +199,7 @@ public final class CheckoutRegistry {
         }
         SweepJob job = activeJobs.get(checkoutId);
         if (job != null) {
-            job.requestCancel(reason != null ? reason : "cancelled by /checkout_stop");
+            job.requestCancel(reason != null ? reason : "cancelled by /decompile_checkout_stop");
         }
     }
 

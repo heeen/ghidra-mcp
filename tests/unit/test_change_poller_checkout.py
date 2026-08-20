@@ -25,7 +25,7 @@ def _run(coro):
 class TestProgramsFromUrisCheckout(unittest.TestCase):
     def test_checkout_id_is_not_treated_as_a_program(self):
         uris = {
-            "ghidra://checkout/co_7de33ad7",
+            "ghidra://decompile-checkout/co_7de33ad7",
             "ghidra://function/ls/001f4000",
             "ghidra://program/driver.dll/changes",
         }
@@ -35,13 +35,13 @@ class TestProgramsFromUrisCheckout(unittest.TestCase):
 
     def test_checkout_uris_extracts_only_checkout_resources(self):
         uris = {
-            "ghidra://checkout/co_aaa",
-            "ghidra://checkout/co_bbb/extra",  # not a template instance
+            "ghidra://decompile-checkout/co_aaa",
+            "ghidra://decompile-checkout/co_bbb/extra",  # not a template instance
             "ghidra://function/ls/001f4000",
         }
         self.assertEqual(
             change_poller._checkout_uris(uris),
-            {"ghidra://checkout/co_aaa"},
+            {"ghidra://decompile-checkout/co_aaa"},
         )
 
 
@@ -56,7 +56,7 @@ class TestCheckoutRevisionPolling(unittest.TestCase):
         change_poller.stop()
 
     def test_status_revision_move_emits_exactly_once(self):
-        uri = "ghidra://checkout/co_7de33ad7"
+        uri = "ghidra://decompile-checkout/co_7de33ad7"
         emitted: list[str] = []
         revisions = iter([10, 11, 11])
 
@@ -94,7 +94,7 @@ class TestCheckoutRevisionPolling(unittest.TestCase):
         self.assertEqual(emitted, [uri])
 
     def test_unchanged_revision_emits_nothing(self):
-        uri = "ghidra://checkout/co_7de33ad7"
+        uri = "ghidra://decompile-checkout/co_7de33ad7"
         emitted: list[str] = []
 
         async def fake_fetch(u):
@@ -146,10 +146,10 @@ class TestCheckoutRevisionPolling(unittest.TestCase):
                 side_effect=lambda func, *a, **kw: func(),
             ):
                 rev = await change_poller._fetch_checkout_revision(
-                    "ghidra://checkout/co_x"
+                    "ghidra://decompile-checkout/co_x"
                 )
             self.assertEqual(rev, 7)
-            self.assertEqual(captured["endpoint"], "/checkout_status")
+            self.assertEqual(captured["endpoint"], "/decompile_checkout_status")
             self.assertEqual(captured["params"], {"checkout": "co_x"})
 
         _run(body())

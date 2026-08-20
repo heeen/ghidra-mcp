@@ -53,8 +53,8 @@ import java.util.stream.Stream;
 public class CheckoutService {
 
     private static final int ADOPT_SCAN_CAP = 64;
-    private static final String RESOURCE_URI_PREFIX = "ghidra://checkout/";
-    private static final String POLL_PATH = "/checkout_status";
+    private static final String RESOURCE_URI_PREFIX = "ghidra://decompile-checkout/";
+    private static final String POLL_PATH = "/decompile_checkout_status";
 
     private final ProgramProvider programProvider;
 
@@ -63,16 +63,18 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_status — READ_ONLY poll target
+    // /decompile_checkout_status — READ_ONLY poll target
     // =========================================================================
 
-    @McpTool(path = "/checkout_status", method = "GET",
-        description = "Report checkout status and config. Optional checkout selector "
-            + "(id, program name, or domain path). With no selector, lists registered "
-            + "checkouts and scans the default parent for adoptable on-disk trees. "
-            + "Never errors when the program is closed or the root is missing — "
-            + "reports program:\"closed\" / root_present:false instead.",
-        category = "checkout", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/decompile_checkout_status", method = "GET",
+        description = "Status, config and root path of a decompilation checkout — poll "
+            + "this after decompile_checkout_start, then Grep the reported root. READ_ONLY, "
+            + "so it is safe to call while planning. Reports phase, progress, and freshness "
+            + "against the live program. Never errors when the program is closed or the root "
+            + "is missing — reports program:\"closed\" / root_present:false instead, because "
+            + "that is exactly when you are asking. With no selector, lists every checkout "
+            + "plus adoptable trees found on disk.",
+        category = "decompile-checkout", access = ToolAccess.READ_ONLY)
     public Response checkoutStatus(
             @Param(value = "checkout", defaultValue = "",
                    description = "Checkout id, program name, or domain path. "
@@ -107,15 +109,19 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_create — WRITE, no sweep
+    // /decompile_checkout_create — WRITE, no sweep
     // =========================================================================
 
-    @McpTool(path = "/checkout_create", method = "POST",
-        description = "Register a decompilation checkout and write checkout.json / "
-            + "STATUS.md under the root. Does not sweep. If checkout.json already "
-            + "exists under the derived root, adopts it (adopted:true) and reconciles "
-            + "swept_at_modification_number against the live program.",
-        category = "checkout", access = ToolAccess.WRITE)
+    @McpTool(path = "/decompile_checkout_create", method = "POST",
+        description = "Create a decompilation checkout: a program's decompiled C "
+            + "materialised as a file tree you can Grep and Glob. Use this when you need "
+            + "corpus-wide search — 'which functions reference this string, constant or "
+            + "peripheral' — which is impractical one function at a time. Registers the "
+            + "checkout and writes checkout.json / STATUS.md; does NOT sweep (call "
+            + "decompile_checkout_start). Adopts an existing tree at the derived root, "
+            + "reconciling swept_at_modification_number against the live program. "
+            + "Unrelated to Ghidra version-control checkouts (/server/version_control/*).",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutCreate(
             @Param(value = "program", defaultValue = "",
                    description = "Target program name (omit for the active program).")
@@ -204,15 +210,19 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_configure — WRITE, persist + classify only (no delete/resweep)
+    // /decompile_checkout_configure — WRITE, persist + classify only (no delete/resweep)
     // =========================================================================
 
-    @McpTool(path = "/checkout_configure", method = "POST",
-        description = "Update checkout configuration (all optional). Classifies the change "
-            + "and acts: narrowing deletes now-out-of-scope function bodies immediately; "
-            + "widening marks phase STALE with pending_functions (no auto-sweep); "
-            + "repartitioning sets requires_full_resweep and STALE. Never starts a sweep.",
-        category = "checkout", access = ToolAccess.WRITE)
+    @McpTool(path = "/decompile_checkout_configure", method = "POST",
+        description = "Change a checkout's configuration: exclusions (tag: / partition: / "
+            + "range:), enabled strategies, band size, max file bytes, throttle. Exclusions "
+            + "are how you keep library code out of the tree — on a driver DLL, excluding two "
+            + "CRT compartments took it from 3,230 functions to 2,036. Classifies the change "
+            + "and acts on it: narrowing deletes now-out-of-scope bodies immediately (leaving "
+            + "them would be a lie a Grep would still hit); widening marks STALE with "
+            + "pending_functions; repartitioning sets requires_full_resweep. Never starts a "
+            + "sweep.",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutConfigure(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -353,13 +363,16 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_start — WRITE, enqueue SweepJob
+    // /decompile_checkout_start — WRITE, enqueue SweepJob
     // =========================================================================
 
-    @McpTool(path = "/checkout_start", method = "POST",
-        description = "Enqueue a checkout sweep. Returns immediately with phase queued "
-            + "and the resource URI to poll via /checkout_status.",
-        category = "checkout", access = ToolAccess.WRITE)
+    @McpTool(path = "/decompile_checkout_start", method = "POST",
+        description = "Enqueue the sweep that fills a checkout's tree, then poll "
+            + "decompile_checkout_status. Returns in milliseconds with phase queued and the "
+            + "resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and "
+            + "to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for "
+            + "a 3,200-function driver DLL, ~11 min for a 25,000-function static binary.",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutStart(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -399,13 +412,15 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_stop — WRITE, idempotent
+    // /decompile_checkout_stop — WRITE, idempotent
     // =========================================================================
 
-    @McpTool(path = "/checkout_stop", method = "POST",
-        description = "Cancel a queued or running checkout sweep. Idempotent: stopping "
-            + "an idle/complete checkout is success, not an error.",
-        category = "checkout", access = ToolAccess.WRITE)
+    @McpTool(path = "/decompile_checkout_stop", method = "POST",
+        description = "Cancel a queued or running sweep. Idempotent — stopping an idle or "
+            + "complete checkout is success, not an error. The partial tree is left in place "
+            + "and STATUS.md records state: cancelled, so whatever was already written stays "
+            + "safe to Grep.",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutStop(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -426,10 +441,10 @@ public class CheckoutService {
                 || phase == SweepProgress.Phase.DECOMPILING) {
             // Flag + stopProcess on the in-flight decompile — do not wait out the timeout.
             CheckoutRegistry.getInstance()
-                    .cancelSweep(checkout.id(), "cancelled by /checkout_stop");
+                    .cancelSweep(checkout.id(), "cancelled by /decompile_checkout_stop");
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.CANCELLED)
-                    .withLastError("cancelled by /checkout_stop"));
+                    .withLastError("cancelled by /decompile_checkout_stop"));
             cancelled = true;
             try {
                 CheckoutStatusMd.write(checkout, "cancelled", null);
@@ -445,16 +460,19 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_refresh — WRITE, splice blocks (never rewrite whole partitions)
+    // /decompile_checkout_refresh — WRITE, splice blocks (never rewrite whole partitions)
     // =========================================================================
 
-    @McpTool(path = "/checkout_refresh", method = "POST",
-        description = "Re-decompile specific functions and splice their blocks into the "
-            + "checkout tree without rewriting whole partition files. Addresses not in "
-            + "the tree are skipped (not errors). mark_stale=true marks the checkout "
-            + "STALE without splicing — for unbounded program edits. Returns busy when "
-            + "a sweep is running. Filesystem-only: does not mutate program state.",
-        category = "checkout", access = ToolAccess.WRITE)
+    @McpTool(path = "/decompile_checkout_refresh", method = "POST",
+        description = "Re-decompile specific functions and splice their blocks into an "
+            + "existing tree, so renaming a symbol or adding a plate comment does not leave "
+            + "the tree asserting names it no longer uses. A rename rewrites every CALLER's "
+            + "text too, so pass the callers as well as the target. Splices blocks rather "
+            + "than rewriting whole files — a compartment can hold hundreds of functions. "
+            + "Addresses not in the tree are skipped, not errors; mark_stale=true marks the "
+            + "checkout stale instead, for bulk edits like reanalyze. Filesystem-only: does "
+            + "not mutate program state.",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutRefresh(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -529,13 +547,14 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /checkout_delete — DESTRUCTIVE
+    // /decompile_checkout_delete — DESTRUCTIVE
     // =========================================================================
 
-    @McpTool(path = "/checkout_delete", method = "POST",
-        description = "Deregister a checkout. With delete_files=true, also removes the "
-            + "on-disk tree (containment-checked).",
-        category = "checkout", access = ToolAccess.DESTRUCTIVE)
+    @McpTool(path = "/decompile_checkout_delete", method = "POST",
+        description = "Deregister a checkout; with delete_files=true also remove its "
+            + "on-disk tree (containment-checked). The program itself is untouched — this "
+            + "only removes generated files.",
+        category = "decompile-checkout", access = ToolAccess.DESTRUCTIVE)
     public Response checkoutDelete(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -994,7 +1013,7 @@ public class CheckoutService {
                 checkout.setProgress(checkout.progress()
                         .withPhase(SweepProgress.Phase.STALE)
                         .withLastError(
-                                "config repartitions compartments; /checkout_start will wipe "
+                                "config repartitions compartments; /decompile_checkout_start will wipe "
                                         + "modules/ and rewrite"));
                 out.put("action", "marked_stale_full_resweep");
                 out.put("requires_full_resweep", true);

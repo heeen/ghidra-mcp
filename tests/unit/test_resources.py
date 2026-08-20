@@ -92,12 +92,12 @@ class TestResourceRegistration(unittest.TestCase):
         self.assertIn("ghidra://function/{program}/by-name/{name}", uris)
         self.assertIn("ghidra://search/{program}/functions/{pattern}", uris)
         self.assertIn("ghidra://program/{program}/changes", uris)
-        self.assertIn("ghidra://checkout/{checkout_id}", uris)
+        self.assertIn("ghidra://decompile-checkout/{checkout_id}", uris)
 
     def test_checkout_template_is_markdown(self):
         for template in mcp._resource_manager.list_templates():
             uri = str(getattr(template, "uriTemplate", None) or template.uri_template)
-            if uri == "ghidra://checkout/{checkout_id}":
+            if uri == "ghidra://decompile-checkout/{checkout_id}":
                 self.assertEqual(template.mime_type, "text/markdown")
                 break
         else:
@@ -124,7 +124,7 @@ class TestResourceHandlers(unittest.TestCase):
         self.assertIn("function_by_address", body["uri_contract"])
         self.assertEqual(
             body["uri_contract"]["checkouts"],
-            "ghidra://checkout/{checkout_id}",
+            "ghidra://decompile-checkout/{checkout_id}",
         )
 
     def test_changes_resource_publishes_the_token_and_its_caveats(self):
@@ -301,7 +301,7 @@ class TestResourceHandlers(unittest.TestCase):
             "functions_failed": 0,
             "bytes_written": 5886248,
             "status_revision": 311,
-            "resource_uri": "ghidra://checkout/co_7de33ad7",
+            "resource_uri": "ghidra://decompile-checkout/co_7de33ad7",
             "config": {
                 "enabled_strategies": [],
                 "band_size": 20,
@@ -317,7 +317,7 @@ class TestResourceHandlers(unittest.TestCase):
         }
 
         async def fake_read(endpoint, **params):
-            self.assertEqual(endpoint, "/checkout_status")
+            self.assertEqual(endpoint, "/decompile_checkout_status")
             self.assertEqual(params.get("checkout"), "co_7de33ad7")
             return json.dumps(payload)
 
@@ -328,7 +328,7 @@ class TestResourceHandlers(unittest.TestCase):
             "bridge_mcp_ghidra.resources.subscriptions.note_resource_read",
         ) as note:
             body = _run(checkout_resource("co_7de33ad7"))
-        note.assert_called_once_with("ghidra://checkout/co_7de33ad7")
+        note.assert_called_once_with("ghidra://decompile-checkout/co_7de33ad7")
         self.assertTrue(body.startswith("# Checkout co_7de33ad7"))
         self.assertIn("## Status", body)
         self.assertIn("## How to read this checkout", body)
