@@ -62,6 +62,7 @@ public class HeadlessEndpointHandler {
     private final com.xebyte.core.FunctionBundleService functionBundleService;
     private final com.xebyte.core.TypeReferenceService typeReferenceService;
     private final com.xebyte.core.ChangeTokenService changeTokenService;
+    private final com.xebyte.core.PartitionService partitionService;
 
     public HeadlessEndpointHandler(ProgramProvider programProvider, ThreadingStrategy threadingStrategy) {
         this.programProvider = programProvider;
@@ -84,6 +85,7 @@ public class HeadlessEndpointHandler {
         this.functionBundleService = new com.xebyte.core.FunctionBundleService(programProvider, threadingStrategy, this.functionService);
         this.typeReferenceService = new com.xebyte.core.TypeReferenceService(programProvider);
         this.changeTokenService = new com.xebyte.core.ChangeTokenService(programProvider);
+        this.partitionService = new com.xebyte.core.PartitionService(programProvider);
     }
 
     // ==========================================================================
@@ -104,6 +106,7 @@ public class HeadlessEndpointHandler {
     public com.xebyte.core.FunctionBundleService getFunctionBundleService() { return functionBundleService; }
     public com.xebyte.core.TypeReferenceService getTypeReferenceService() { return typeReferenceService; }
     public com.xebyte.core.ChangeTokenService getChangeTokenService() { return changeTokenService; }
+    public com.xebyte.core.PartitionService getPartitionService() { return partitionService; }
     public ProgramProvider getProgramProvider() { return programProvider; }
 
     // ==========================================================================

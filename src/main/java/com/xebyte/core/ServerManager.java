@@ -74,6 +74,7 @@ public class ServerManager {
             FunctionBundleService functionBundleService = new FunctionBundleService(programProvider, ts, functionService);
             TypeReferenceService typeReferenceService = new TypeReferenceService(programProvider);
             ChangeTokenService changeTokenService = new ChangeTokenService(programProvider);
+            PartitionService partitionService = new PartitionService(programProvider);
             // These three existed only on GhidraMCPPlugin's own legacy server, which
             // nothing starts by default — so P-code emulation, the debugger and the
             // modal-prompt policy were unreachable over UDS *and* over the TCP port
@@ -89,7 +90,7 @@ public class ServerManager {
                 listingService, functionService, commentService, symbolLabelService,
                 xrefCallGraphService, dataTypeService, analysisService,
                 documentationHashService, malwareSecurityService, programScriptService,
-                functionBundleService, typeReferenceService, changeTokenService,
+                functionBundleService, typeReferenceService, changeTokenService, partitionService,
                 emulationService, debuggerService, promptPolicyService);
 
             startServer(scanner, guiEndpoints);
