@@ -1,0 +1,155 @@
+package com.xebyte.core;
+
+import com.xebyte.core.partition.AddressBandPartitioner;
+import com.xebyte.core.partition.LiteralLocalityPartitioner;
+import com.xebyte.core.partition.MmioPagePartitioner;
+import com.xebyte.core.partition.Partition;
+import com.xebyte.core.partition.PartitionCascade;
+import com.xebyte.core.partition.PartitionContext;
+import com.xebyte.core.partition.Partitioner;
+import com.xebyte.core.partition.QualifiedNamePartitioner;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Program;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Structural partitioning of a program into compartments, with the evidence.
+ *
+ * <p>Feeds the decompilation checkout, whose entry point is a table of compartments
+ * rather than a flat directory of thousands of functions: an agent has to be able
+ * to rule out whole regions before decompiling any of them. On a Windows driver the
+ * two library compartments were 42% of the binary and were identifiable from their
+ * referenced strings alone.
+ *
+ * <p>Nothing here interprets. Slugs are machine-generated ({@code c05}, never
+ * {@code crypto}) and every partition carries the rule that formed it plus the
+ * evidence, because a group seeded by a class name at member-density 1.00 is a very
+ * different claim from a fixed address band. Naming is left to whoever reads the
+ * evidence afterwards.
+ *
+ * <p><b>Threading:</b> runs on the calling HTTP worker thread — one full pass over
+ * every instruction in the program. Do <em>not</em> wrap this in
+ * {@code threadingStrategy.executeRead}; in GUI mode that hops onto the EDT. Same
+ * rule as {@link TypeReferenceService}.
+ *
+ * @since 7.2.0
+ */
+public class PartitionService {
+
+    /** ~20 functions at a measured mean of 1,564 bytes of C is about one comfortable read. */
+    private static final int DEFAULT_BAND_SIZE = 20;
+    private static final int MAX_PARTITIONS_REPORTED = 400;
+    private static final int SAMPLE_TOKENS = 5;
+
+    private final ProgramProvider programProvider;
+
+    public PartitionService(ProgramProvider programProvider) {
+        this.programProvider = programProvider;
+    }
+
+    @McpTool(path = "/partition_program",
+        description = "Group a program's functions into compartments using a cascade of "
+            + "structural strategies (class names in log strings, peripheral register pages, "
+            + "linker literal locality, address banding), reporting for each partition the rule "
+            + "that formed it and the evidence. Read-only: reports the partitioning, does not "
+            + "write the Program Tree. Runs off the EDT; costs one pass over every instruction.",
+        category = "analysis", access = ToolAccess.READ_ONLY)
+    public Response partitionProgram(
+            @Param(value = "band_size", defaultValue = "20",
+                   description = "Functions per file for the address-band fallback.") int bandSize,
+            @Param(value = "min_size", defaultValue = "1",
+                   description = "Omit partitions smaller than this from the response.") int minSize,
+            @Param(value = "strategies", defaultValue = "",
+                   description = "Comma-separated subset of strategy names to run "
+                       + "(qualified-name, mmio-page, literal-locality, address-band). "
+                       + "Omit to run the full cascade.") String strategies,
+            @Param(value = "program", defaultValue = "",
+                   description = "Target program name (omit for the active program).") String programName) {
+
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        List<Partitioner> chain = buildChain(bandSize, strategies);
+        if (chain.isEmpty()) {
+            return Response.err("No known strategy named in 'strategies': " + strategies);
+        }
+
+        long started = System.nanoTime();
+        PartitionContext ctx = new PartitionContext(program);
+        if (ctx.size() == 0) {
+            return Response.err("Program has no eligible functions (all external, thunk, or undefined)");
+        }
+        PartitionCascade.Result result = new PartitionCascade(chain).run(ctx);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+
+        List<Partition> ranked = new ArrayList<>(result.partitions());
+        ranked.sort(Comparator.comparingInt(Partition::size).reversed());
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Partition p : ranked) {
+            if (p.size() < minSize) continue;
+            if (rows.size() >= MAX_PARTITIONS_REPORTED) break;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("slug", p.slug());
+            row.put("method", p.method());
+            row.put("functions", p.size());
+            row.put("confidence", p.confidence());
+            row.put("first_address", ServiceUtils.addressToJson(p.members().get(0).getEntryPoint(), program));
+            row.putAll(p.evidence());
+            row.put("sample", sampleNames(p));
+            rows.add(row);
+        }
+
+        PartitionContext.LiteralIndex li = ctx.literals();
+        Map<String, Object> signal = new LinkedHashMap<>();
+        signal.put("functions_referencing_strings", li.functionsWithStrings());
+        signal.put("functions_referencing_high_constants", li.functionsWithPages());
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("program", program.getName());
+        out.put("eligible_functions", ctx.size());
+        out.put("assigned_functions", result.assignedFunctions());
+        out.put("partitions", rows);
+        out.put("partition_count", result.partitions().size());
+        out.put("partitions_reported", rows.size());
+        out.put("signal_coverage", signal);
+        out.put("strategies", result.strategyLog());
+        out.put("elapsed_ms", elapsedMs);
+        return Response.ok(out);
+    }
+
+    private List<Partitioner> buildChain(int bandSize, String strategies) {
+        int band = bandSize > 0 ? bandSize : DEFAULT_BAND_SIZE;
+        List<Partitioner> all = List.of(
+                new QualifiedNamePartitioner(),
+                new MmioPagePartitioner(),
+                new LiteralLocalityPartitioner(),
+                new AddressBandPartitioner(band));
+        if (strategies == null || strategies.isBlank()) return all;
+
+        List<String> wanted = new ArrayList<>();
+        for (String s : strategies.split(",")) {
+            String t = s.trim();
+            if (!t.isEmpty()) wanted.add(t);
+        }
+        List<Partitioner> chosen = new ArrayList<>();
+        for (Partitioner p : all) if (wanted.contains(p.name())) chosen.add(p);
+        return chosen;
+    }
+
+    /** A few member names, so a row is recognisable without opening the compartment. */
+    private List<String> sampleNames(Partition p) {
+        List<String> out = new ArrayList<>();
+        for (Function f : p.members()) {
+            if (out.size() >= SAMPLE_TOKENS) break;
+            out.add(f.getName());
+        }
+        return out;
+    }
+}
