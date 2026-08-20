@@ -1,5 +1,6 @@
 package com.xebyte.core;
 
+import com.xebyte.core.checkout.BlockSplicer;
 import com.xebyte.core.checkout.Checkout;
 import com.xebyte.core.checkout.CheckoutConfig;
 import com.xebyte.core.checkout.CheckoutKey;
@@ -427,6 +428,90 @@ public class CheckoutService {
         out.put("cancelled", cancelled);
         out.put("idempotent", !cancelled);
         return Response.ok(out);
+    }
+
+    // =========================================================================
+    // /checkout_refresh — WRITE, splice blocks (never rewrite whole partitions)
+    // =========================================================================
+
+    @McpTool(path = "/checkout_refresh", method = "POST",
+        description = "Re-decompile specific functions and splice their blocks into the "
+            + "checkout tree without rewriting whole partition files. Addresses not in "
+            + "the tree are skipped (not errors). mark_stale=true marks the checkout "
+            + "STALE without splicing — for unbounded program edits. Returns busy when "
+            + "a sweep is running. Filesystem-only: does not mutate program state.",
+        category = "checkout", access = ToolAccess.WRITE)
+    public Response checkoutRefresh(
+            @Param(value = "checkout", source = ParamSource.BODY,
+                   description = "Checkout id, program name, or domain path.")
+            String checkoutSelector,
+            @Param(value = "addresses", source = ParamSource.BODY, defaultValue = "",
+                   description = "CSV of function entry addresses to refresh. Required "
+                       + "unless mark_stale=true.")
+            String addresses,
+            @Param(value = "mark_stale", source = ParamSource.BODY, defaultValue = "false",
+                   description = "When true, mark the checkout STALE and skip splicing "
+                       + "(UNBOUNDED program edits are not a refresh).")
+            boolean markStale,
+            @Param(value = "program", defaultValue = "",
+                   description = "Target program name (omit for the active program).")
+            String programName) {
+
+        CheckoutRegistry.ResolveResult resolved =
+                CheckoutRegistry.getInstance().resolve(checkoutSelector);
+        if (!resolved.isOk()) {
+            return Response.err(resolved.error());
+        }
+        Checkout checkout = resolved.checkout();
+        SweepProgress.Phase phase = checkout.progress().phase();
+        String phaseName = phase.name().toLowerCase(Locale.ROOT);
+
+        if (phase == SweepProgress.Phase.QUEUED
+                || phase == SweepProgress.Phase.WAITING_FOR_ANALYSIS
+                || phase == SweepProgress.Phase.PARTITIONING
+                || phase == SweepProgress.Phase.DECOMPILING) {
+            // Sweep will produce fresh text — racing it would corrupt mid-write files.
+            Map<String, Object> busy = BlockSplicer.RefreshResult.of(
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    0, 0L, false).toMap(checkout.id(), true, phaseName);
+            busy.put("reason", "sweep_in_progress");
+            return Response.ok(busy);
+        }
+
+        if (markStale) {
+            try {
+                BlockSplicer.RefreshResult result = BlockSplicer.markStale(checkout);
+                return Response.ok(result.toMap(checkout.id(), false, "stale"));
+            } catch (IOException e) {
+                return Response.err("checkout mark_stale failed: " + e.getMessage());
+            }
+        }
+
+        List<String> addrList = parseCsvTokens(addresses);
+        if (addrList.isEmpty()) {
+            return Response.err("addresses is required (CSV of function entry addresses)");
+        }
+
+        Program live = findOpenProgram(checkout);
+        if (live == null || live.isClosed()) {
+            // Prefer the explicit program param when the checkout's domain is closed
+            // but another view of the same binary is open under a different name.
+            ServiceUtils.ProgramOrError pe =
+                    ServiceUtils.getProgramOrError(programProvider, programName);
+            if (pe.hasError()) {
+                return Response.err("program is closed; cannot refresh checkout");
+            }
+            live = pe.program();
+        }
+
+        try {
+            BlockSplicer.RefreshResult result = BlockSplicer.refresh(checkout, live, addrList);
+            return Response.ok(result.toMap(
+                    checkout.id(), false,
+                    checkout.progress().phase().name().toLowerCase(Locale.ROOT)));
+        } catch (IOException e) {
+            return Response.err("checkout refresh failed: " + e.getMessage());
+        }
     }
 
     // =========================================================================
