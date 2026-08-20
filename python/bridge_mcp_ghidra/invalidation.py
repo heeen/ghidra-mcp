@@ -55,6 +55,13 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/delete_bookmark": InvalidationTier.NONE,
     "/archive_ingest_function": InvalidationTier.NONE,
     "/archive_ingest_program": InvalidationTier.NONE,
+    # Checkout writes mutate the host filesystem only — never program state — so
+    # no ghidra://function or ghidra://program body moves.
+    "/checkout_create": InvalidationTier.NONE,
+    "/checkout_configure": InvalidationTier.NONE,
+    "/checkout_start": InvalidationTier.NONE,
+    "/checkout_stop": InvalidationTier.NONE,
+    "/checkout_delete": InvalidationTier.NONE,
     # Debugger writes land in a trace, never in the program database.
     "/debugger/launch": InvalidationTier.NONE,
     "/debugger/set_breakpoint": InvalidationTier.NONE,

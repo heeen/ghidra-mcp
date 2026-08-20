@@ -3,6 +3,7 @@ package com.xebyte.offline;
 import com.xebyte.core.AnalysisService;
 import com.xebyte.core.BinaryComparisonService;
 import com.xebyte.core.ChangeTokenService;
+import com.xebyte.core.CheckoutService;
 import com.xebyte.core.PartitionService;
 import com.xebyte.core.CommentService;
 import com.xebyte.core.DataTypeService;
@@ -73,6 +74,7 @@ public final class ServiceFactory {
         TypeReferenceService typeReferenceService = new TypeReferenceService(provider);
         ChangeTokenService changeTokenService = new ChangeTokenService(provider);
         PartitionService partitionService = new PartitionService(provider);
+        CheckoutService checkoutService = new CheckoutService(provider);
 
         return new Object[] {
             listingService,
@@ -93,6 +95,7 @@ public final class ServiceFactory {
             typeReferenceService,
             changeTokenService,
             partitionService,
+            checkoutService,
         };
     }
 
