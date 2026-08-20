@@ -474,6 +474,73 @@ They register when: running on Windows, `GHIDRA_DEBUGGER_URL` points at a remote
 Use either family for: ground-truth validation after static analysis. After emulation
 resolves a hash, set a breakpoint on the resolved API and confirm the process calls it.
 
+## Decompilation checkout (v7.2.0+)
+
+Materialise a program's decompilation into a partitioned on-disk tree, then search
+it with the client's own `Grep` / `Read` / `Glob`. That turns corpus questions
+("which functions touch this MMIO page", "where does this constant appear") into
+one search instead of one MCP round trip per function.
+
+### Workflow
+
+```text
+1. checkout_create(program=..., root=..., exclusions=[...])   # registers; no sweep
+2. checkout_start(checkout=...)                               # returns in ms with resource_uri
+3. Poll checkout_status(checkout=...) until phase=complete    # or read STATUS.md on disk
+4. Grep / Read / Glob under <root>/modules/                   # the tree is the corpus
+5. For a hit: read the file header's uri: ghidra://function/<program>/<address>
+   then resources/read that URI for callers and call-site context
+```
+
+Create and start are separate on purpose: config changes must not silently launch
+a multi-minute sweep. `checkout_status` is READ_ONLY so it stays usable in plan
+mode; the five write paths (`create` / `configure` / `start` / `stop` / `delete`)
+are not.
+
+`STATUS.md` in the checkout root answers "is this tree trustworthy?" with **zero
+Ghidra calls**. `state: dirty` means a sweep did not finish (crash, cancel, or
+still running) — do not Grep a dirty tree as if it were complete.
+
+### Measured sweep cost
+
+| Specimen | Functions | Time | Tree |
+| --- | --- | --- | --- |
+| blender ARM firmware | 677 | 4 s | 773 KB |
+| `synaWudfBioUsb.dll` | 3,230 | 18–28 s | 5.6 MB |
+| `ls` (static stripped ELF) | 25,231 | 669 s | 45 MB |
+
+Excluding two library compartments on the DLL: 3,230 → 2,036 functions, ~7 MB →
+5 MB, 28 s → 20 s. Prefer `tag:` / `partition:` exclusions after reading
+`modules/index.md` over decompiling library code you will never Grep.
+
+`decompile_timeout_seconds` is the wall-time knob. On `ls`, 8 pathological
+functions each hit the 30 s timeout and accounted for 240 s of the 669 s total —
+lowering the timeout bounds the damage; raising it does not make those functions
+finish faster.
+
+### The tree is the corpus; the resource is the microscope
+
+Every `.c` file header carries `uri: ghidra://function/<program>/<address>`.
+Grep finds the hit; that URI is how you pull callers and call-site context
+afterwards. Do not re-decompile via tools just to re-read what the header already
+points at.
+
+The MCP resource `ghidra://checkout/{checkout_id}` is status/config prose (phase,
+exclusions, compartment table, Glob/Grep incantations) — not a substitute for
+searching the files.
+
+### Two caveats an agent will otherwise hit
+
+1. **Stripped binaries make name-based Grep useless.** `ls` has 12 real names out
+   of 25,231 functions, so grepping for `__memmove_avx` finds nothing. Grep for
+   **strings and constants** instead — that is also the signal the partitioner
+   uses (`literal-locality` / string evidence in compartment READMEs).
+
+2. **Peripheral / MMIO addresses render as negative signed literals** in the
+   decompiled C (`-0x36000000` is `0xCA000000`). Grepping a peripheral by its
+   natural hex form finds nothing. The compartment `README.md` is the index for
+   those addresses, not Grep.
+
 ## Function Tagging
 
 Lightweight per-function labels (program-wide tag definitions, attached to any function). Useful for carving curated subsets across long analysis sessions — e.g. `crypto`, `parser`, `reviewed`, `todo`, `imported-from-dll`. Tags are stored in the Ghidra DB so they roundtrip through save/checkin and survive across sessions.
