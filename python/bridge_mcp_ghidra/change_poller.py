@@ -143,12 +143,12 @@ async def _fetch_token(program: str) -> int | None:
 
 
 async def _fetch_checkout_revision(uri: str) -> int | None:
-    checkout_id = uri[len("ghidra://checkout/") :]
+    checkout_id = uri[len("ghidra://decompile-checkout/") :]
     try:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
                 dispatch.dispatch_get(
-                    "/checkout_status", params={"checkout": checkout_id}
+                    "/decompile_checkout_status", params={"checkout": checkout_id}
                 )
             )
         )
@@ -156,7 +156,7 @@ async def _fetch_checkout_revision(uri: str) -> int | None:
         if isinstance(payload, dict) and "status_revision" in payload:
             return int(payload["status_revision"])
     except Exception as e:
-        logger.debug("checkout_status(%s) failed: %s", checkout_id, e)
+        logger.debug("decompile_checkout_status(%s) failed: %s", checkout_id, e)
     return None
 
 
@@ -185,7 +185,7 @@ def _programs_from_uris(uris: set[str]) -> set[str]:
         parts = rest.split("/")
         if len(parts) < 2:
             continue
-        # Segment 2 of ghidra://checkout/<id> is the id, not a program —
+        # Segment 2 of ghidra://decompile-checkout/<id> is the id, not a program —
         # treating it as one would burn /get_change_token every cycle.
         if parts[0] == "checkout":
             continue
@@ -195,9 +195,9 @@ def _programs_from_uris(uris: set[str]) -> set[str]:
 
 
 def _checkout_uris(uris: set[str]) -> set[str]:
-    """Known ``ghidra://checkout/{id}`` URIs (no deeper path)."""
+    """Known ``ghidra://decompile-checkout/{id}`` URIs (no deeper path)."""
     out: set[str] = set()
-    prefix = "ghidra://checkout/"
+    prefix = "ghidra://decompile-checkout/"
     for uri in uris:
         if not uri.startswith(prefix):
             continue

@@ -17,7 +17,7 @@ import java.util.Set;
 /**
  * Single answer to "is this function in scope for this checkout?".
  *
- * <p>Sweep and {@code /checkout_configure} both call here so they cannot disagree.
+ * <p>Sweep and {@code /decompile_checkout_configure} both call here so they cannot disagree.
  * PARTITION rules need a slug from the cascade — callers must not evaluate them
  * before partitioning. TAG/RANGE need only the function (and a compiled range).
  *

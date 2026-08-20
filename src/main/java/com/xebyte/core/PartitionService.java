@@ -47,11 +47,15 @@ public class PartitionService {
     }
 
     @McpTool(path = "/partition_program",
-        description = "Group a program's functions into compartments using a cascade of "
-            + "structural strategies (class names in log strings, peripheral register pages, "
-            + "linker literal locality, address banding), reporting for each partition the rule "
-            + "that formed it and the evidence. Read-only: reports the partitioning, does not "
-            + "write the Program Tree. Runs off the EDT; costs one pass over every instruction.",
+        description = "Group a program's functions into compartments so you can decide which "
+            + "regions to ignore before reading any of them — on a driver DLL the two library "
+            + "compartments were 42% of the binary and identifiable from their referenced "
+            + "strings alone. Uses a cascade of structural strategies (class names in log "
+            + "strings, peripheral register pages, linker literal locality, address banding); "
+            + "each reports whether it applied and why, and every partition carries the "
+            + "evidence that formed it. Slugs are machine-generated and assert nothing about "
+            + "content. Read-only: reports the partitioning, does not write the Program Tree. "
+            + "Runs off the EDT; costs one pass over every instruction.",
         category = "analysis", access = ToolAccess.READ_ONLY)
     public Response partitionProgram(
             @Param(value = "band_size", defaultValue = "20",

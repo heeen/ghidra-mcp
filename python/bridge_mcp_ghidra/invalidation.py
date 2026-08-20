@@ -12,7 +12,7 @@ NONE is for writes no resource body reports — saving above all, which happens
 after nearly every other write.
 
 Checkout trees are kept honest by a second consumer of the same blast radius:
-``/checkout_refresh`` splices only the affected blocks. That path must NOT inherit
+``/decompile_checkout_refresh`` splices only the affected blocks. That path must NOT inherit
 the notification caps (64-URI fan-out, interest intersection) — those are correct
 for SSE noise and a silent correctness bug for on-disk files.
 """
@@ -65,12 +65,12 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/archive_ingest_program": InvalidationTier.NONE,
     # Checkout writes mutate the host filesystem only — never program state — so
     # no ghidra://function or ghidra://program body moves.
-    "/checkout_create": InvalidationTier.NONE,
-    "/checkout_configure": InvalidationTier.NONE,
-    "/checkout_start": InvalidationTier.NONE,
-    "/checkout_stop": InvalidationTier.NONE,
-    "/checkout_delete": InvalidationTier.NONE,
-    "/checkout_refresh": InvalidationTier.NONE,
+    "/decompile_checkout_create": InvalidationTier.NONE,
+    "/decompile_checkout_configure": InvalidationTier.NONE,
+    "/decompile_checkout_start": InvalidationTier.NONE,
+    "/decompile_checkout_stop": InvalidationTier.NONE,
+    "/decompile_checkout_delete": InvalidationTier.NONE,
+    "/decompile_checkout_refresh": InvalidationTier.NONE,
     # Debugger writes land in a trace, never in the program database.
     "/debugger/launch": InvalidationTier.NONE,
     "/debugger/set_breakpoint": InvalidationTier.NONE,
@@ -175,12 +175,12 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
 # NONE early-return — rides the write's own request so related_request_id still
 # reaches a streamable-HTTP client before its SSE stream is torn down.
 _CHECKOUT_WRITE_ENDPOINTS = frozenset({
-    "/checkout_create",
-    "/checkout_configure",
-    "/checkout_start",
-    "/checkout_stop",
-    "/checkout_delete",
-    "/checkout_refresh",
+    "/decompile_checkout_create",
+    "/decompile_checkout_configure",
+    "/decompile_checkout_start",
+    "/decompile_checkout_stop",
+    "/decompile_checkout_delete",
+    "/decompile_checkout_refresh",
 })
 
 
@@ -277,14 +277,14 @@ def _checkout_uri_from_write(kwargs: dict, result: str) -> str | None:
             payload = None
         if isinstance(payload, dict):
             uri = payload.get("resource_uri")
-            if isinstance(uri, str) and uri.startswith("ghidra://checkout/"):
+            if isinstance(uri, str) and uri.startswith("ghidra://decompile-checkout/"):
                 return uri
             cid = payload.get("checkout_id")
             if cid:
-                return f"ghidra://checkout/{cid}"
+                return f"ghidra://decompile-checkout/{cid}"
     selector = kwargs.get("checkout")
     if isinstance(selector, str) and selector.startswith("co_"):
-        return f"ghidra://checkout/{selector}"
+        return f"ghidra://decompile-checkout/{selector}"
     return None
 
 
@@ -441,7 +441,7 @@ async def _refresh_checkout(blast: BlastRadius) -> None:
         await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
                 dispatch.dispatch_post(
-                    "/checkout_refresh",
+                    "/decompile_checkout_refresh",
                     {"checkout": checkout_id, "mark_stale": True},
                     query_params={"program": program},
                 )
@@ -457,7 +457,7 @@ async def _refresh_checkout(blast: BlastRadius) -> None:
     await state.run_blocking_ghidra_call(
         lambda: dispatch.raise_on_failure(
             dispatch.dispatch_post(
-                "/checkout_refresh",
+                "/decompile_checkout_refresh",
                 {"checkout": checkout_id, "addresses": addr_csv},
                 query_params={"program": program},
             )
@@ -470,12 +470,12 @@ async def _checkout_id_for_program(program: str) -> str | None:
     try:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.dispatch_get(
-                "/checkout_status", params={"checkout": program}
+                "/decompile_checkout_status", params={"checkout": program}
             )
         )
         payload = json.loads(raw)
     except Exception as e:
-        logger.debug("checkout_status for refresh failed: %s", e)
+        logger.debug("decompile_checkout_status for refresh failed: %s", e)
         return None
     if not isinstance(payload, dict):
         return None

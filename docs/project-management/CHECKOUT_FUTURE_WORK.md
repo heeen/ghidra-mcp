@@ -95,7 +95,7 @@ holds functions — carving into overlays would exercise that path for real.
   zero Ghidra calls. Falls out of `STATUS.md` + the block headers.
 * **Per-function incremental resweep.** Ghidra has no per-function staleness
   primitive, and a DLL resweep is 28 s. Today: missing-files-only (widening) or
-  everything (repartition). Block splicing (`/checkout_refresh`) already covers
+  everything (repartition). Block splicing (`/decompile_checkout_refresh`) already covers
   the labelling case.
 * **`name:` regex exclusions.** Deliberately cut in favour of tag/partition/range.
   Reconsider once naming is well underway.

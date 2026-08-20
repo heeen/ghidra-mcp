@@ -484,16 +484,16 @@ one search instead of one MCP round trip per function.
 ### Workflow
 
 ```text
-1. checkout_create(program=..., root=..., exclusions=[...])   # registers; no sweep
-2. checkout_start(checkout=...)                               # returns in ms with resource_uri
-3. Poll checkout_status(checkout=...) until phase=complete    # or read STATUS.md on disk
+1. decompile_checkout_create(program=..., root=..., exclusions=[...])   # registers; no sweep
+2. decompile_checkout_start(checkout=...)                               # returns in ms with resource_uri
+3. Poll decompile_checkout_status(checkout=...) until phase=complete    # or read STATUS.md on disk
 4. Grep / Read / Glob under <root>/modules/                   # the tree is the corpus
 5. For a hit: read the file header's uri: ghidra://function/<program>/<address>
    then resources/read that URI for callers and call-site context
 ```
 
 Create and start are separate on purpose: config changes must not silently launch
-a multi-minute sweep. `checkout_status` is READ_ONLY so it stays usable in plan
+a multi-minute sweep. `decompile_checkout_status` is READ_ONLY so it stays usable in plan
 mode; the five write paths (`create` / `configure` / `start` / `stop` / `delete`)
 are not.
 
@@ -525,7 +525,7 @@ Grep finds the hit; that URI is how you pull callers and call-site context
 afterwards. Do not re-decompile via tools just to re-read what the header already
 points at.
 
-The MCP resource `ghidra://checkout/{checkout_id}` is status/config prose (phase,
+The MCP resource `ghidra://decompile-checkout/{checkout_id}` is status/config prose (phase,
 exclusions, compartment table, Glob/Grep incantations) — not a substitute for
 searching the files.
 

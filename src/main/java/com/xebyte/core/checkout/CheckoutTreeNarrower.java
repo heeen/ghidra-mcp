@@ -22,7 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Immediate on-disk narrowing for {@code /checkout_configure}.
+ * Immediate on-disk narrowing for {@code /decompile_checkout_configure}.
  *
  * <p>Leaving an excluded function's body on disk would be a lie {@code Grep}
  * would still hit. A compartment may span many Read-budget files, so every
@@ -272,7 +272,7 @@ public final class CheckoutTreeNarrower {
         sb.append("# Modules\n\n");
         sb.append("functions_in_tree: ").append(kept.size()).append('\n');
         sb.append("partitions: ").append(bySlug.size()).append('\n');
-        sb.append("note: narrowed by /checkout_configure — full strategy log "
+        sb.append("note: narrowed by /decompile_checkout_configure — full strategy log "
                 + "rewritten on next sweep\n\n");
         sb.append("## Compartments\n\n");
         sb.append("| slug | functions | files |\n");
@@ -300,7 +300,7 @@ public final class CheckoutTreeNarrower {
         sb.append("# Module ").append(slug).append("\n\n");
         sb.append("functions: ").append(remaining.size()).append('\n');
         sb.append("files: ").append(byFile.size()).append('\n');
-        sb.append("note: member list narrowed by /checkout_configure\n");
+        sb.append("note: member list narrowed by /decompile_checkout_configure\n");
         sb.append("\n## Files\n\n");
         sb.append("| file | first | last | functions |\n");
         sb.append("| --- | --- | --- | ---: |\n");

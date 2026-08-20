@@ -148,7 +148,7 @@ class TestLocalTierEmitsBeforeReturning(unittest.TestCase):
             return 1
 
         async def fake_blocking(func, *a, **kw):
-            # Resolve-target path; checkout_status has no checkout_id → no refresh.
+            # Resolve-target path; decompile_checkout_status has no checkout_id → no refresh.
             return json.dumps({"name": "FUN_1000", "address": "00001000"})
 
         async def run():
@@ -258,7 +258,7 @@ class TestBlastRadiusNotificationsByteIdentical(unittest.TestCase):
             "/reanalyze",
             {"program": "ls"},
             {"ghidra://function/ls/00001000"},
-            # checkout_status: no id → skip refresh (still notification-only)
+            # decompile_checkout_status: no id → skip refresh (still notification-only)
             [json.dumps({"error": "no checkout"})],
         )
         self.assertEqual(emitted, [
@@ -298,7 +298,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
                 return json.dumps({"address": "0000aaaa"})
             if endpoint == "/get_function_callers":
                 return json.dumps({"callers": callers, "total": 200})
-            if endpoint == "/checkout_status":
+            if endpoint == "/decompile_checkout_status":
                 return json.dumps({"checkout_id": "co_deadbeef", "phase": "complete"})
             return json.dumps({"error": "unexpected get " + endpoint})
 
@@ -344,7 +344,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
         self.assertEqual(caller_gets[0]["params"].get("limit"), 0)
 
         self.assertEqual(len(posted), 1)
-        self.assertEqual(posted[0]["endpoint"], "/checkout_refresh")
+        self.assertEqual(posted[0]["endpoint"], "/decompile_checkout_refresh")
         addr_csv = posted[0]["data"]["addresses"]
         addrs = set(addr_csv.split(","))
         self.assertEqual(len(addrs), 201)  # target + 200 callers
@@ -360,7 +360,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
         def fake_get(endpoint, params=None):
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "00001000"})
-            if endpoint == "/checkout_status":
+            if endpoint == "/decompile_checkout_status":
                 return json.dumps({"checkout_id": "co_abc", "phase": "complete"})
             return json.dumps({})
 
@@ -405,7 +405,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
             return func()
 
         def fake_get(endpoint, params=None):
-            if endpoint == "/checkout_status":
+            if endpoint == "/decompile_checkout_status":
                 return json.dumps({"checkout_id": "co_abc", "phase": "complete"})
             return json.dumps({})
 
@@ -453,7 +453,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
         def fake_get(endpoint, params=None):
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "00001000"})
-            if endpoint == "/checkout_status":
+            if endpoint == "/decompile_checkout_status":
                 return json.dumps({"error": "no checkout matches selector: ls"})
             return json.dumps({})
 
@@ -494,7 +494,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
         def fake_get(endpoint, params=None):
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "00001000"})
-            if endpoint == "/checkout_status":
+            if endpoint == "/decompile_checkout_status":
                 return json.dumps({"checkout_id": "co_abc"})
             return json.dumps({})
 
@@ -529,7 +529,7 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
 
     def test_checkout_refresh_is_none_tier(self):
         self.assertEqual(
-            ENDPOINT_TIER["/checkout_refresh"], InvalidationTier.NONE
+            ENDPOINT_TIER["/decompile_checkout_refresh"], InvalidationTier.NONE
         )
 
     def test_resolve_blast_radius_local_callers_type_mapping(self):

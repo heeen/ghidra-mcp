@@ -236,7 +236,7 @@ def function_bundle_markdown(bundle: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def checkout_markdown(payload: dict | object) -> str:
-    """Render ``/checkout_status`` JSON as Markdown.
+    """Render ``/decompile_checkout_status`` JSON as Markdown.
 
     Markdown here is **not** the size win it is for the function bundle, and the
     module docstring's 56% measurement must not be read as applying to this

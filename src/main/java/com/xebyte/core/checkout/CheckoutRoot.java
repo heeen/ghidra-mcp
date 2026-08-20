@@ -185,7 +185,7 @@ public final class CheckoutRoot {
 
     /**
      * Delete the entire tree when it is still contained in this root.
-     * Used by {@code /checkout_delete?delete_files=true}.
+     * Used by {@code /decompile_checkout_delete?delete_files=true}.
      */
     public void deleteTree() throws IOException {
         if (!Files.exists(root)) {

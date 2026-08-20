@@ -157,7 +157,7 @@ public final class SweepJob implements Runnable {
             partitions.sort(Comparator.comparing(p -> p.members().get(0).getEntryPoint()));
 
             // Partition → PARTITION exclusions (need slugs) → TAG/RANGE + includeOnly
-            // → decompile. One evaluator so /checkout_configure cannot disagree.
+            // → decompile. One evaluator so /decompile_checkout_configure cannot disagree.
             ExclusionEvaluator evaluator = ExclusionEvaluator.of(program, cfg);
             ExclusionEvaluator.FilterResult filtered =
                     evaluator.filterPartitions(partitions, ctx.size());
@@ -989,7 +989,7 @@ public final class SweepJob implements Runnable {
     }
 
     private void publish(SweepProgress progress, String state, Long sweptAt) {
-        // /checkout_stop may have already stamped CANCELLED; never let a mid-sweep
+        // /decompile_checkout_stop may have already stamped CANCELLED; never let a mid-sweep
         // DECOMPILING publish clobber that — the agent is polling for cancel.
         if (cancel.isCancelled()) {
             SweepProgress.Phase p = progress.phase();
@@ -1006,7 +1006,7 @@ public final class SweepJob implements Runnable {
         try {
             CheckoutStatusMd.write(checkout, state, sweptAt);
         } catch (IOException e) {
-            // Progress is still in memory for /checkout_status; disk is best-effort
+            // Progress is still in memory for /decompile_checkout_status; disk is best-effort
             // mid-sweep (root may be recreating).
         }
     }
