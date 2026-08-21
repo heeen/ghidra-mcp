@@ -127,8 +127,7 @@ public final class CheckoutTreeNarrower {
             rewritten.add(slug + " (rewritten, " + remaining.size() + " kept)");
         }
 
-        writeIndex(checkout, kept);
-        writeModulesIndex(checkout, kept, bySlug);
+        rebuildIndexes(checkout, kept, touchedSlugs);
         return new NarrowResult(removedAddresses.size(), kept.size(),
                 List.copyOf(rewritten));
     }
@@ -234,7 +233,8 @@ public final class CheckoutTreeNarrower {
         return fm.getFunctionAt(addr);
     }
 
-    private static List<IndexEntry> readIndex(Path indexPath) throws IOException {
+    /** Load {@code index/by-address.tsv}; empty ifp on 5-column trees = unknown. */
+    public static List<IndexEntry> readIndex(Path indexPath) throws IOException {
         List<String> lines = Files.readAllLines(indexPath, StandardCharsets.UTF_8);
         List<IndexEntry> out = new ArrayList<>();
         for (String line : lines) {
@@ -256,9 +256,39 @@ public final class CheckoutTreeNarrower {
         return out;
     }
 
-    private static void writeIndex(Checkout checkout, List<IndexEntry> kept) throws IOException {
+    /**
+     * Rewrite {@code by-address.tsv}, {@code modules/index.md}, and every
+     * touched compartment README from the authoritative row list. Shared by
+     * narrow and reconcile so the two cannot invent divergent index writers.
+     */
+    public static void rebuildIndexes(
+            Checkout checkout, List<IndexEntry> rows, Set<String> touchedSlugs)
+            throws IOException {
+        writeIndex(checkout, rows);
+        Map<String, List<IndexEntry>> bySlug = new LinkedHashMap<>();
+        for (IndexEntry e : rows) {
+            bySlug.computeIfAbsent(e.slug(), s -> new ArrayList<>()).add(e);
+        }
+        writeModulesIndex(checkout, rows, bySlug);
+        Set<String> slugs = touchedSlugs != null && !touchedSlugs.isEmpty()
+                ? touchedSlugs
+                : bySlug.keySet();
+        for (String slug : slugs) {
+            List<IndexEntry> remaining = bySlug.getOrDefault(slug, List.of());
+            if (remaining.isEmpty()) {
+                deleteModuleDir(checkout.root().path().resolve("modules").resolve(slug));
+            } else {
+                rewriteModuleReadme(checkout, slug, remaining);
+            }
+        }
+    }
+
+    static void writeIndex(Checkout checkout, List<IndexEntry> kept) throws IOException {
         StringBuilder sb = new StringBuilder(SweepJob.byAddressHeader());
-        for (IndexEntry e : kept) {
+        // Address order — Grep/agents expect the TSV sorted the same way a sweep leaves it.
+        List<IndexEntry> sorted = new ArrayList<>(kept);
+        sorted.sort((a, b) -> normalizeHex(a.addressHex()).compareTo(normalizeHex(b.addressHex())));
+        for (IndexEntry e : sorted) {
             sb.append(SweepJob.formatByAddressRow(
                     e.addressHex(), e.name(), e.slug(), e.file(),
                     e.evidenceBacked(), e.ifp()));
@@ -266,7 +296,7 @@ public final class CheckoutTreeNarrower {
         checkout.root().writeFile(Path.of(CheckoutLayout.byAddressTsv()), sb.toString());
     }
 
-    private static void writeModulesIndex(
+    static void writeModulesIndex(
             Checkout checkout,
             List<IndexEntry> kept,
             Map<String, List<IndexEntry>> bySlug) throws IOException {
@@ -274,7 +304,7 @@ public final class CheckoutTreeNarrower {
         sb.append("# Modules\n\n");
         sb.append("functions_in_tree: ").append(kept.size()).append('\n');
         sb.append("partitions: ").append(bySlug.size()).append('\n');
-        sb.append("note: narrowed by /decompile_checkout_configure — full strategy log "
+        sb.append("note: indexes rebuilt incrementally — full strategy log "
                 + "rewritten on next sweep\n\n");
         sb.append("## Compartments\n\n");
         sb.append("| slug | functions | files |\n");
@@ -292,7 +322,7 @@ public final class CheckoutTreeNarrower {
         checkout.root().writeFile(Path.of(CheckoutLayout.modulesIndexMd()), sb.toString());
     }
 
-    private static void rewriteModuleReadme(
+    static void rewriteModuleReadme(
             Checkout checkout, String slug, List<IndexEntry> remaining) throws IOException {
         Map<String, List<IndexEntry>> byFile = new LinkedHashMap<>();
         for (IndexEntry e : remaining) {
@@ -319,7 +349,7 @@ public final class CheckoutTreeNarrower {
         checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(slug)), sb.toString());
     }
 
-    private static void deleteModuleDir(Path dir) throws IOException {
+    static void deleteModuleDir(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             return;
         }
@@ -362,11 +392,28 @@ public final class CheckoutTreeNarrower {
 
     public record NarrowResult(int functionsRemoved, int functionsRemaining, List<String> modulesTouched) {}
 
-    private record IndexEntry(
+    /**
+     * One row of {@code index/by-address.tsv}. Shared by narrow and reconcile —
+     * a second row type would let the two writers drift on column meaning.
+     */
+    public record IndexEntry(
             String addressHex,
             String name,
             String slug,
             String file,
             boolean evidenceBacked,
-            String ifp) {}
+            String ifp) {
+
+        public IndexEntry withFile(String newFile) {
+            return new IndexEntry(addressHex, name, slug, newFile, evidenceBacked, ifp);
+        }
+
+        public IndexEntry withName(String newName) {
+            return new IndexEntry(addressHex, newName, slug, file, evidenceBacked, ifp);
+        }
+
+        public IndexEntry withIfp(String newIfp) {
+            return new IndexEntry(addressHex, name, slug, file, evidenceBacked, newIfp);
+        }
+    }
 }

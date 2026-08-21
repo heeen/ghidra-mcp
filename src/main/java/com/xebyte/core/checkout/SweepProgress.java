@@ -13,6 +13,10 @@ import java.util.Map;
  * <p>{@code eligibleFunctions} is {@link com.xebyte.core.partition.PartitionContext}'s
  * floor; {@code functionsInScope} is after exclusion/includeOnly. Reporting both
  * makes a surprising exclusion visible rather than mysterious.
+ *
+ * <p>{@code splicedSinceSweep} counts insert+remove since the last full sweep.
+ * Containment placement is a local approximation of a global decision — this
+ * number makes the drift visible. It must never trigger an auto-resweep.
  */
 public record SweepProgress(
         Phase phase,
@@ -28,7 +32,8 @@ public record SweepProgress(
         long statusRevision,
         int eligibleFunctions,
         int functionsInScope,
-        Map<String, Integer> exclusionRemovals) {
+        Map<String, Integer> exclusionRemovals,
+        int splicedSinceSweep) {
 
     public enum Phase {
         IDLE,
@@ -70,6 +75,9 @@ public record SweepProgress(
         if (functionsInScope < 0) {
             functionsInScope = 0;
         }
+        if (splicedSinceSweep < 0) {
+            splicedSinceSweep = 0;
+        }
         exclusionRemovals = exclusionRemovals == null
                 ? Map.of()
                 : Map.copyOf(exclusionRemovals);
@@ -78,62 +86,68 @@ public record SweepProgress(
     public static SweepProgress idle() {
         return new SweepProgress(
                 Phase.IDLE, 0, 0, 0, 0L, null, 0L, null, 0, null, 0L,
-                0, 0, Map.of());
+                0, 0, Map.of(), 0);
     }
 
     public SweepProgress withPhase(Phase newPhase) {
         return copy(newPhase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withCounts(int total, int done, int failed) {
         return copy(phase, total, done, failed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withBytesWritten(long bytes) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytes,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withCurrentPartition(String partition) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 partition, startedEpochMs, etaSeconds, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withStartedEpochMs(long epochMs) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, epochMs, etaSeconds, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withEtaSeconds(Long eta) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, eta, rootRecreated, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withRootRecreated(int count) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, count, lastError,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withLastError(String error) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, error,
-                eligibleFunctions, functionsInScope, exclusionRemovals);
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep);
     }
 
     public SweepProgress withScope(int eligible, int inScope, Map<String, Integer> removals) {
         Map<String, Integer> map = removals == null ? Map.of() : new LinkedHashMap<>(removals);
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
-                eligible, inScope, map);
+                eligible, inScope, map, splicedSinceSweep);
+    }
+
+    public SweepProgress withSplicedSinceSweep(int count) {
+        return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals, count);
     }
 
     private SweepProgress copy(
@@ -149,9 +163,10 @@ public record SweepProgress(
             String error,
             int eligible,
             int inScope,
-            Map<String, Integer> removals) {
+            Map<String, Integer> removals,
+            int spliced) {
         return new SweepProgress(
                 newPhase, total, done, failed, bytes, partition, started, eta, recreated, error,
-                statusRevision + 1, eligible, inScope, removals);
+                statusRevision + 1, eligible, inScope, removals, spliced);
     }
 }

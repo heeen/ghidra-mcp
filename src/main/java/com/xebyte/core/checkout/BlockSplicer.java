@@ -790,19 +790,8 @@ public final class BlockSplicer {
         return sb.toString();
     }
 
-    /** Mark the checkout STALE without splicing — UNBOUNDED writes are not a refresh. */
-    public static RefreshResult markStale(Checkout checkout) throws IOException {
-        long started = System.currentTimeMillis();
-        checkout.setProgress(checkout.progress()
-                .withPhase(SweepProgress.Phase.STALE)
-                .withLastError("program changed unboundedly; resweep needed"));
-        CheckoutStatusMd.write(checkout, "dirty", null);
-        return RefreshResult.of(
-                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                0, System.currentTimeMillis() - started, true);
-    }
-
-    private static String decompileBlock(
+    /** Package-visible so {@link TreeReconciler} renders replace/insert with the same header. */
+    static String decompileBlock(
             DecompInterface decomp,
             Function func,
             PartitionMeta part,

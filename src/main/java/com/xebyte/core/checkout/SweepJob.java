@@ -909,14 +909,15 @@ public final class SweepJob implements Runnable {
 
         checkout.root().writeFile(
                 Path.of(CheckoutLayout.callgraphTsv()),
-                renderCallgraph(ctx));
+                renderCallgraphTsv(ctx));
 
         checkout.root().writeFile(
                 Path.of(CheckoutLayout.modulesIndexMd()),
                 renderModulesIndex(ctx, cascade, partitions, total, scope, rows));
     }
 
-    private String renderCallgraph(PartitionContext ctx) {
+    /** Full callgraph TSV from a live context — shared by sweep and reconcile. */
+    public static String renderCallgraphTsv(PartitionContext ctx) {
         StringBuilder sb = new StringBuilder("caller\tcallee\tcaller_name\tcallee_name\n");
         PartitionContext.CallGraph cg = ctx.callGraph();
         List<Function> fns = ctx.functions();
@@ -1130,6 +1131,10 @@ public final class SweepJob implements Runnable {
                 .withCurrentPartition(null)
                 .withEtaSeconds(null)
                 .withRootRecreated(checkout.root().rootRecreated());
+        // A fresh sweep is the new ground truth — splice drift starts at zero.
+        if (phase == SweepProgress.Phase.COMPLETE) {
+            next = next.withSplicedSinceSweep(0);
+        }
         String state = CheckoutStatusMd.stateForPhase(phase);
         publish(next, state, sweptAt);
     }
