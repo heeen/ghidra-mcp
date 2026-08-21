@@ -1,0 +1,284 @@
+package com.xebyte.core.checkout;
+
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
+import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
+
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.BiPredicate;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+/**
+ * Coalesces observer dirty hints into debounced reconcile passes.
+ *
+ * <p>Drains on {@link CheckoutRegistry}'s existing single-thread
+ * {@code GhidraMCP-Checkout-Sweep} executor — one decompile stream JVM-wide is
+ * a measured constraint, not a style choice. A second pool would interleave
+ * with sweeps and thrash the ProgramDB lock.
+ *
+ * <p>{@code setEventsEnabled(false)} means events can be missed entirely; the
+ * reconciler (not this queue) is the source of truth. RESTORED and the address
+ * bound both collapse to a full reconcile for that reason.
+ *
+ * @since 7.2.0
+ */
+public final class DirtyQueue {
+
+    /** Past this, an analysis-sized storm collapses to needsReconcile. */
+    public static final int ADDRESS_BOUND = 2000;
+
+    /** Coalesce a batch rename into one pass (250–500 ms band). */
+    public static final long DEBOUNCE_MS = 300L;
+
+    private final CheckoutRegistry registry;
+    private final Function<Checkout, Program> programLookup;
+    private final Predicate<String> sweepActive;
+    private final BiPredicate<Program, String> analyzing;
+    private final ReconcileAction reconcileAction;
+    private final Supplier<Long> clock;
+    private final java.util.function.Consumer<Runnable> enqueue;
+
+    private final Map<String, Bucket> buckets = new LinkedHashMap<>();
+
+    /** Production constructor — wires registry sweep thread + live analysis. */
+    public DirtyQueue(CheckoutRegistry registry) {
+        this(
+                registry,
+                null,
+                id -> registry.isSweepActive(id),
+                (program, ignored) -> isAnalyzing(program),
+                (checkout, program, addrs) -> TreeReconciler.reconcile(checkout, program, addrs),
+                System::currentTimeMillis,
+                registry::enqueue);
+    }
+
+    /**
+     * Injectable constructor for offline tests (clock, gates, reconcile sink).
+     * Production code uses {@link #DirtyQueue(CheckoutRegistry)}.
+     */
+    public DirtyQueue(
+            CheckoutRegistry registry,
+            Function<Checkout, Program> programLookup,
+            Predicate<String> sweepActive,
+            BiPredicate<Program, String> analyzing,
+            ReconcileAction reconcileAction,
+            Supplier<Long> clock,
+            java.util.function.Consumer<Runnable> enqueue) {
+        this.registry = Objects.requireNonNull(registry, "registry");
+        this.programLookup = programLookup;
+        this.sweepActive = Objects.requireNonNull(sweepActive, "sweepActive");
+        this.analyzing = Objects.requireNonNull(analyzing, "analyzing");
+        this.reconcileAction = Objects.requireNonNull(reconcileAction, "reconcileAction");
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.enqueue = Objects.requireNonNull(enqueue, "enqueue");
+    }
+
+    public synchronized void markDirty(String checkoutId, Collection<String> addresses) {
+        if (checkoutId == null || addresses == null || addresses.isEmpty()) {
+            return;
+        }
+        Bucket b = buckets.computeIfAbsent(checkoutId, id -> new Bucket());
+        if (b.needsReconcile) {
+            // Already collapsed — just keep the debounce alive.
+            arm(checkoutId, b);
+            return;
+        }
+        for (String raw : addresses) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            b.addresses.add(CheckoutTreeNarrower.normalizeHex(raw));
+            if (b.addresses.size() >= ADDRESS_BOUND) {
+                // Bound is a safety valve: splicing thousands of analysis
+                // births one-by-one is pathological. Fall back to full reconcile.
+                b.needsReconcile = true;
+                b.addresses.clear();
+                break;
+            }
+        }
+        arm(checkoutId, b);
+    }
+
+    public synchronized void markNeedsReconcile(String checkoutId) {
+        if (checkoutId == null) {
+            return;
+        }
+        Bucket b = buckets.computeIfAbsent(checkoutId, id -> new Bucket());
+        b.needsReconcile = true;
+        b.addresses.clear();
+        arm(checkoutId, b);
+    }
+
+    /** Test helper — pending address count (0 when collapsed to full). */
+    public synchronized int pendingAddressCount(String checkoutId) {
+        Bucket b = buckets.get(checkoutId);
+        return b == null ? 0 : b.addresses.size();
+    }
+
+    public synchronized boolean pendingNeedsReconcile(String checkoutId) {
+        Bucket b = buckets.get(checkoutId);
+        return b != null && b.needsReconcile;
+    }
+
+    public synchronized boolean isDrainQueued(String checkoutId) {
+        Bucket b = buckets.get(checkoutId);
+        return b != null && b.drainQueued;
+    }
+
+    public synchronized void clear(String checkoutId) {
+        if (checkoutId != null) {
+            buckets.remove(checkoutId);
+        }
+    }
+
+    public synchronized void clearAll() {
+        buckets.clear();
+    }
+
+    private void arm(String checkoutId, Bucket b) {
+        b.deadlineMs = clock.get() + DEBOUNCE_MS;
+        if (b.drainQueued) {
+            return;
+        }
+        b.drainQueued = true;
+        final String id = checkoutId;
+        enqueue.accept(() -> drain(id));
+    }
+
+    private void drain(String checkoutId) {
+        try {
+            while (true) {
+                long waitMs;
+                synchronized (this) {
+                    Bucket b = buckets.get(checkoutId);
+                    if (b == null || (!b.needsReconcile && b.addresses.isEmpty())) {
+                        if (b != null) {
+                            b.drainQueued = false;
+                        }
+                        return;
+                    }
+                    waitMs = b.deadlineMs - clock.get();
+                }
+                if (waitMs > 0) {
+                    Thread.sleep(waitMs);
+                    continue; // dirt may have extended the deadline
+                }
+
+                Checkout checkout = registry.byId(checkoutId);
+                if (checkout == null) {
+                    synchronized (this) {
+                        buckets.remove(checkoutId);
+                    }
+                    return;
+                }
+                Program program = resolveProgram(checkout);
+                if (program == null || program.isClosed()) {
+                    synchronized (this) {
+                        Bucket b = buckets.get(checkoutId);
+                        if (b != null) {
+                            b.drainQueued = false;
+                        }
+                    }
+                    return;
+                }
+
+                // Sweep owns the decompile stream — queue behind it, never interleave.
+                if (sweepActive.test(checkoutId)) {
+                    synchronized (this) {
+                        Bucket b = buckets.get(checkoutId);
+                        if (b != null) {
+                            b.deadlineMs = clock.get() + DEBOUNCE_MS;
+                        }
+                    }
+                    continue;
+                }
+                // Initial analysis creates thousands of functions; splice once it settles.
+                if (analyzing.test(program, checkoutId)) {
+                    synchronized (this) {
+                        Bucket b = buckets.get(checkoutId);
+                        if (b != null) {
+                            b.deadlineMs = clock.get() + DEBOUNCE_MS;
+                        }
+                    }
+                    continue;
+                }
+
+                final boolean full;
+                final Set<String> targeted;
+                synchronized (this) {
+                    Bucket b = buckets.get(checkoutId);
+                    if (b == null) {
+                        return;
+                    }
+                    // Deadline extended while we checked gates?
+                    if (b.deadlineMs > clock.get()) {
+                        continue;
+                    }
+                    full = b.needsReconcile;
+                    targeted = full ? null : Set.copyOf(b.addresses);
+                    b.needsReconcile = false;
+                    b.addresses.clear();
+                    b.drainQueued = false;
+                }
+
+                try {
+                    reconcileAction.reconcile(checkout, program, targeted);
+                } catch (Exception e) {
+                    Msg.error(this, "Checkout dirty-queue reconcile failed for "
+                            + checkoutId + ": " + e.getMessage(), e);
+                }
+                // More dirt may have arrived during reconcile — if so, arm()
+                // already queued another drain on this same executor.
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            synchronized (this) {
+                Bucket b = buckets.get(checkoutId);
+                if (b != null) {
+                    b.drainQueued = false;
+                }
+            }
+        }
+    }
+
+    private Program resolveProgram(Checkout checkout) {
+        if (programLookup != null) {
+            return programLookup.apply(checkout);
+        }
+        Function<Checkout, Program> lookup = registry.programLookup();
+        return lookup != null ? lookup.apply(checkout) : null;
+    }
+
+    private static boolean isAnalyzing(Program program) {
+        if (program == null) {
+            return false;
+        }
+        try {
+            AutoAnalysisManager mgr = AutoAnalysisManager.getAnalysisManager(program);
+            return mgr != null && mgr.isAnalyzing();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @FunctionalInterface
+    public interface ReconcileAction {
+        void reconcile(Checkout checkout, Program program, Set<String> addresses)
+                throws Exception;
+    }
+
+    private static final class Bucket {
+        final Set<String> addresses = new LinkedHashSet<>();
+        boolean needsReconcile;
+        long deadlineMs;
+        boolean drainQueued;
+    }
+}

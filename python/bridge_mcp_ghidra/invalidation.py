@@ -11,10 +11,11 @@ URIs if that errors or times out. UNBOUNDED always degrades, plus list_changed.
 NONE is for writes no resource body reports — saving above all, which happens
 after nearly every other write.
 
-Checkout trees are kept honest by a second consumer of the same blast radius:
-``/decompile_checkout_refresh`` splices only the affected blocks. That path must NOT inherit
-the notification caps (64-URI fan-out, interest intersection) — those are correct
-for SSE noise and a silent correctness bug for on-disk files.
+Checkout *files* are not refreshed here. A DomainObjectListener on the Java
+side (CheckoutObserver → DirtyQueue → TreeReconciler) sees MCP writes, GUI
+edits, scripts, and analyzers — one writer for the tree, no double-splice.
+``ENDPOINT_TIER`` still drives ``ghidra://function/...`` resource invalidation
+and ``resources/updated``, which is a different concern from on-disk files.
 """
 
 from __future__ import annotations
@@ -34,8 +35,6 @@ from .resources import canonical_function_uri
 
 # Cap per-write fan-out. Beyond this, a single list_changed is cheaper than a
 # storm of updated notifications the client will re-list for anyway.
-# Checkout refresh must NEVER use this — a 200-caller rename would leave 136
-# files carrying the old name with nothing saying so.
 _MAX_URI_FANOUT = 64
 
 
@@ -49,7 +48,8 @@ class InvalidationTier(str, Enum):
 
 # Every non-read-only tool path must appear here. The coverage test fails CI
 # when a new write endpoint is added without a tier, so silent non-invalidation
-# cannot ship.
+# cannot ship. Tiers gate ghidra://function notifications only — checkout files
+# are owned by Java's CheckoutObserver.
 ENDPOINT_TIER: dict[str, InvalidationTier] = {
     # --- NONE: mutates something no resource body reports ---
     # Saving is the important one: it is called after nearly every write, and
@@ -192,14 +192,13 @@ class BlastRadius:
     """Resolved invalidation scope for one successful write.
 
     ``uris`` is the pre-filter notification set (interest intersect + fan-out
-    collapse still happen in ``_invalidate``). ``addresses`` is the checkout
-    splice set — uncapped, and never interest-filtered.
+    collapse still happen in ``_invalidate``). Checkout file refresh is owned
+    by Java — this struct is notification-only.
     """
 
     endpoint: str
     tier: InvalidationTier
     program: str | None
-    addresses: frozenset[str]
     uris: frozenset[str]
     list_changed: bool
     degraded: bool
@@ -316,7 +315,6 @@ async def _invalidate_guarded(
     try:
         blast = await resolve_blast_radius(endpoint, tier, kwargs)
         await _invalidate(blast, related_request_id)
-        await _refresh_checkout_guarded(blast)
     except Exception as e:
         logger.debug("Resource invalidation after %s failed: %s", endpoint, e)
 
@@ -326,35 +324,27 @@ async def resolve_blast_radius(
     tier: InvalidationTier,
     kwargs: dict,
 ) -> BlastRadius:
-    """Compute notification URIs and the uncapped checkout address set."""
+    """Compute notification URIs for one successful write."""
     program = _program_name(kwargs)
     uris: set[str] = set()
-    addresses: set[str] = set()
     list_changed = False
     degraded = False
 
     if tier is InvalidationTier.LOCAL:
         addr = await _resolve_target_address(program, kwargs)
-        if addr:
-            addresses.add(addr)
-            if program:
-                uris.add(canonical_function_uri(program, addr))
+        if addr and program:
+            uris.add(canonical_function_uri(program, addr))
     elif tier is InvalidationTier.CALLERS:
         addr = await _resolve_target_address(program, kwargs)
         callers = await _caller_entries(program, kwargs)
-        if addr:
-            addresses.add(addr)
-            if program:
-                uris.add(canonical_function_uri(program, addr))
-        # Notification path stays capped at _MAX_URI_FANOUT (byte-identical to
-        # the pre-blast-radius behaviour). Checkout gets every caller.
+        if addr and program:
+            uris.add(canonical_function_uri(program, addr))
         uri_callers = 0
         for entry in callers:
             caddr = entry.get("address")
-            if not caddr:
+            if not caddr or not program:
                 continue
-            addresses.add(str(caddr))
-            if program and uri_callers < _MAX_URI_FANOUT:
+            if uri_callers < _MAX_URI_FANOUT:
                 uris.add(canonical_function_uri(program, str(caddr)))
                 uri_callers += 1
         if endpoint in ("/rename_function", "/rename_symbol"):
@@ -366,11 +356,9 @@ async def resolve_blast_radius(
             uris |= _known_uris_for_program(program)
             list_changed = True
             degraded = True
-        else:
-            addresses |= type_addrs
-            if program:
-                for a in type_addrs:
-                    uris.add(canonical_function_uri(program, a))
+        elif program:
+            for a in type_addrs:
+                uris.add(canonical_function_uri(program, a))
     else:  # UNBOUNDED
         uris |= _known_uris_for_program(program)
         list_changed = True
@@ -384,7 +372,6 @@ async def resolve_blast_radius(
         endpoint=endpoint,
         tier=tier,
         program=program,
-        addresses=frozenset(addresses),
         uris=frozenset(uris),
         list_changed=list_changed,
         degraded=degraded,
@@ -392,12 +379,7 @@ async def resolve_blast_radius(
 
 
 async def _invalidate(blast: BlastRadius, related_request_id) -> None:
-    """Emit notifications from a resolved blast radius.
-
-    Interest intersection and the 64-URI collapse live HERE — not in
-    ``resolve_blast_radius`` — so the checkout consumer can use the uncapped
-    address set without inheriting notification-path truncations.
-    """
+    """Emit notifications from a resolved blast radius."""
     uris = set(blast.uris)
     list_changed = blast.list_changed
 
@@ -418,92 +400,6 @@ async def _invalidate(blast: BlastRadius, related_request_id) -> None:
         await subscriptions.emit_resource_list_changed(
             related_request_id=related_request_id
         )
-
-
-async def _refresh_checkout_guarded(blast: BlastRadius) -> None:
-    """Checkout splice is best-effort — never fail the originating write."""
-    try:
-        await _refresh_checkout(blast)
-    except Exception as e:
-        logger.debug("Checkout refresh after %s failed: %s", blast.endpoint, e)
-
-
-# Writes that change which functions EXIST, not just what they say. A splice
-# cannot express either one: a created function has no block to replace (measured
-# — /create_function then refresh reported skipped:1 and the tree silently lacked
-# it while phase still said complete), and a deleted one would leave an orphan
-# block describing a function the program no longer has, which is worse than
-# absence because it is greppable. Both can also move compartment membership and
-# address-band boundaries, so the partitioning itself is suspect. Mark stale and
-# let a resweep settle it.
-_STRUCTURAL_ENDPOINTS = frozenset({
-    "/create_function",
-    "/delete_function",
-})
-
-
-async def _refresh_checkout(blast: BlastRadius) -> None:
-    if blast.tier is InvalidationTier.NONE:
-        return
-    program = blast.program
-    if not program:
-        return
-
-    checkout_id = await _checkout_id_for_program(program)
-    if not checkout_id:
-        return
-
-    if (blast.tier is InvalidationTier.UNBOUNDED
-            or blast.endpoint in _STRUCTURAL_ENDPOINTS):
-        # 25k inline decompiles is not a refresh, and a changed function SET
-        # cannot be spliced at all — ask Java to mark STALE either way.
-        await state.run_blocking_ghidra_call(
-            lambda: dispatch.raise_on_failure(
-                dispatch.dispatch_post(
-                    "/decompile_checkout_refresh",
-                    {"checkout": checkout_id, "mark_stale": True},
-                    query_params={"program": program},
-                )
-            )
-        )
-        return
-
-    if not blast.addresses:
-        return
-
-    # Deliberately uncapped and NOT widened here: send only addresses whose text
-    # changed. Java derives neighbours for header-only calls:/callers: patches
-    # from the live call graph — notification caps must not reach this path.
-    addr_csv = ",".join(sorted(blast.addresses))
-    await state.run_blocking_ghidra_call(
-        lambda: dispatch.raise_on_failure(
-            dispatch.dispatch_post(
-                "/decompile_checkout_refresh",
-                {"checkout": checkout_id, "addresses": addr_csv},
-                query_params={"program": program},
-            )
-        )
-    )
-
-
-async def _checkout_id_for_program(program: str) -> str | None:
-    """One status call; silent skip when no checkout exists for this program."""
-    try:
-        raw = await state.run_blocking_ghidra_call(
-            lambda: dispatch.dispatch_get(
-                "/decompile_checkout_status", params={"checkout": program}
-            )
-        )
-        payload = json.loads(raw)
-    except Exception as e:
-        logger.debug("decompile_checkout_status for refresh failed: %s", e)
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("error"):
-        return None
-    cid = payload.get("checkout_id")
-    return str(cid) if cid else None
 
 
 def _program_name(kwargs: dict) -> str | None:
@@ -543,14 +439,14 @@ def _by_name_uris(program: str | None, kwargs: dict) -> set[str]:
 
 
 async def _caller_entries(program: str | None, kwargs: dict) -> list[dict]:
-    """Uncapped caller list (limit=0). Sort is server-side by name."""
+    """Caller list capped for notification fan-out (not for checkout files)."""
     if not program:
         return []
     name = _first(kwargs, "old_name", "name", "function", "function_name")
     address = _first(
         kwargs, "function_address", "address", "entry", "entry_point"
     )
-    params: dict[str, Any] = {"program": program, "limit": 0}
+    params: dict[str, Any] = {"program": program, "limit": _MAX_URI_FANOUT}
     if address:
         params["address"] = address
     elif name:
@@ -577,7 +473,7 @@ async def _type_user_addresses(program: str | None, kwargs: dict) -> set[str] | 
     """Return precise addresses for a TYPE-tier write, or None to degrade.
 
     ``None`` means the finder timed out / errored / could not resolve the type
-    name — the notification path falls back to known URIs; checkout skips.
+    name — the notification path falls back to known URIs.
     An empty set means the finder ran and found no users.
     """
     type_name = _first(

@@ -577,7 +577,6 @@ class TestSessionlessRequestsAreRefusedEarly(unittest.TestCase):
                     endpoint=endpoint,
                     tier=tier,
                     program="ls",
-                    addresses=frozenset({"00401000"}),
                     uris=frozenset({uri}),
                     list_changed=False,
                     degraded=False,

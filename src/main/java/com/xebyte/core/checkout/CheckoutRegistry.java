@@ -1,5 +1,9 @@
 package com.xebyte.core.checkout;
 
+import ghidra.framework.model.DomainFile;
+import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -12,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Function;
 
 /**
  * JVM-wide checkout registry — {@link com.xebyte.core.NamingPolicy}-shaped
@@ -23,9 +28,10 @@ import java.util.concurrent.ThreadFactory;
  * constructed at three independent sites, so an instance field would be three
  * registries in one GUI JVM. Only a static singleton is JVM-wide.
  *
- * <p>One single-thread daemon executor runs sweeps; throughput is
- * {@code ProgramDB}-lock-bound, so a second concurrent sweep would only halve
- * the first. {@link SweepJob} submits via {@link #enqueueSweep(SweepJob)}.
+ * <p>One single-thread daemon executor runs sweeps <em>and</em> the
+ * {@link DirtyQueue} drain; throughput is {@code ProgramDB}-lock-bound, so a
+ * second concurrent decompile stream would only thrash the first.
+ * {@link SweepJob} submits via {@link #enqueueSweep(SweepJob)}.
  */
 public final class CheckoutRegistry {
 
@@ -33,7 +39,11 @@ public final class CheckoutRegistry {
 
     private final Map<String, Checkout> byId = new LinkedHashMap<>();
     private final Map<String, SweepJob> activeJobs = new ConcurrentHashMap<>();
+    private final Map<String, CheckoutObserver> observers = new ConcurrentHashMap<>();
+    private final Map<String, Program> observerPrograms = new ConcurrentHashMap<>();
     private final ExecutorService sweepExecutor;
+    private final DirtyQueue dirtyQueue;
+    private volatile Function<Checkout, Program> programLookup;
 
     private CheckoutRegistry() {
         ThreadFactory factory = runnable -> {
@@ -43,10 +53,120 @@ public final class CheckoutRegistry {
             return t;
         };
         this.sweepExecutor = Executors.newSingleThreadExecutor(factory);
+        this.dirtyQueue = new DirtyQueue(this);
     }
 
     public static CheckoutRegistry getInstance() {
         return INSTANCE;
+    }
+
+    public DirtyQueue dirtyQueue() {
+        return dirtyQueue;
+    }
+
+    /**
+     * How the dirty queue re-resolves a Program without the observer holding
+     * one. Set by {@code FrontEndProgramProvider} (cache owner); null means
+     * auto-reconcile cannot run.
+     */
+    public void setProgramLookup(Function<Checkout, Program> lookup) {
+        this.programLookup = lookup;
+    }
+
+    Function<Checkout, Program> programLookup() {
+        return programLookup;
+    }
+
+    boolean isSweepActive(String checkoutId) {
+        return checkoutId != null && activeJobs.containsKey(checkoutId);
+    }
+
+    /**
+     * Attach a {@link CheckoutObserver} when this program has a registered
+     * checkout. Idempotent. Holds the observer by checkout id — never stores
+     * the Program on the observer itself.
+     */
+    public void ensureObserver(Program program) {
+        if (program == null || program.isClosed()) {
+            return;
+        }
+        Checkout checkout = findCheckoutFor(program);
+        if (checkout == null) {
+            return;
+        }
+        String id = checkout.id();
+        if (observers.containsKey(id)) {
+            // Same checkout, possibly a different Program instance after
+            // orphan recovery — rebind the listener to the live object.
+            Program prior = observerPrograms.get(id);
+            if (prior == program) {
+                return;
+            }
+            detachObserver(id);
+        }
+        CheckoutObserver obs = new CheckoutObserver(id, dirtyQueue);
+        try {
+            program.addListener(obs);
+            observers.put(id, obs);
+            observerPrograms.put(id, program);
+        } catch (Exception e) {
+            Msg.warn(this, "Failed to attach checkout observer for " + id
+                    + ": " + e.getMessage());
+        }
+    }
+
+    /** Detach every observer bound to this Program (cache release / evict). */
+    public void detachObservers(Program program) {
+        if (program == null) {
+            return;
+        }
+        List<String> ids = new ArrayList<>();
+        for (Map.Entry<String, Program> e : observerPrograms.entrySet()) {
+            if (e.getValue() == program) {
+                ids.add(e.getKey());
+            }
+        }
+        for (String id : ids) {
+            detachObserver(id);
+        }
+    }
+
+    /** Detach by checkout id (delete path / CLOSED). */
+    public void detachObserver(String checkoutId) {
+        if (checkoutId == null) {
+            return;
+        }
+        CheckoutObserver obs = observers.remove(checkoutId);
+        Program program = observerPrograms.remove(checkoutId);
+        dirtyQueue.clear(checkoutId);
+        if (obs != null && program != null && !program.isClosed()) {
+            try {
+                program.removeListener(obs);
+            } catch (Exception e) {
+                Msg.warn(this, "Failed to detach checkout observer for "
+                        + checkoutId + ": " + e.getMessage());
+            }
+        }
+    }
+
+    private Checkout findCheckoutFor(Program program) {
+        String domain = null;
+        DomainFile df = program.getDomainFile();
+        if (df != null) {
+            domain = df.getPathname();
+        }
+        String name = program.getName();
+        synchronized (this) {
+            for (Checkout c : byId.values()) {
+                if (domain != null && domain.equals(c.domainPath())) {
+                    return c;
+                }
+                if (name != null && name.equals(c.programName())) {
+                    return c;
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -172,6 +292,9 @@ public final class CheckoutRegistry {
         if (removed == null) {
             return false;
         }
+        // Drop the listener before the tree — a deleted checkout must not keep
+        // splicing into a path that no longer exists.
+        detachObserver(id);
         if (deleteFiles) {
             removed.root().deleteTree();
         }
@@ -216,8 +339,13 @@ public final class CheckoutRegistry {
 
     /** Test helper: drop all registrations without touching disk. */
     public synchronized void clearForTests() {
+        for (String id : new ArrayList<>(observers.keySet())) {
+            detachObserver(id);
+        }
         byId.clear();
         activeJobs.clear();
+        dirtyQueue.clearAll();
+        programLookup = null;
     }
 
     private static boolean basenameEquals(String selector, String pathOrName) {
