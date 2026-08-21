@@ -24,6 +24,7 @@ import ghidra.app.util.importer.MessageLog;
 import ghidra.app.util.opinion.Loaded;
 import ghidra.app.util.opinion.LoadResults;
 import ghidra.base.project.GhidraProject;
+import ghidra.framework.client.RepositoryAdapter;
 import ghidra.framework.model.DomainFile;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.model.Project;
@@ -31,6 +32,7 @@ import ghidra.framework.model.ProjectData;
 import ghidra.framework.model.ProjectLocator;
 import ghidra.framework.model.ProjectManager;
 import ghidra.framework.project.DefaultProjectManager;
+import ghidra.framework.store.LockException;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.CompilerSpecID;
@@ -44,6 +46,8 @@ import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.util.task.TaskMonitor;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -543,11 +547,9 @@ public class HeadlessProgramProvider implements ProgramProvider {
             ghidra.framework.client.RepositoryAdapter repo = projectData.getRepository();
             if (repo == null) {
                 return "Project is local-only (not bound to a Ghidra Server). "
-                    + "If you intended a server-checked-out file, the local project "
-                    + "must be a shared project — create one via Ghidra GUI or "
-                    + "`analyzeHeadless -connect ghidra://host:port/repo` and "
-                    + "mount it into this container, then reopen it via "
-                    + "/open_project.";
+                    + "If you intended a server-checked-out file, open a shared "
+                    + "project via /open_project with a ghidra://host[:port]/repo URL "
+                    + "(after /server/connect), or mount a GUI-created shared .gpr.";
             }
             // Only RepositoryAdapter.getName() is touched here — the
             // server host:port lives behind getServer().getServerInfo(),
@@ -877,12 +879,72 @@ public class HeadlessProgramProvider implements ProgramProvider {
     }
 
     /**
-     * Open a Ghidra project from a .gpr file path.
+     * Result of {@link #openProject(String, GhidraServerManager)}. Structured so a
+     * malformed {@code ghidra://} URL surfaces as an error instead of a boolean
+     * false that looked like "file not found".
+     */
+    public static final class OpenProjectResult {
+        public final boolean success;
+        public final String error;
+        public final String projectName;
+        public final boolean shared;
+        public final String repository;
+        public final String localProjectDir;
+
+        private OpenProjectResult(boolean success, String error, String projectName,
+                                  boolean shared, String repository, String localProjectDir) {
+            this.success = success;
+            this.error = error;
+            this.projectName = projectName;
+            this.shared = shared;
+            this.repository = repository;
+            this.localProjectDir = localProjectDir;
+        }
+
+        public static OpenProjectResult ok(String projectName, boolean shared,
+                                           String repository, String localProjectDir) {
+            return new OpenProjectResult(true, null, projectName, shared, repository, localProjectDir);
+        }
+
+        public static OpenProjectResult fail(String error) {
+            return new OpenProjectResult(false, error, null, false, null, null);
+        }
+    }
+
+    /**
+     * Open a local {@code .gpr} or a shared Ghidra Server repository URL.
+     *
+     * <p>When {@code projectPath} is a {@code ghidra://} URL, opens (or creates)
+     * a persistent shared project bound to that repository. A plain filesystem
+     * path keeps the pre-existing local {@code .gpr} behaviour exactly.
+     *
+     * @param projectPath {@code .gpr}/directory path, or {@code ghidra://host[:port]/repo}
+     * @param serverManager required for URL opens (connected adapter + credentials)
+     */
+    public OpenProjectResult openProject(String projectPath, GhidraServerManager serverManager) {
+        if (projectPath == null || projectPath.isBlank()) {
+            return OpenProjectResult.fail("Project path required");
+        }
+        // Any ghidra: string must parse as a server URL or fail — never fall
+        // through to the local .gpr branch (that would mkdir a project named
+        // after the URL string).
+        if (SharedProjectLocator.isGhidraUrl(projectPath)) {
+            return openSharedProject(projectPath.trim(), serverManager);
+        }
+        return openLocalProject(projectPath.trim());
+    }
+
+    /**
+     * Open a Ghidra project from a .gpr file path (local-only).
      *
      * @param projectPath Path to the .gpr file (e.g., "/projects/MyProject.gpr")
      * @return true if project was opened successfully
      */
     public boolean openProject(String projectPath) {
+        return openProject(projectPath, null).success;
+    }
+
+    private OpenProjectResult openLocalProject(String projectPath) {
         try {
             File projectFile = new File(projectPath);
 
@@ -900,14 +962,15 @@ public class HeadlessProgramProvider implements ProgramProvider {
                 File[] gprFiles = projectDir.listFiles((dir, name) -> name.endsWith(".gpr"));
                 if (gprFiles == null || gprFiles.length == 0) {
                     Msg.error(this, "No .gpr file found in: " + projectPath);
-                    return false;
+                    return OpenProjectResult.fail("No .gpr file found in: " + projectPath);
                 }
                 projectName = gprFiles[0].getName().replace(".gpr", "");
             }
 
             if (!projectDir.exists()) {
                 Msg.error(this, "Project directory not found: " + projectDir.getAbsolutePath());
-                return false;
+                return OpenProjectResult.fail(
+                        "Project directory not found: " + projectDir.getAbsolutePath());
             }
 
             // Close existing project if any
@@ -930,15 +993,104 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
             if (project != null) {
                 Msg.info(this, "Opened project: " + projectName + " from " + projectDir.getAbsolutePath());
-                return true;
-            } else {
-                Msg.error(this, "Failed to open project: " + projectPath);
-                return false;
+                return OpenProjectResult.ok(projectName, false, null, projectDir.getAbsolutePath());
             }
+            Msg.error(this, "Failed to open project: " + projectPath);
+            return OpenProjectResult.fail("Failed to open project: " + projectPath);
+        } catch (LockException e) {
+            // Two JVMs cannot share one project dir — fail loud, don't corrupt.
+            Msg.error(this, "Project locked (another Ghidra instance holds it): " + projectPath, e);
+            return OpenProjectResult.fail(
+                    "Project locked by another Ghidra instance: " + e.getMessage());
         } catch (Exception e) {
             Msg.error(this, "Error opening project: " + projectPath, e);
-            return false;
+            return OpenProjectResult.fail(
+                    "Error opening project: " + e.getMessage());
         }
+    }
+
+    /**
+     * Open-or-create a shared project bound to a Ghidra Server repository.
+     *
+     * <p>Same door as local open: the agent writes, so we need a real local
+     * {@code .rep} for working copies — not a transient URL view.
+     */
+    private OpenProjectResult openSharedProject(String ghidraUrl, GhidraServerManager serverManager) {
+        if (serverManager == null) {
+            return OpenProjectResult.fail(
+                    "Opening a ghidra:// URL requires the headless server manager "
+                            + "(credentials via GHIDRA_SERVER_USER/PASSWORD, then /server/connect)");
+        }
+
+        final SharedProjectLocator.Parsed parsed;
+        try {
+            parsed = SharedProjectLocator.parseServerUrl(ghidraUrl);
+        } catch (IllegalArgumentException e) {
+            return OpenProjectResult.fail(e.getMessage());
+        }
+
+        final Path projectParent;
+        try {
+            projectParent = SharedProjectLocator.resolveProjectDir(parsed);
+            Files.createDirectories(projectParent);
+        } catch (IllegalArgumentException e) {
+            return OpenProjectResult.fail(e.getMessage());
+        } catch (Exception e) {
+            return OpenProjectResult.fail(
+                    "Cannot create shared project directory: " + e.getMessage());
+        }
+
+        final RepositoryAdapter repo;
+        try {
+            serverManager.ensureConnectedTo(parsed.host(), parsed.port());
+            repo = serverManager.openRepository(parsed.repo());
+            if (repo == null) {
+                return OpenProjectResult.fail("Repository not found: " + parsed.repo());
+            }
+        } catch (Exception e) {
+            return OpenProjectResult.fail(
+                    "Server connection failed for " + parsed.host() + ":" + parsed.port()
+                            + ": " + e.getMessage());
+        }
+
+        if (project != null) {
+            closeProject();
+        }
+
+        // Parent is keyed by host_port_repo; project name stays the repo name
+        // so DomainFile paths match what analyzeHeadless imported.
+        ProjectLocator locator =
+                new ProjectLocator(projectParent.toAbsolutePath().toString(), parsed.repo());
+        ProjectManager pm = new HeadlessProjectManager();
+        ghidraProject = null;
+
+        try {
+            if (locator.exists() || pm.projectExists(locator)) {
+                project = pm.openProject(locator, /*restoreDefault*/ true, /*resetOwner*/ true);
+                Msg.info(this, "Opened shared project '" + parsed.repo()
+                        + "' from " + projectParent);
+            } else {
+                // false = durable project (GUI "New Shared Project"), not transient.
+                project = pm.createProject(locator, repo, false);
+                Msg.info(this, "Created shared project '" + parsed.repo()
+                        + "' at " + projectParent);
+            }
+        } catch (LockException e) {
+            return OpenProjectResult.fail(
+                    "Shared project directory locked by another Ghidra instance at "
+                            + projectParent + ": " + e.getMessage()
+                            + " (each JVM needs its own GHIDRA_MCP_SHARED_PROJECT_DIR)");
+        } catch (Exception e) {
+            Msg.error(this, "Failed to open/create shared project for " + ghidraUrl, e);
+            return OpenProjectResult.fail(
+                    "Failed to open/create shared project: " + e.getMessage());
+        }
+
+        if (project == null) {
+            return OpenProjectResult.fail("ProjectManager returned null for " + ghidraUrl);
+        }
+        return OpenProjectResult.ok(
+                parsed.repo(), true, parsed.repo(), projectParent.toAbsolutePath().toString());
     }
 
     /**
