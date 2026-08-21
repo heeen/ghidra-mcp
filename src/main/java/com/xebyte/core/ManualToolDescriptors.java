@@ -169,7 +169,12 @@ public final class ManualToolDescriptors {
         // ProgramScriptService.{moveFile,moveFolder}, which registers them in
         // every mode. Do not re-add them here -- double registration throws
         // "cannot add context to list" on headless startup (see #180).
-        add(m, "/open_project", "POST", "headless", "Open an existing Ghidra project (.gpr file or directory). GUI mode adds optional `headless` (default true) to suppress auto-launching CodeBrowser, and optional `program` to auto-launch CodeBrowser for a specific file when headless=false. Headless server ignores the extra params.", ToolAccess.WRITE,
+        add(m, "/open_project", "POST", "headless",
+            "Open a Ghidra project: local .gpr/directory, or ghidra://host[:port]/repo "
+            + "(persistent shared project; does not auto-open repo files — max ~5 shared "
+            + "programs). GUI mode adds optional `headless` (default true) and `program`; "
+            + "the headless server ignores those. Local tree mirrors YOUR working copy.",
+            ToolAccess.WRITE,
             "path", "Path to the project: its .gpr file or the project directory holding it.",
             "headless", "GUI mode only. True (the default) loads the project into the FrontEnd tool without opening a CodeBrowser window; false launches one for `program`. The headless server ignores it.",
             "program", "GUI mode only, and only when headless=false: the DomainFile path to open in the launched CodeBrowser.");
@@ -191,6 +196,7 @@ public final class ManualToolDescriptors {
             "username", "Server username. Omit to fall back to Ghidra's stored PasswordPrompt.Name, then to the OS user name.",
             "password", "Server password. Required — the call is refused without it.");
         add(m, "/server/checkouts", "GET", "server", "List all checked-out files in a folder, including server-side checkouts", ToolAccess.READ_ONLY,
+            "repo", REPO_HEADLESS_ONLY,
             "path", "Folder to list checkouts under. Defaults to / — everything.");
         // No parameters: GUI mode reports the already-open project, and headless
         // mode connects with the host/port GhidraServerManager read from
@@ -208,20 +214,20 @@ public final class ManualToolDescriptors {
             "repo", REPO_HEADLESS_ONLY,
             "path", "Folder to list. Defaults to / — the repository or project root.");
         add(m, "/server/status", "GET", "headless", "Check headless server connection status", ToolAccess.READ_ONLY);
-        add(m, "/server/version_control/add", "POST", "server", "Add a file to version control", ToolAccess.WRITE,
+        add(m, "/server/version_control/add", "POST", "server", "Add a file in the open shared project to version control. Requires /open_project with a ghidra:// URL. Local tree mirrors YOUR working copy.", ToolAccess.WRITE,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Path of the not-yet-versioned file to add.",
             "comment", "Check-in comment recorded for the initial version. Defaults to a generic Added via GhidraMCP.",
             "keepCheckedOut", "Accepted but not read on this route — neither handler passes it through. Use /server/version_control/checkin, where it does apply.");
-        add(m, "/server/version_control/checkin", "POST", "server", "Check in a version-controlled file", ToolAccess.WRITE,
+        add(m, "/server/version_control/checkin", "POST", "server", "Check in a DomainFile from the open shared project. Requires /open_project with a ghidra:// URL. Local tree mirrors YOUR working copy.", ToolAccess.WRITE,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Path of the checked-out file to check in.",
             "comment", "Check-in comment recorded on the new version. Defaults to a generic Checked in via GhidraMCP.",
             "keepCheckedOut", "True keeps the file checked out after the version lands, so you can keep editing. False (the default) releases the checkout.");
-        add(m, "/server/version_control/checkout", "POST", "server", "Check out a version-controlled file", ToolAccess.WRITE,
+        add(m, "/server/version_control/checkout", "POST", "server", "Check out a DomainFile into a local working copy in the open shared project. Requires /open_project with a ghidra:// URL. Does not open the program.", ToolAccess.WRITE,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Path of the versioned file to check out.");
-        add(m, "/server/version_control/undo_checkout", "POST", "server", "Undo a file checkout", ToolAccess.DESTRUCTIVE,
+        add(m, "/server/version_control/undo_checkout", "POST", "server", "Undo a DomainFile checkout in the open shared project (discards local changes). Requires /open_project with a ghidra:// URL.", ToolAccess.DESTRUCTIVE,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Path of the checked-out file to release. Any local changes not checked in are discarded.");
         add(m, "/server/version_history", "GET", "server", "Get version history for a file", ToolAccess.READ_ONLY,

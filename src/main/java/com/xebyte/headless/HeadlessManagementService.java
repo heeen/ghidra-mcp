@@ -146,19 +146,41 @@ public class HeadlessManagementService {
         }
     }
 
-    @McpTool(path = "/open_project", method = "POST", description = "Open an existing Ghidra project (.gpr file or directory)", category = "headless", access = ToolAccess.WRITE)
+    @McpTool(path = "/open_project", method = "POST",
+            description = "Open a Ghidra project: a local .gpr/directory, or a shared "
+                + "Ghidra Server repository via ghidra://host[:port]/repo (creates a "
+                + "persistent local shared project under ~/.ghidra-mcp/shared-projects/ "
+                + "keyed by host_port_repo, overridable with GHIDRA_MCP_SHARED_PROJECT_DIR). "
+                + "Does not auto-open repository files — max ~5 shared-server programs open "
+                + "at once; opening 20+ crashes Ghidra. Requires /server/connect first for "
+                + "URL opens. The local tree mirrors YOUR working copy (not other users' "
+                + "checkins until you refresh).",
+            category = "headless", access = ToolAccess.WRITE)
     public Response openProject(
             @Param(value = "path", source = ParamSource.BODY,
-                   description = "Path to an existing project: either its .gpr file or the project "
-                               + "directory holding it.") String projectPath) {
+                   description = "Path to an existing project: either its .gpr file, the "
+                               + "project directory holding it, or a ghidra://host[:port]/repo "
+                               + "URL for a shared Ghidra Server repository.") String projectPath) {
         if (projectPath == null || projectPath.isEmpty()) {
             return Response.err("Project path required");
         }
-        boolean success = programProvider.openProject(projectPath);
-        if (success) {
-            return Response.ok(JsonHelper.mapOf("success", true, "project", programProvider.getProjectName()));
+        HeadlessProgramProvider.OpenProjectResult result =
+            programProvider.openProject(projectPath, serverManager);
+        if (result.success) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("success", true);
+            body.put("project", result.projectName);
+            body.put("shared", result.shared);
+            if (result.repository != null) {
+                body.put("repository", result.repository);
+            }
+            if (result.localProjectDir != null) {
+                body.put("local_project_dir", result.localProjectDir);
+            }
+            return Response.ok(body);
         }
-        return Response.err("Failed to open project: " + projectPath);
+        return Response.err(result.error != null ? result.error
+                : ("Failed to open project: " + projectPath));
     }
 
     @McpTool(path = "/close_project", method = "POST", description = "Close the currently open project", category = "headless", access = ToolAccess.DESTRUCTIVE)
@@ -233,7 +255,14 @@ public class HeadlessManagementService {
         return Response.ok(res);
     }
 
-    @McpTool(path = "/get_project_info", description = "Get info about the currently open project, including server-binding state. A shared (server-bound) project is required for /server/version_control/checkout to deliver content the headless can open; if `project_server_bound` is false, the open project is local-only.", category = "headless", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/get_project_info",
+            description = "Get info about the currently open project, including "
+                + "server-binding state and repository name when bound. A shared "
+                + "(server-bound) project is required for /server/version_control/* "
+                + "to operate on DomainFiles; if project_server_bound is false, the "
+                + "open project is local-only. The decompile-checkout tree mirrors "
+                + "YOUR working copy — not other users' server checkins.",
+            category = "headless", access = ToolAccess.READ_ONLY)
     public Response getProjectInfo() {
         if (!programProvider.hasProject()) {
             return Response.ok(JsonHelper.mapOf("has_project", false));
@@ -256,6 +285,7 @@ public class HeadlessManagementService {
             if (binding.serverBound) {
                 info.put("server", binding.serverInfo);
                 info.put("server_repo", binding.repoName);
+                info.put("repository", binding.repoName);
             }
         }
         return Response.ok(info);

@@ -102,6 +102,8 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // Create server manager for shared Ghidra server support
         serverManager = new GhidraServerManager();
+        // VC endpoints resolve DomainFile through the open project.
+        serverManager.setProgramProvider(programProvider);
 
         managementService = new HeadlessManagementService(programProvider, serverManager);
 
@@ -331,9 +333,11 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // Load from project if specified
         if (projectPath != null) {
-            boolean success = programProvider.openProject(projectPath);
-            if (success) {
-                System.out.println("Opened project: " + programProvider.getProjectName());
+            HeadlessProgramProvider.OpenProjectResult opened =
+                    programProvider.openProject(projectPath, serverManager);
+            if (opened.success) {
+                System.out.println("Opened project: " + programProvider.getProjectName()
+                        + (opened.shared ? " (shared repo " + opened.repository + ")" : ""));
 
                 // If program name specified, load it
                 if (programName != null) {
@@ -350,7 +354,8 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
                     }
                 }
             } else {
-                System.err.println("Failed to open project: " + projectPath);
+                System.err.println("Failed to open project: "
+                        + (opened.error != null ? opened.error : projectPath));
             }
         }
     }

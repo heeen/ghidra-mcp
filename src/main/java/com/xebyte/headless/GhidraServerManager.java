@@ -16,14 +16,19 @@
 package com.xebyte.headless;
 
 import com.xebyte.core.GhidraMCPAuthenticator;
+import com.xebyte.core.ProgramProvider;
 import ghidra.framework.client.ClientUtil;
 import ghidra.framework.client.RepositoryAdapter;
 import ghidra.framework.client.RepositoryServerAdapter;
+import ghidra.framework.data.CheckinHandler;
+import ghidra.framework.model.DomainFile;
+import ghidra.framework.model.Project;
+import ghidra.framework.model.ProjectData;
 import ghidra.framework.remote.RepositoryItem;
 import ghidra.framework.remote.User;
-import ghidra.framework.store.CheckoutType;
 import ghidra.framework.store.ItemCheckoutStatus;
 import ghidra.framework.store.Version;
+import ghidra.util.task.ConsoleTaskMonitor;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -57,6 +62,8 @@ public class GhidraServerManager {
     private volatile boolean connected = false;
     private String lastError;
     private static volatile boolean authenticatorRegistered = false;
+    /** Open project — DomainFile VC ops need this, not RepositoryAdapter alone. */
+    private volatile ProgramProvider programProvider;
 
     public GhidraServerManager() {
         this.host = getEnvOrDefault("GHIDRA_SERVER_HOST", DEFAULT_HOST);
@@ -389,27 +396,27 @@ public class GhidraServerManager {
     }
 
     /**
-     * Check out a file from a repository.
+     * Check out a file from the open shared project into a local working copy.
      *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
+     * <p>RepositoryAdapter.checkout only takes a server-side lock — without a
+     * bound project there is nowhere to put the working copy. Requires
+     * {@code /open_project} with a {@code ghidra://} URL (or a GUI-created
+     * shared .gpr) first.
+     *
+     * @param repoName Repository name (must match the open project's repo when set)
+     * @param filePath File path within the project (e.g. {@code /gnutrue})
      * @return JSON string with result
      */
     public String checkoutFile(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
+        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
+        if (resolved.errorJson != null) {
+            return resolved.errorJson;
         }
+        DomainFile file = resolved.file;
         try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            repo.checkout(parentPath, fileName, CheckoutType.EXCLUSIVE, null);
-            return "{\"status\": \"checked_out\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\"}";
+            boolean success = file.checkout(/*exclusive*/ true, new ConsoleTaskMonitor());
+            return vcStatusJson(success ? "checked_out" : "checkout_failed",
+                    resolved.repoName, filePath, file, null);
         } catch (Exception e) {
             lastError = e.getMessage();
             return "{\"error\": \"Checkout failed: " + escapeJson(e.getMessage()) + "\"}";
@@ -417,44 +424,33 @@ public class GhidraServerManager {
     }
 
     /**
-     * Check in a file to the repository.
+     * Check in a file's local working copy to the repository.
      *
      * @param repoName Repository name
-     * @param filePath File path within the repository
+     * @param filePath File path within the project
      * @param comment Check-in comment
      * @param keepCheckedOut If true, file remains checked out after check-in
      * @return JSON string with result
      */
     public String checkinFile(String repoName, String filePath, String comment, boolean keepCheckedOut) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
+        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
+        if (resolved.errorJson != null) {
+            return resolved.errorJson;
         }
+        DomainFile file = resolved.file;
+        if (!file.isCheckedOut()) {
+            return "{\"error\": \"File is not checked out: " + escapeJson(filePath) + "\"}";
+        }
+        final String cmt = comment != null ? comment : "";
+        final boolean keep = keepCheckedOut;
         try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            RepositoryItem item = repo.getItem(parentPath, fileName);
-            if (item == null) {
-                return "{\"error\": \"File not found in repository: " + escapeJson(filePath) + "\"}";
-            }
-            // RepositoryAdapter does not expose a direct checkin(); the
-            // operation must go through DomainFile.checkin() on an open
-            // project. Returning a success status here would mislead an
-            // automated caller into believing the checkin happened —
-            // edits would remain un-checked-in and (per the shared-server
-            // persistence model) silently lost. Return an explicit error
-            // so the caller knows to use the project-level path instead.
-            return "{\"error\": \"checkin not supported via repository adapter\"" +
-                   ", \"status\": \"not_implemented\"" +
-                   ", \"repository\": \"" + escapeJson(repoName) + "\"" +
-                   ", \"path\": \"" + escapeJson(filePath) + "\"" +
-                   ", \"item_exists\": " + (item != null) +
-                   ", \"hint\": \"open the project and use DomainFile.checkin() — " +
-                   "in this server: /open_project then /save_program then checkin via the project file\"}";
+            file.checkin(new CheckinHandler() {
+                @Override public boolean keepCheckedOut() { return keep; }
+                @Override public String getComment() { return cmt; }
+                @Override public boolean createKeepFile() { return false; }
+            }, new ConsoleTaskMonitor());
+            return vcStatusJson("checked_in", resolved.repoName, filePath, file,
+                    ", \"comment\": \"" + escapeJson(cmt) + "\", \"keep_checked_out\": " + keep);
         } catch (Exception e) {
             lastError = e.getMessage();
             return "{\"error\": \"Checkin failed: " + escapeJson(e.getMessage()) + "\"}";
@@ -465,34 +461,21 @@ public class GhidraServerManager {
      * Undo a checkout, discarding local changes.
      *
      * @param repoName Repository name
-     * @param filePath File path within the repository
+     * @param filePath File path within the project
      * @return JSON string with result
      */
     public String undoCheckout(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
+        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
+        if (resolved.errorJson != null) {
+            return resolved.errorJson;
+        }
+        DomainFile file = resolved.file;
+        if (!file.isCheckedOut()) {
+            return "{\"error\": \"File is not checked out: " + escapeJson(filePath) + "\"}";
         }
         try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            // RepositoryAdapter does not expose undoCheckout; the operation
-            // must go through DomainFile.undoCheckout() on an open project
-            // (or terminateCheckout for an admin force-undo). Returning a
-            // success status here would leave the checkout live on the
-            // server while the caller believes it was undone.
-            return "{\"error\": \"undoCheckout not supported via repository adapter\"" +
-                   ", \"status\": \"not_implemented\"" +
-                   ", \"repository\": \"" + escapeJson(repoName) + "\"" +
-                   ", \"path\": \"" + escapeJson(filePath) + "\"" +
-                   ", \"parent\": \"" + escapeJson(parentPath) + "\"" +
-                   ", \"file\": \"" + escapeJson(fileName) + "\"" +
-                   ", \"hint\": \"open the project and use DomainFile.undoCheckout(), " +
-                   "or use /server/admin/terminate_checkout for an admin force-undo\"}";
+            file.undoCheckout(/*keep*/ false);
+            return vcStatusJson("checkout_undone", resolved.repoName, filePath, file, null);
         } catch (Exception e) {
             lastError = e.getMessage();
             return "{\"error\": \"Undo checkout failed: " + escapeJson(e.getMessage()) + "\"}";
@@ -500,30 +483,145 @@ public class GhidraServerManager {
     }
 
     /**
-     * Add a file to version control.
+     * Add a project file to version control on the bound repository.
      *
      * @param repoName Repository name
-     * @param filePath File path within the repository
+     * @param filePath File path within the project
      * @param comment Initial version comment
      * @return JSON string with result
      */
     public String addToVersionControl(String repoName, String filePath, String comment) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
+        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
+        if (resolved.errorJson != null) {
+            return resolved.errorJson;
         }
+        DomainFile file = resolved.file;
+        if (file.isVersioned()) {
+            return "{\"error\": \"File already under version control: " + escapeJson(filePath) + "\"}";
+        }
+        String cmt = comment != null ? comment : "";
         try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            // Adding to version control is done via DomainFile on the client side;
-            // here we verify the repository is accessible
-            return "{\"status\": \"repository_verified\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) +
-                   "\", \"note\": \"Use the project's DomainFile to complete add-to-version-control.\"}";
+            file.addToVersionControl(cmt, /*keepCheckedOut*/ false, new ConsoleTaskMonitor());
+            return vcStatusJson("added", resolved.repoName, filePath, file,
+                    ", \"comment\": \"" + escapeJson(cmt) + "\"");
         } catch (Exception e) {
             lastError = e.getMessage();
             return "{\"error\": \"Add to version control failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    /**
+     * Resolve a DomainFile from the open shared project. VC bookkeeping lives
+     * on the DomainFile, not on RepositoryAdapter.
+     */
+    private DomainFileResolution resolveDomainFile(String repoName, String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return DomainFileResolution.error("{\"error\": \"'path' parameter required\"}");
+        }
+        if (programProvider == null) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"Program provider not wired — cannot resolve DomainFile\"}");
+        }
+        Project project = programProvider.getProject();
+        if (project == null) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"No shared project open. Call /open_project with a "
+                            + "ghidra://host[:port]/repo URL first.\"}");
+        }
+        ProjectData data;
+        try {
+            data = project.getProjectData();
+        } catch (Exception e) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"Could not access project data: "
+                            + escapeJson(e.getMessage()) + "\"}");
+        }
+        RepositoryAdapter projectRepo = data.getRepository();
+        if (projectRepo == null) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"Open project is local-only (not server-bound). "
+                            + "Re-open via /open_project with a ghidra:// URL.\"}");
+        }
+        String boundRepo = projectRepo.getName();
+        if (repoName != null && !repoName.isBlank() && !repoName.equals(boundRepo)) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"Repository mismatch: open project is bound to '"
+                            + escapeJson(boundRepo) + "' but request named '"
+                            + escapeJson(repoName) + "'\"}");
+        }
+        String normalized = filePath.startsWith("/") ? filePath : "/" + filePath;
+        DomainFile file = data.getFile(normalized);
+        if (file == null) {
+            return DomainFileResolution.error(
+                    "{\"error\": \"File not found in project: " + escapeJson(normalized)
+                            + "\", \"hint\": \"list paths via /get_project_info; "
+                            + "do not auto-open every repository file\"}");
+        }
+        return DomainFileResolution.ok(file, boundRepo);
+    }
+
+    private String vcStatusJson(String status, String repoName, String filePath,
+                                DomainFile file, String extraFields) {
+        // Re-read the file after the operation rather than reporting off the
+        // instance we just acted on, whose version-control state is cached.
+        //
+        // Note what this does NOT claim: a checkin with keepCheckedOut=false
+        // answering "isCheckedOut": true is not necessarily stale. Measured
+        // against a live server, the checkout genuinely survived that checkin
+        // (/server/checkouts still listed it, and a re-checkout failed with
+        // "private file exists"). Refreshing is what makes the field mean
+        // "the state now" either way, which is the only way to tell the two
+        // apart.
+        DomainFile current = refreshed(file, filePath);
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"status\": \"").append(escapeJson(status)).append("\"");
+        sb.append(", \"repository\": \"").append(escapeJson(repoName)).append("\"");
+        sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
+        sb.append(", \"isCheckedOut\": ").append(current.isCheckedOut());
+        sb.append(", \"canCheckin\": ").append(current.canCheckin());
+        sb.append(", \"modifiedSinceCheckout\": ").append(current.modifiedSinceCheckout());
+        sb.append(", \"isVersioned\": ").append(current.isVersioned());
+        if (extraFields != null) {
+            sb.append(extraFields);
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    /**
+     * Re-resolve a DomainFile through its project so post-operation state is
+     * read fresh. Falls back to the original instance when the project or the
+     * path cannot be re-read — a stale-but-present answer beats an exception in
+     * a status payload.
+     */
+    private DomainFile refreshed(DomainFile file, String filePath) {
+        try {
+            ghidra.framework.model.ProjectData data = file.getParent().getProjectData();
+            data.refresh(true);
+            DomainFile again = data.getFile(filePath);
+            return again != null ? again : file;
+        } catch (Exception e) {
+            return file;
+        }
+    }
+
+    private static final class DomainFileResolution {
+        final DomainFile file;
+        final String repoName;
+        final String errorJson;
+
+        private DomainFileResolution(DomainFile file, String repoName, String errorJson) {
+            this.file = file;
+            this.repoName = repoName;
+            this.errorJson = errorJson;
+        }
+
+        static DomainFileResolution ok(DomainFile file, String repoName) {
+            return new DomainFileResolution(file, repoName, null);
+        }
+
+        static DomainFileResolution error(String json) {
+            return new DomainFileResolution(null, null, json);
         }
     }
 
@@ -839,6 +937,54 @@ public class GhidraServerManager {
 
     public RepositoryServerAdapter getServerAdapter() {
         return serverAdapter;
+    }
+
+    /**
+     * Wire the open-project handle so version-control endpoints can resolve
+     * {@link DomainFile}s. Called once from {@code GhidraMCPHeadlessServer} startup.
+     */
+    public void setProgramProvider(ProgramProvider programProvider) {
+        this.programProvider = programProvider;
+    }
+
+    /**
+     * Ensure a live {@link RepositoryServerAdapter} for the given host:port.
+     * Reuses the existing connection when it matches; refuses a host/port
+     * mismatch rather than silently talking to the wrong server.
+     */
+    public synchronized RepositoryServerAdapter ensureConnectedTo(String targetHost, int targetPort)
+            throws IOException {
+        if (targetHost == null || targetHost.isBlank()) {
+            throw new IOException("server host required");
+        }
+        if (targetPort <= 0) {
+            throw new IOException("server port must be positive: " + targetPort);
+        }
+        if (isConnected()) {
+            if (!host.equalsIgnoreCase(targetHost) || port != targetPort) {
+                throw new IOException("Already connected to " + host + ":" + port
+                        + " but URL targets " + targetHost + ":" + targetPort
+                        + ". /server/disconnect first, or set GHIDRA_SERVER_HOST/PORT to match.");
+            }
+            return serverAdapter;
+        }
+        if (!host.equalsIgnoreCase(targetHost) || port != targetPort) {
+            throw new IOException("URL targets " + targetHost + ":" + targetPort
+                    + " but GHIDRA_SERVER_HOST/PORT is " + host + ":" + port
+                    + ". Align the env vars (or reconnect) before /open_project.");
+        }
+        connect();
+        if (!isConnected()) {
+            throw new IOException(lastError != null ? lastError : "connect failed");
+        }
+        return serverAdapter;
+    }
+
+    /**
+     * Open (and cache) a repository on the connected server.
+     */
+    public synchronized RepositoryAdapter openRepository(String repoName) throws IOException {
+        return getRepository(repoName);
     }
 
     private static String getEnvOrDefault(String name, String defaultValue) {
