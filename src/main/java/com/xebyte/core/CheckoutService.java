@@ -62,6 +62,29 @@ public class CheckoutService {
 
     public CheckoutService(ProgramProvider programProvider) {
         this.programProvider = programProvider;
+        // Auto-reconcile needs to re-resolve a Program (the observer must never
+        // hold one). Only FrontEndProgramProvider registered a lookup, so
+        // outside the GUI the dirty queue collected addresses and silently
+        // dropped every one. Every mode has a ProgramProvider, so derive it
+        // here; the GUI's cache-aware lookup still wins via IfAbsent.
+        CheckoutRegistry.getInstance().setProgramLookupIfAbsent(this::lookupViaProvider);
+    }
+
+    /**
+     * Resolve a checkout's Program by domain path, then by name.
+     *
+     * <p>Deliberately NOT {@code ProgramProvider.resolveProgram}, which falls
+     * back to the current program when the name misses. A checkout names one
+     * specific program, and reconciling a miss against whatever happens to be
+     * active would splice one program's decompilation into another program's
+     * tree. A miss must stay a miss.
+     */
+    private Program lookupViaProvider(Checkout checkout) {
+        if (checkout == null || programProvider == null) {
+            return null;
+        }
+        Program byPath = programProvider.getProgram(checkout.domainPath());
+        return byPath != null ? byPath : programProvider.getProgram(checkout.programName());
     }
 
     // =========================================================================
