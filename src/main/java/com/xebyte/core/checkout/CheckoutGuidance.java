@@ -53,10 +53,11 @@ public final class CheckoutGuidance {
                 .append("marks the checkout stale instead — resweep rather than trusting it.\n\n");
 
         sb.append("## The tree is the corpus; the resource is the microscope\n\n");
-        sb.append("Every function block carries `uri: ghidra://function/<program>/<address>`. ")
-                .append("Grep to find the hit, then read that resource for what the tree ")
-                .append("deliberately omits: callers, call-site context, the full bundle. ")
-                .append("Disassembly, p-code and type layouts are MCP tools, not files.\n\n");
+        sb.append("Every function block carries `uri: ghidra://function/<program>/<address>` "
+                + "plus `calls:` / `callers:` neighbourhood lines. Grep to find the hit; "
+                + "the header answers who calls it without another tool round-trip. "
+                + "Read the URI resource for call-site context and the full bundle. "
+                + "Disassembly, p-code and type layouts are MCP tools, not files.\n\n");
 
         sb.append("## Searching\n\n");
         sb.append("- `Grep <pattern> ").append(rootPath).append("/modules`\n");

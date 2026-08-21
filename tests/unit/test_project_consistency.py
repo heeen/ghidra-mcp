@@ -134,8 +134,13 @@ class TestVersionConsistency(unittest.TestCase):
                     f"VersionInfo VERSION={match.group(1)} != pom.xml {pom_version}")
 
     def test_user_visible_tool_counts_match_endpoint_catalog(self):
-        """Marketing/extension metadata should not drift from endpoints.json."""
-        expected = json.loads(ENDPOINTS_JSON.read_text(encoding="utf-8"))["total_endpoints"]
+        """Marketing/extension metadata should not drift from agent-visible endpoints.
+
+        Internal HTTP routes stay in endpoints.json (bridge still calls them) but
+        are omitted from /mcp/schema and from the advertised MCP tool count.
+        """
+        catalog = json.loads(ENDPOINTS_JSON.read_text(encoding="utf-8"))
+        expected = sum(1 for e in catalog["endpoints"] if not e.get("internal"))
         checks = {
             "README.md": PROJECT_ROOT / "README.md",
             "CLAUDE.md": PROJECT_ROOT / "CLAUDE.md",

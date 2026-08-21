@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.List;
 import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
@@ -52,7 +53,7 @@ public class SweepJobTest {
     }
 
     @Test
-    public void functionHeaderHasSevenLinesResolvableUriAndFields() {
+    public void functionHeaderHasNineLinesResolvableUriAndFields() {
         Instant dts = Instant.parse("2026-08-20T12:00:00Z");
         String header = SweepJob.renderFunctionHeader(
                 "ParseHeader",
@@ -65,24 +66,44 @@ public class SweepJobTest {
                 "abcdef012345",
                 dts,
                 42L,
-                "synaWudfBioUsb.dll");
+                "synaWudfBioUsb.dll",
+                List.of("crt0_init_bss_data", "prng_seed_default"),
+                List.of());
 
         String[] lines = header.split("\n", -1);
         // trailing newline ⇒ last element empty
-        assertEquals(8, lines.length);
-        assertEquals(7, lines.length - 1);
+        assertEquals(SweepJob.HEADER_LINES + 1, lines.length);
+        assertEquals(SweepJob.HEADER_LINES, lines.length - 1);
 
         assertTrue(lines[0].startsWith("// fn: ParseHeader @ 0000000180001000 size="));
-        assertTrue(lines[1].contains("c05"));
-        assertTrue(lines[1].contains("literal-locality"));
-        assertTrue(lines[1].contains("evidence_backed=true"));
-        assertEquals("// fp: abcdef012345", lines[2]);
-        assertEquals("// dts: 2026-08-20T12:00:00Z", lines[3]);
-        assertEquals("// mod: 42", lines[4]);
+        assertEquals("// calls: crt0_init_bss_data, prng_seed_default", lines[1]);
+        assertEquals("// callers: (none — entry)", lines[2]);
+        assertTrue(lines[3].contains("c05"));
+        assertTrue(lines[3].contains("literal-locality"));
+        assertTrue(lines[3].contains("evidence_backed=true"));
+        assertEquals("// fp: abcdef012345", lines[4]);
+        assertEquals("// dts: 2026-08-20T12:00:00Z", lines[5]);
+        assertEquals("// mod: 42", lines[6]);
         assertEquals(
                 "// uri: ghidra://function/synaWudfBioUsb.dll/0000000180001000",
-                lines[5]);
-        assertEquals("// see: modules/c05/README.md", lines[6]);
+                lines[7]);
+        assertEquals("// see: modules/c05/README.md", lines[8]);
+    }
+
+    @Test
+    public void neighbourListEmptyCallsVsEntryCallers() {
+        assertEquals("(none)", SweepJob.formatNeighbourList(List.of(), false));
+        assertEquals("(none — entry)", SweepJob.formatNeighbourList(List.of(), true));
+        assertEquals("(none)", SweepJob.formatNeighbourList(null, false));
+    }
+
+    @Test
+    public void neighbourListTruncatesAtEightWithMoreHint() {
+        List<String> nine = List.of("a", "b", "c", "d", "e", "f", "g", "h", "i");
+        String rendered = SweepJob.formatNeighbourList(nine, false);
+        assertEquals("a, b, c, d, e, f, g, h +1 more, see callgraph.tsv", rendered);
+        List<String> eight = List.of("a", "b", "c", "d", "e", "f", "g", "h");
+        assertEquals("a, b, c, d, e, f, g, h", SweepJob.formatNeighbourList(eight, false));
     }
 
     @Test

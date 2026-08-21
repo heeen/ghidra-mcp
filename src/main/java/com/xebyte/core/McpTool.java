@@ -44,4 +44,13 @@ public @interface McpTool {
      * {@link ToolAccess#UNSPECIFIED} no hints are emitted at all.
      */
     ToolAccess access() default ToolAccess.UNSPECIFIED;
+
+    /**
+     * Bridge-only HTTP route: still registered and callable, but omitted from
+     * {@code /mcp/schema} so no MCP tool is generated and the model never sees
+     * it. Use for endpoints the bridge invokes automatically (e.g. checkout
+     * refresh after writes) — listing them invites the agent to reason about
+     * staleness the bridge already handles.
+     */
+    boolean internal() default false;
 }
