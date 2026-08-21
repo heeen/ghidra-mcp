@@ -250,7 +250,8 @@ public final class CheckoutTreeNarrower {
                     cols[1],
                     cols[2],
                     cols[3],
-                    cols.length > 4 && Boolean.parseBoolean(cols[4])));
+                    cols.length > 4 && Boolean.parseBoolean(cols[4]),
+                    cols.length > 5 ? cols[5] : ""));
         }
         return out;
     }
@@ -259,7 +260,8 @@ public final class CheckoutTreeNarrower {
         StringBuilder sb = new StringBuilder(SweepJob.byAddressHeader());
         for (IndexEntry e : kept) {
             sb.append(SweepJob.formatByAddressRow(
-                    e.addressHex(), e.name(), e.slug(), e.file(), e.evidenceBacked()));
+                    e.addressHex(), e.name(), e.slug(), e.file(),
+                    e.evidenceBacked(), e.ifp()));
         }
         checkout.root().writeFile(Path.of(CheckoutLayout.byAddressTsv()), sb.toString());
     }
@@ -365,5 +367,6 @@ public final class CheckoutTreeNarrower {
             String name,
             String slug,
             String file,
-            boolean evidenceBacked) {}
+            boolean evidenceBacked,
+            String ifp) {}
 }

@@ -152,8 +152,13 @@ public final class SweepJob implements Runnable {
             }
 
             PartitionContext ctx = new PartitionContext(program);
+            // Pins first — a claimed function is marked assigned so the cascade
+            // (including the terminal address-band) never reclassifies it.
+            List<Partition> pinned = ModuleOverrides.claimPinned(ctx);
             PartitionCascade.Result cascade = new PartitionCascade(chain).run(ctx);
-            List<Partition> partitions = new ArrayList<>(cascade.partitions());
+            List<Partition> partitions = new ArrayList<>(pinned.size() + cascade.partitions().size());
+            partitions.addAll(pinned);
+            partitions.addAll(cascade.partitions());
             partitions.sort(Comparator.comparing(p -> p.members().get(0).getEntryPoint()));
 
             // Partition → PARTITION exclusions (need slugs) → TAG/RANGE + includeOnly
@@ -286,7 +291,8 @@ public final class SweepJob implements Runnable {
                             func.getName(),
                             part.slug(),
                             relativeFile,
-                            evidenceBacked));
+                            evidenceBacked,
+                            InputFingerprint.of(func)));
 
                     accum.done++;
                     if (emit.failed()) {
@@ -490,19 +496,25 @@ public final class SweepJob implements Runnable {
                 + addressHex;
     }
 
-    /** Columns: address, name, partition_slug, file, evidence_backed */
+    /**
+     * Columns: address, name, partition_slug, file, evidence_backed, ifp.
+     * {@code ifp} is the DB-cheap input fingerprint — not in the block header,
+     * because the header is agent-read on every Read and must stay 9 lines.
+     */
     public static String formatByAddressRow(
             String addressHex,
             String name,
             String partitionSlug,
             String file,
-            boolean evidenceBacked) {
+            boolean evidenceBacked,
+            String ifp) {
         return addressHex + "\t" + name + "\t" + partitionSlug + "\t"
-                + file + "\t" + evidenceBacked + "\n";
+                + file + "\t" + evidenceBacked + "\t"
+                + (ifp != null ? ifp : "") + "\n";
     }
 
     public static String byAddressHeader() {
-        return "address\tname\tpartition_slug\tfile\tevidence_backed\n";
+        return "address\tname\tpartition_slug\tfile\tevidence_backed\tifp\n";
     }
 
     public static String shortContentHash(String content) {
@@ -672,6 +684,10 @@ public final class SweepJob implements Runnable {
      */
     static boolean isEvidenceBacked(Partition part, Function func, PartitionContext ctx) {
         String method = part.method();
+        // A pin IS the evidence — a human/agent stated the compartment.
+        if (ModuleOverrides.METHOD.equals(method)) {
+            return true;
+        }
         if ("address-band".equals(method)) {
             return false;
         }
@@ -886,7 +902,8 @@ public final class SweepJob implements Runnable {
         rows.sort(Comparator.comparing(IndexRow::addressHex));
         for (IndexRow row : rows) {
             byAddr.append(formatByAddressRow(
-                    row.addressHex(), row.name(), row.slug(), row.file(), row.evidenceBacked()));
+                    row.addressHex(), row.name(), row.slug(), row.file(),
+                    row.evidenceBacked(), row.ifp()));
         }
         checkout.root().writeFile(Path.of(CheckoutLayout.byAddressTsv()), byAddr.toString());
 
@@ -1029,7 +1046,8 @@ public final class SweepJob implements Runnable {
                 + "(named by first-function address); each function has a 9-line header "
                 + "with calls/callers and a resolvable `ghidra://function/...` uri\n");
         sb.append("- `index/by-address.tsv` — complete address → file map "
-                + "(failed decompiles still appear)\n");
+                + "(failed decompiles still appear); `ifp` column is a "
+                + "DB-cheap input fingerprint for reconcile without re-decompiling\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
         checkout.root().writeFile(Path.of(CheckoutLayout.readmeMd()), sb.toString());
     }
@@ -1165,7 +1183,8 @@ public final class SweepJob implements Runnable {
             String name,
             String slug,
             String file,
-            boolean evidenceBacked) {}
+            boolean evidenceBacked,
+            String ifp) {}
 
     /** One Read-budget {@code .c} flushed during a compartment sweep. */
     private record EmittedFile(

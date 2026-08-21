@@ -134,14 +134,16 @@ public class BlockSplicerTest {
     public void updateIndexNamesRewritesNameColumnOnly() {
         String index = SweepJob.byAddressHeader()
                 + SweepJob.formatByAddressRow(
-                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false)
+                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false, "aaa")
                 + SweepJob.formatByAddressRow(
-                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false);
+                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false, "bbb");
         String updated = BlockSplicer.updateIndexNames(
                 index, Map.of("00100100", "BarRenamed"));
         assertTrue(updated.contains("00100100\tBarRenamed\tc05\t"));
         assertTrue(updated.contains("00100000\tFoo\tc05\t"));
         assertFalse(updated.contains("00100100\tBar\t"));
+        // ifp column preserved through a name-only rewrite
+        assertTrue(updated.contains("\tbbb\n") || updated.contains("\tbbb"));
     }
 
     @Test
@@ -211,13 +213,13 @@ public class BlockSplicerTest {
 
         String index = SweepJob.byAddressHeader()
                 + SweepJob.formatByAddressRow(
-                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false)
+                        "00100000", "Foo", "c05", "modules/c05/00100000.c", false, "a")
                 + SweepJob.formatByAddressRow(
-                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false)
+                        "00100100", "Bar", "c05", "modules/c05/00100000.c", false, "b")
                 + SweepJob.formatByAddressRow(
-                        "00100200", "Baz", "c05", "modules/c05/00100200.c", false)
+                        "00100200", "Baz", "c05", "modules/c05/00100200.c", false, "c")
                 + SweepJob.formatByAddressRow(
-                        "00100300", "Qux", "c05", "modules/c05/00100200.c", false);
+                        "00100300", "Qux", "c05", "modules/c05/00100200.c", false, "d");
 
         // Lookup as BlockSplicer.refresh does: index → file body → findBlock.
         assertTrue(index.contains("00100200\tBaz\tc05\tmodules/c05/00100200.c\t"));

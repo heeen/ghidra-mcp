@@ -127,16 +127,18 @@ public class SweepJobTest {
     @Test
     public void byAddressTsvRowShape() {
         assertEquals(
-                "address\tname\tpartition_slug\tfile\tevidence_backed\n",
+                "address\tname\tpartition_slug\tfile\tevidence_backed\tifp\n",
                 SweepJob.byAddressHeader());
         assertEquals(
-                "00100000\tFoo\tc05\tmodules/c05/00100000.c\ttrue\n",
+                "00100000\tFoo\tc05\tmodules/c05/00100000.c\ttrue\tabcdef123456\n",
                 SweepJob.formatByAddressRow(
-                        "00100000", "Foo", "c05", "modules/c05/00100000.c", true));
+                        "00100000", "Foo", "c05", "modules/c05/00100000.c", true,
+                        "abcdef123456"));
         assertEquals(
-                "00100000\tBar\tb003\tmodules/b003/00100000.c\tfalse\n",
+                "00100000\tBar\tb003\tmodules/b003/00100000.c\tfalse\t\n",
                 SweepJob.formatByAddressRow(
-                        "00100000", "Bar", "b003", "modules/b003/00100000.c", false));
+                        "00100000", "Bar", "b003", "modules/b003/00100000.c", false,
+                        ""));
     }
 
     @Test
@@ -193,7 +195,7 @@ public class SweepJobTest {
         assertEquals("modules/c03/00001200.c", paths[3]);
         // by-address row for fn[2] must name the file that starts at fn[2].
         String row = SweepJob.formatByAddressRow(
-                "00001200", "Fn2", "c03", paths[2], false);
+                "00001200", "Fn2", "c03", paths[2], false, "deadbeefcafe");
         assertTrue(row.contains("\tmodules/c03/00001200.c\t"));
     }
 

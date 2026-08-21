@@ -63,7 +63,9 @@ public final class CheckoutGuidance {
         sb.append("- `Grep <pattern> ").append(rootPath).append("/modules`\n");
         sb.append("- `Glob ").append(rootPath).append("/modules/*/*.c`\n");
         sb.append("- `index/by-address.tsv` maps every address to the file holding it, ")
-                .append("including functions whose decompilation failed.\n");
+                .append("including functions whose decompilation failed. The `ifp` column ")
+                .append("is a short hash of DB-cheap inputs (name, prototype, comments, ")
+                .append("refs) — used to detect change without re-decompiling.\n");
         if (strippedBinary) {
             sb.append("\n**This binary is stripped — do not search for function names.** ")
                     .append("Almost every name here is Ghidra's own `FUN_<addr>`, so grepping ")
@@ -123,6 +125,10 @@ public final class CheckoutGuidance {
                         + "functions are grouped by address order alone. Do not infer that "
                         + "they are related. See `modules/index.md` for which strategies were "
                         + "tried and why each did not apply.";
+            case "pinned":
+                return "Pinned by an agent or human via `/decompile_checkout_pin_module`. "
+                        + "These functions are never reclassified by the cascade — the pin "
+                        + "survives resweeps because it lives on the program, not the checkout.";
             default:
                 return String.format(Locale.ROOT,
                         "Grouped by `%s` at confidence %.2f; see the evidence below.",
