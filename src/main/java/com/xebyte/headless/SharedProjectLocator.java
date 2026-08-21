@@ -146,7 +146,7 @@ public final class SharedProjectLocator {
     /**
      * Resolve the parent directory that will hold {@code <repo>.gpr}/{@code .rep}.
      *
-     * <p>Default: {@code ~/.ghidra-mcp/shared-projects/<host>_<port>_<repo>}.
+     * <p>Default: {@code ~/ghidra-shared-projects/<host>_<port>_<repo>}.
      * Override root with {@code GHIDRA_MCP_SHARED_PROJECT_DIR} (key still appended).
      * Routed through {@link SecurityConfig#resolveWithinFileRoot} so a configured
      * {@code GHIDRA_MCP_FILE_ROOT} cannot be escaped.
@@ -176,7 +176,12 @@ public final class SharedProjectLocator {
             }
             root = input;
         } else {
-            root = Path.of(System.getProperty("user.home"), ".ghidra-mcp", "shared-projects");
+            // Deliberately NOT a dotted directory. Ghidra 12.1.3's ProjectLocator
+            // rejects any path element starting with '.' ("Path element starting
+            // with '.' is not permitted"), so ~/.ghidra-mcp/... makes every
+            // shared-project open fail. Older Ghidra accepted it, which is why
+            // this only surfaced on upgrade.
+            root = Path.of(System.getProperty("user.home"), "ghidra-shared-projects");
         }
 
         Path projectDir = root.resolve(parsed.directoryKey()).toAbsolutePath().normalize();
