@@ -444,6 +444,67 @@ class TestCheckoutRefreshFromBlastRadius(unittest.TestCase):
         self.assertTrue(posted[0].get("mark_stale"))
         self.assertNotIn("addresses", posted[0])
 
+    def test_structural_writes_mark_stale_rather_than_splice(self):
+        """Creating or deleting a function changes the function SET, not its text.
+
+        Measured: /create_function followed by a refresh reported skipped:1 and
+        left the tree silently lacking the function while phase still said
+        complete. Deleting is worse — an orphan block describes a function the
+        program no longer has, and it is greppable. Both can also move compartment
+        membership and band boundaries, so the partitioning is suspect too.
+        """
+        for endpoint in ("/create_function", "/delete_function"):
+            with self.subTest(endpoint=endpoint):
+                posted: list[dict] = []
+
+                async def fake_blocking(func, *a, **kw):
+                    return func()
+
+                def fake_get(ep, params=None):
+                    if ep == "/decompile_checkout_status":
+                        return json.dumps({"checkout_id": "co_abc", "phase": "complete"})
+                    return json.dumps({})
+
+                def fake_post(ep, data, retries=3, query_params=None):
+                    posted.append(dict(data))
+                    return json.dumps({"marked_stale": True})
+
+                async def run():
+                    with mock.patch.object(
+                        invalidation.subscriptions, "emit_resource_updated",
+                        mock.AsyncMock(return_value=1),
+                    ), mock.patch.object(
+                        invalidation.subscriptions, "emit_resource_list_changed",
+                        mock.AsyncMock(return_value=1),
+                    ), mock.patch.object(
+                        invalidation.state, "known_resource_uris",
+                        lambda: {"ghidra://function/ls/1"},
+                    ), mock.patch.object(
+                        invalidation.state, "run_blocking_ghidra_call", fake_blocking
+                    ), mock.patch.object(
+                        invalidation.dispatch, "dispatch_get", fake_get
+                    ), mock.patch.object(
+                        invalidation.dispatch, "dispatch_post", fake_post
+                    ), mock.patch.object(
+                        invalidation.dispatch, "raise_on_failure", lambda text: text
+                    ):
+                        await invalidation.after_successful_write(
+                            {"endpoint": endpoint, "read_only": False},
+                            {"program": "ls", "address": "00001000"},
+                            None,
+                            "{}",
+                        )
+
+                asyncio.run(run())
+                refreshes = [d for d in posted if "addresses" in d]
+                stales = [d for d in posted if d.get("mark_stale")]
+                self.assertEqual(
+                    refreshes, [],
+                    f"{endpoint} must not attempt a splice: {refreshes}")
+                self.assertEqual(
+                    len(stales), 1,
+                    f"{endpoint} must mark the checkout stale, got {posted}")
+
     def test_no_checkout_skips_silently(self):
         posted: list[dict] = []
 

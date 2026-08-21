@@ -425,6 +425,20 @@ async def _refresh_checkout_guarded(blast: BlastRadius) -> None:
         logger.debug("Checkout refresh after %s failed: %s", blast.endpoint, e)
 
 
+# Writes that change which functions EXIST, not just what they say. A splice
+# cannot express either one: a created function has no block to replace (measured
+# — /create_function then refresh reported skipped:1 and the tree silently lacked
+# it while phase still said complete), and a deleted one would leave an orphan
+# block describing a function the program no longer has, which is worse than
+# absence because it is greppable. Both can also move compartment membership and
+# address-band boundaries, so the partitioning itself is suspect. Mark stale and
+# let a resweep settle it.
+_STRUCTURAL_ENDPOINTS = frozenset({
+    "/create_function",
+    "/delete_function",
+})
+
+
 async def _refresh_checkout(blast: BlastRadius) -> None:
     if blast.tier is InvalidationTier.NONE:
         return
@@ -436,8 +450,10 @@ async def _refresh_checkout(blast: BlastRadius) -> None:
     if not checkout_id:
         return
 
-    if blast.tier is InvalidationTier.UNBOUNDED:
-        # 25k inline decompiles is not a refresh — ask Java to mark STALE.
+    if (blast.tier is InvalidationTier.UNBOUNDED
+            or blast.endpoint in _STRUCTURAL_ENDPOINTS):
+        # 25k inline decompiles is not a refresh, and a changed function SET
+        # cannot be spliced at all — ask Java to mark STALE either way.
         await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
                 dispatch.dispatch_post(
@@ -452,7 +468,9 @@ async def _refresh_checkout(blast: BlastRadius) -> None:
     if not blast.addresses:
         return
 
-    # Deliberately uncapped: notification fan-out must not reach this path.
+    # Deliberately uncapped and NOT widened here: send only addresses whose text
+    # changed. Java derives neighbours for header-only calls:/callers: patches
+    # from the live call graph — notification caps must not reach this path.
     addr_csv = ",".join(sorted(blast.addresses))
     await state.run_blocking_ghidra_call(
         lambda: dispatch.raise_on_failure(

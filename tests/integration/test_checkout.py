@@ -209,18 +209,20 @@ def _fn_blocks(text: str) -> list[tuple[str, ...]]:
     i = 0
     while i < len(lines):
         if lines[i].startswith("// fn: "):
-            header = lines[i : i + 7]
-            assert len(header) == 7, (
-                f"block header must be exactly 7 lines, got {len(header)} "
+            header = lines[i : i + 9]
+            assert len(header) == 9, (
+                f"block header must be exactly 9 lines, got {len(header)} "
                 f"starting at line {i + 1}: {header!r}"
             )
+            assert header[1].startswith("// calls:"), header[1]
+            assert header[2].startswith("// callers:"), header[2]
             fn_m = re.match(r"^// fn: (.+) @ ([0-9A-Fa-f]+) size=", header[0])
-            uri_m = re.match(r"^// uri: ghidra://function/[^/]+/([0-9A-Fa-f]+)$", header[5])
+            uri_m = re.match(r"^// uri: ghidra://function/[^/]+/([0-9A-Fa-f]+)$", header[7])
             assert fn_m, f"bad // fn: line: {header[0]!r}"
-            assert uri_m, f"bad // uri: line (expected index 5 of 7): {header[5]!r}"
-            assert header[5].startswith("// uri: ghidra://function/"), header[5]
+            assert uri_m, f"bad // uri: line (expected index 7 of 9): {header[7]!r}"
+            assert header[7].startswith("// uri: ghidra://function/"), header[7]
             blocks.append((fn_m.group(1), fn_m.group(2), uri_m.group(1)))
-            i += 7
+            i += 9
         else:
             i += 1
     return blocks
@@ -355,7 +357,7 @@ class TestCheckoutLifecycle:
                 f"oversized function may exceed the budget"
             )
 
-        # f. every block header is 7 lines; uri address matches // fn: address
+        # f. every block header is 9 lines; uri address matches // fn: address
         for path in c_files:
             text = path.read_text(encoding="utf-8", errors="replace")
             for name, addr, uri_addr in _fn_blocks(text):

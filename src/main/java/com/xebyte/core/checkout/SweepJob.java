@@ -245,7 +245,7 @@ public final class SweepJob implements Runnable {
                     }
 
                     boolean evidenceBacked = isEvidenceBacked(part, func, ctx);
-                    FunctionEmit emit = decompileOne(func, part, evidenceBacked, sweptMod);
+                    FunctionEmit emit = decompileOne(func, part, evidenceBacked, sweptMod, ctx);
                     int addition = encodedBlockBytes(emit.text());
 
                     // Close BEFORE adding so the budget is a hard Read ceiling;
@@ -371,9 +371,16 @@ public final class SweepJob implements Runnable {
     // -------------------------------------------------------------------------
 
     /**
-     * Seven-line header. {@code uri} uses the same lowercase-hex
+     * Nine-line header. {@code uri} uses the same lowercase-hex
      * {@link ServiceUtils#addressToJson} emits so it resolves as an MCP resource.
+     * {@code calls}/{@code callers} are always present (fixed shape for parsers);
+     * empty callers note an entry/unreferenced function.
      */
+    public static final int HEADER_LINES = 9;
+
+    /** Cap names printed in the header; hubs dump the rest to callgraph.tsv. */
+    public static final int NEIGHBOURHOOD_NAME_CAP = 8;
+
     public static String renderFunctionHeader(
             String functionName,
             String addressHex,
@@ -385,10 +392,14 @@ public final class SweepJob implements Runnable {
             String fingerprint,
             Instant dts,
             long modificationNumber,
-            String programName) {
+            String programName,
+            List<String> calls,
+            List<String> callers) {
         String uri = functionResourceUri(programName, addressHex);
         return ""
                 + "// fn: " + functionName + " @ " + addressHex + " size=" + sizeBytes + "\n"
+                + "// calls: " + formatNeighbourList(calls, false) + "\n"
+                + "// callers: " + formatNeighbourList(callers, true) + "\n"
                 + "// part: " + partitionSlug + " " + method
                 + " conf=" + String.format(Locale.ROOT, "%.2f", confidence)
                 + " evidence_backed=" + evidenceBacked + "\n"
@@ -397,6 +408,74 @@ public final class SweepJob implements Runnable {
                 + "// mod: " + modificationNumber + "\n"
                 + "// uri: " + uri + "\n"
                 + "// see: modules/" + partitionSlug + "/README.md\n";
+    }
+
+    /**
+     * Names comma-separated; empty → {@code (none)} (or {@code (none — entry)}
+     * for callers of an unreferenced function); hubs truncate at
+     * {@link #NEIGHBOURHOOD_NAME_CAP}.
+     */
+    public static String formatNeighbourList(List<String> names, boolean entryWhenEmpty) {
+        if (names == null || names.isEmpty()) {
+            return entryWhenEmpty ? "(none — entry)" : "(none)";
+        }
+        if (names.size() <= NEIGHBOURHOOD_NAME_CAP) {
+            return String.join(", ", names);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < NEIGHBOURHOOD_NAME_CAP; i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(names.get(i));
+        }
+        int more = names.size() - NEIGHBOURHOOD_NAME_CAP;
+        sb.append(" +").append(more).append(" more, see callgraph.tsv");
+        return sb.toString();
+    }
+
+    /**
+     * Callee/caller names for one function, address-ordered via the context's
+     * index (functions() is already address-sorted).
+     */
+    public static Neighbourhood neighbourhoodFor(Function func, PartitionContext ctx) {
+        if (func == null || ctx == null) {
+            return Neighbourhood.EMPTY;
+        }
+        Integer idx = ctx.indexOf(func.getEntryPoint());
+        if (idx == null) {
+            return Neighbourhood.EMPTY;
+        }
+        PartitionContext.CallGraph cg = ctx.callGraph();
+        return new Neighbourhood(
+                namesInAddressOrder(ctx, cg.callees().get(idx)),
+                namesInAddressOrder(ctx, cg.callers().get(idx)));
+    }
+
+    static List<String> namesInAddressOrder(PartitionContext ctx, Set<Integer> indices) {
+        if (indices == null || indices.isEmpty()) {
+            return List.of();
+        }
+        List<Integer> sorted = new ArrayList<>(indices);
+        sorted.sort(Integer::compareTo);
+        List<Function> fns = ctx.functions();
+        List<String> names = new ArrayList<>(sorted.size());
+        for (int i : sorted) {
+            if (i >= 0 && i < fns.size()) {
+                names.add(fns.get(i).getName());
+            }
+        }
+        return names;
+    }
+
+    /** Call neighbourhood rendered into the block header. */
+    public record Neighbourhood(List<String> calls, List<String> callers) {
+        public static final Neighbourhood EMPTY = new Neighbourhood(List.of(), List.of());
+
+        public Neighbourhood {
+            calls = calls == null ? List.of() : List.copyOf(calls);
+            callers = callers == null ? List.of() : List.copyOf(callers);
+        }
     }
 
     public static String renderFailedBody(String reason) {
@@ -527,7 +606,8 @@ public final class SweepJob implements Runnable {
     // -------------------------------------------------------------------------
 
     private FunctionEmit decompileOne(
-            Function func, Partition part, boolean evidenceBacked, long modNumber) {
+            Function func, Partition part, boolean evidenceBacked, long modNumber,
+            PartitionContext ctx) {
         String addrHex = func.getEntryPoint().toString(false);
         long size = functionSize(func);
         String body;
@@ -559,6 +639,7 @@ public final class SweepJob implements Runnable {
         // Fingerprint the emitted body (code or FAILED marker), not the header —
         // so a header-only change does not look like a decompile drift.
         String fp = shortContentHash(body);
+        Neighbourhood nb = neighbourhoodFor(func, ctx);
         String header = renderFunctionHeader(
                 func.getName(),
                 addrHex,
@@ -570,7 +651,9 @@ public final class SweepJob implements Runnable {
                 fp,
                 Instant.now(),
                 modNumber,
-                program.getName());
+                program.getName(),
+                nb.calls(),
+                nb.callers());
         return new FunctionEmit(header + body, failed);
     }
 
@@ -942,9 +1025,9 @@ public final class SweepJob implements Runnable {
                 + "and how to search it\n");
         sb.append("- `modules/index.md` — strategy log (including not-applicable reasons) "
                 + "and compartment table\n");
-        sb.append("- `modules/<slug>/*.c` — Read-budget files inside each compartment "
-                + "(named by first-function address); each function has a 7-line header "
-                + "with a resolvable `ghidra://function/...` uri\n");
+                sb.append("- `modules/<slug>/*.c` — Read-budget files inside each compartment "
+                + "(named by first-function address); each function has a 9-line header "
+                + "with calls/callers and a resolvable `ghidra://function/...` uri\n");
         sb.append("- `index/by-address.tsv` — complete address → file map "
                 + "(failed decompiles still appear)\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");

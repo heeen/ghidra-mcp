@@ -471,8 +471,9 @@ public class CheckoutService {
             + "than rewriting whole files — a compartment can hold hundreds of functions. "
             + "Addresses not in the tree are skipped, not errors; mark_stale=true marks the "
             + "checkout stale instead, for bulk edits like reanalyze. Filesystem-only: does "
-            + "not mutate program state.",
-        category = "decompile-checkout", access = ToolAccess.WRITE)
+            + "not mutate program state. Bridge-only — the agent never calls this; the bridge "
+            + "invokes it after writes so the tree stays current without agent reasoning.",
+        category = "decompile-checkout", access = ToolAccess.WRITE, internal = true)
     public Response checkoutRefresh(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
@@ -504,7 +505,7 @@ public class CheckoutService {
                 || phase == SweepProgress.Phase.DECOMPILING) {
             // Sweep will produce fresh text — racing it would corrupt mid-write files.
             Map<String, Object> busy = BlockSplicer.RefreshResult.of(
-                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                     0, 0L, false).toMap(checkout.id(), true, phaseName);
             busy.put("reason", "sweep_in_progress");
             return Response.ok(busy);
