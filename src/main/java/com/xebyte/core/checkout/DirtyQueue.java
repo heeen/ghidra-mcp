@@ -180,6 +180,15 @@ public final class DirtyQueue {
                 }
                 Program program = resolveProgram(checkout);
                 if (program == null || program.isClosed()) {
+                    // Dropping dirty work silently is how this went unnoticed
+                    // headless for a whole stage: observers attached, addresses
+                    // queued, and every drain returned here because no lookup
+                    // was registered. Say so -- an unreconciled tree is a tree
+                    // that lies to Grep.
+                    Msg.warn(this, "Checkout " + checkoutId + ": dropping dirty work, "
+                            + (program == null
+                                    ? "no Program could be resolved (is a program lookup registered?)"
+                                    : "the Program is closed"));
                     synchronized (this) {
                         Bucket b = buckets.get(checkoutId);
                         if (b != null) {

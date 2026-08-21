@@ -73,6 +73,25 @@ public final class CheckoutRegistry {
         this.programLookup = lookup;
     }
 
+    /**
+     * Install a fallback lookup only when nothing better is registered.
+     *
+     * <p>{@code CheckoutService} registers one derived from its
+     * {@code ProgramProvider}, which exists in every mode. Without it,
+     * auto-reconcile was silently dead outside the GUI: the only caller of
+     * {@link #setProgramLookup} is the FrontEnd cache, so a headless server
+     * attached observers, queued dirty addresses, and then dropped every one
+     * of them because no Program could be resolved.
+     *
+     * <p>Kept as a distinct entry point so the GUI's richer, cache-aware
+     * lookup always wins the race regardless of construction order.
+     */
+    public synchronized void setProgramLookupIfAbsent(Function<Checkout, Program> lookup) {
+        if (programLookup == null) {
+            programLookup = lookup;
+        }
+    }
+
     Function<Checkout, Program> programLookup() {
         return programLookup;
     }
