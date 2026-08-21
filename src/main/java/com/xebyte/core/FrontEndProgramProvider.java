@@ -15,6 +15,8 @@
  */
 package com.xebyte.core;
 
+import com.xebyte.core.checkout.Checkout;
+import com.xebyte.core.checkout.CheckoutRegistry;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.model.DomainFile;
@@ -212,6 +214,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
             }
             try {
                 saveBeforeRelease(victimKey, victim);
+                detachCheckoutObservers(victim);
                 victim.release(consumer);
                 Msg.info(this, "Evicted idle cached program (cap " + MAX_CACHED_PROGRAMS
                         + ", " + openPrograms.size() + " remain): " + victimKey);
@@ -232,6 +235,38 @@ public class FrontEndProgramProvider implements ProgramProvider {
         this.tool = tool;
         this.consumer = consumer;
         this.monitor = new ConsoleTaskMonitor();
+        // DirtyQueue re-resolves Programs through us — the observer itself
+        // must never hold a Program reference (would break close).
+        CheckoutRegistry.getInstance().setProgramLookup(this::lookupForCheckout);
+    }
+
+    /**
+     * Prefer domain path (version-safe), then basename. Same order
+     * {@code CheckoutService} uses when polling status against open programs.
+     */
+    private Program lookupForCheckout(Checkout checkout) {
+        if (checkout == null) {
+            return null;
+        }
+        Program byPath = getProgramInternal(checkout.domainPath());
+        if (byPath != null) {
+            return byPath;
+        }
+        return getProgramInternal(checkout.programName());
+    }
+
+    /** Attach observer when this program has a checkout; no-op otherwise. */
+    private static void maybeAttachCheckoutObserver(Program program) {
+        if (program != null && !program.isClosed()) {
+            CheckoutRegistry.getInstance().ensureObserver(program);
+        }
+    }
+
+    /** Detach before release/evict so a closed Program never keeps a listener. */
+    private static void detachCheckoutObservers(Program program) {
+        if (program != null) {
+            CheckoutRegistry.getInstance().detachObservers(program);
+        }
     }
 
     @Override
@@ -258,10 +293,16 @@ public class FrontEndProgramProvider implements ProgramProvider {
         Program resolved = getProgramInternal(name);
         if (resolved == null) return null;
         SecurityConfig sc = SecurityConfig.getInstance();
-        if (!sc.hasProjectFolderScope()) return resolved;
+        if (!sc.hasProjectFolderScope()) {
+            maybeAttachCheckoutObserver(resolved);
+            return resolved;
+        }
         DomainFile df = resolved.getDomainFile();
         String path = df != null ? df.getPathname() : null;
-        if (sc.isPathInProjectScope(path)) return resolved;
+        if (sc.isPathInProjectScope(path)) {
+            maybeAttachCheckoutObserver(resolved);
+            return resolved;
+        }
         Msg.warn(this,
             "Project-folder scope guard: refusing program at '" + path
             + "' (request='" + name + "', scope='" + sc.getProjectFolderScope() + "')");
@@ -473,6 +514,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
             if (previousProgram != null && previousProgram != program) {
                 try {
                     saveBeforeRelease(cacheKey, previousProgram);
+                    detachCheckoutObservers(previousProgram);
                     previousProgram.release(consumer);
                     Msg.info(this, "Released previous cached program for: " + cacheKey);
                 } catch (Exception ex) {
@@ -491,6 +533,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
             }
             touch(cacheKey);
             evictExcessPrograms(program);
+            maybeAttachCheckoutObserver(program);
             Msg.info(this, "Opened program from project: " + program.getName() +
                 " (" + projectPath + ")");
             return program;
@@ -505,6 +548,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
                 if (previousProgram != null && previousProgram != program) {
                     try {
                         saveBeforeRelease(cacheKey, previousProgram);
+                        detachCheckoutObservers(previousProgram);
                         previousProgram.release(consumer);
                     } catch (Exception ex) {
                         Msg.warn(this, "Error releasing previous program " + cacheKey + ": " + ex.getMessage());
@@ -521,6 +565,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
                 }
                 touch(cacheKey);
                 evictExcessPrograms(program);
+                maybeAttachCheckoutObserver(program);
                 Msg.info(this, "Opened program read-only: " + program.getName());
                 return program;
             } catch (Exception e2) {
@@ -603,6 +648,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
             try {
                 Program program = entry.getValue();
                 saveBeforeRelease(entry.getKey(), program);
+                detachCheckoutObservers(program);
                 program.release(consumer);
                 Msg.info(this, "Released program: " + entry.getKey());
             } catch (Exception e) {
@@ -652,6 +698,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
             }
             try {
                 saveBeforeRelease(key, program);
+                detachCheckoutObservers(program);
                 program.release(consumer);
                 released = true;
                 if (program == currentProgram) {

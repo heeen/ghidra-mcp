@@ -656,6 +656,9 @@ public class CheckoutService {
         writeCheckoutJson(checkout);
         // Nothing has been swept yet — "dirty" would mean a crash mid-sweep.
         CheckoutStatusMd.write(checkout, "empty", null);
+        // Program is already open — attach now so GUI/script edits reach the tree
+        // without waiting for a later getProgram cache hit.
+        CheckoutRegistry.getInstance().ensureObserver(program);
 
         Map<String, Object> out = statusMap(checkout);
         out.put("adopted", false);
@@ -709,6 +712,8 @@ public class CheckoutService {
                     .withLastError("swept_at_modification_number=" + sweptAt
                             + " != live " + liveMod));
         }
+
+        CheckoutRegistry.getInstance().ensureObserver(program);
 
         int files = countFiles(derivedRoot);
         Map<String, Object> out = statusMap(checkout);

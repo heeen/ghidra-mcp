@@ -1,0 +1,270 @@
+package com.xebyte.core.checkout;
+
+import ghidra.framework.model.DomainObjectChangeRecord;
+import ghidra.framework.model.DomainObjectChangedEvent;
+import ghidra.framework.model.DomainObjectEvent;
+import ghidra.framework.model.DomainObjectListener;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Program;
+import ghidra.program.util.FunctionChangeRecord;
+import ghidra.program.util.ProgramChangeRecord;
+import ghidra.program.util.ProgramEvent;
+import ghidra.util.task.TaskMonitor;
+
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * Translates program change events into dirty checkout addresses.
+ *
+ * <p>Events land on the EDT in GUI mode (DomainObjectChangeSupport batches
+ * through a GhidraSwingTimer). This listener does <em>no</em> decompile, file
+ * IO, or locking — blocking here stalls every other listener, including
+ * AutoAnalysisManager's scheduler. It only maps records to entry addresses and
+ * hands them to {@link DirtyQueue}.
+ *
+ * <p>Holds the checkout id, never a {@link Program}: the registry deliberately
+ * never pins a ProgramDB, and a listener field that did would break close.
+ *
+ * @since 7.2.0
+ */
+public final class CheckoutObserver implements DomainObjectListener {
+
+    private final String checkoutId;
+    private final DirtyQueue queue;
+
+    public CheckoutObserver(String checkoutId, DirtyQueue queue) {
+        this.checkoutId = Objects.requireNonNull(checkoutId, "checkoutId");
+        this.queue = Objects.requireNonNull(queue, "queue");
+    }
+
+    public String checkoutId() {
+        return checkoutId;
+    }
+
+    @Override
+    public void domainObjectChanged(DomainObjectChangedEvent ev) {
+        if (ev == null) {
+            return;
+        }
+        // Source is the live Program for this callback only — never stored.
+        Object src = ev.getSource();
+        Program program = src instanceof Program p ? p : null;
+
+        // CLOSED: drop our listener so a disposed Program cannot keep us alive.
+        if (ev.contains(DomainObjectEvent.CLOSED)) {
+            CheckoutRegistry.getInstance().detachObserver(checkoutId);
+            return;
+        }
+
+        Hint hint = translate(ev, program);
+        if (hint.needsReconcile()) {
+            queue.markNeedsReconcile(checkoutId);
+            return;
+        }
+        if (!hint.addresses().isEmpty()) {
+            queue.markDirty(checkoutId, hint.addresses());
+        }
+    }
+
+    /**
+     * Pure event→address mapping. Public so offline tests can drive every
+     * ProgramEvent without a live DomainObjectListener dispatch.
+     */
+    public static Hint translate(DomainObjectChangedEvent ev, Program program) {
+        Set<String> dirty = new LinkedHashSet<>();
+        if (ev == null) {
+            return Hint.none();
+        }
+        // Undo/redo and bulk restore replace the detailed stream with one
+        // RESTORED — enumerating is impossible; the reconciler must re-diff.
+        if (ev.contains(DomainObjectEvent.RESTORED)) {
+            return Hint.fullReconcile();
+        }
+
+        FunctionManager fm = program != null ? program.getFunctionManager() : null;
+
+        for (DomainObjectChangeRecord rec : ev) {
+            if (rec == null || rec.getEventType() == null) {
+                continue;
+            }
+            var type = rec.getEventType();
+
+            if (type == ProgramEvent.FUNCTION_REMOVED) {
+                // Function is ALREADY gone from the program. A lookup by address
+                // returns null and the removal would be silently dropped — the
+                // bug class this stage exists to kill. Take the address off the
+                // record itself.
+                String hex = entryHexFromRecord(rec, false, fm);
+                if (hex != null) {
+                    dirty.add(hex);
+                }
+                continue;
+            }
+
+            if (type == ProgramEvent.FUNCTION_ADDED
+                    || type == ProgramEvent.FUNCTION_BODY_CHANGED
+                    || type == ProgramEvent.FUNCTION_CHANGED) {
+                String hex = entryHexFromRecord(rec, true, fm);
+                if (hex != null) {
+                    dirty.add(hex);
+                }
+                // Signature rewrite changes call expressions in every caller.
+                if (rec instanceof FunctionChangeRecord fcr
+                        && fcr.isFunctionSignatureChange()) {
+                    addCallers(fcr.getFunction(), dirty);
+                }
+                continue;
+            }
+
+            if (type == ProgramEvent.SYMBOL_RENAMED
+                    || type == ProgramEvent.SYMBOL_SCOPE_CHANGED
+                    || type == ProgramEvent.COMMENT_CHANGED) {
+                addContaining(fm, startOf(rec), dirty);
+                continue;
+            }
+
+            if (type == ProgramEvent.CODE_ADDED || type == ProgramEvent.CODE_REMOVED) {
+                addOverlapping(fm, startOf(rec), endOf(rec), dirty);
+            }
+        }
+        return Hint.of(dirty);
+    }
+
+    /**
+     * Prefer the record's own address/function — never require a live listing
+     * hit. {@code lookupOk} allows a containing-function fallback for events
+     * where the function still exists (not FUNCTION_REMOVED).
+     */
+    private static String entryHexFromRecord(
+            DomainObjectChangeRecord rec, boolean lookupOk, FunctionManager fm) {
+        if (rec instanceof FunctionChangeRecord fcr) {
+            Function f = fcr.getFunction();
+            if (f != null && f.getEntryPoint() != null) {
+                return hex(f.getEntryPoint());
+            }
+        }
+        if (rec instanceof ProgramChangeRecord pcr) {
+            Address start = pcr.getStart();
+            if (start != null) {
+                return hex(start);
+            }
+            Object obj = pcr.getObject();
+            if (obj instanceof Function f && f.getEntryPoint() != null) {
+                return hex(f.getEntryPoint());
+            }
+            Object neu = pcr.getNewValue();
+            if (neu instanceof Function f && f.getEntryPoint() != null) {
+                return hex(f.getEntryPoint());
+            }
+            Object old = pcr.getOldValue();
+            if (old instanceof Function f && f.getEntryPoint() != null) {
+                return hex(f.getEntryPoint());
+            }
+        }
+        if (lookupOk && fm != null) {
+            Address start = startOf(rec);
+            if (start != null) {
+                Function f = fm.getFunctionContaining(start);
+                if (f != null && f.getEntryPoint() != null) {
+                    return hex(f.getEntryPoint());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void addCallers(Function func, Set<String> dirty) {
+        if (func == null) {
+            return;
+        }
+        try {
+            Set<Function> callers = func.getCallingFunctions(TaskMonitor.DUMMY);
+            if (callers == null) {
+                return;
+            }
+            for (Function caller : callers) {
+                if (caller != null && caller.getEntryPoint() != null) {
+                    dirty.add(hex(caller.getEntryPoint()));
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort on the EDT — a failed caller walk must not throw.
+        }
+    }
+
+    private static void addContaining(FunctionManager fm, Address at, Set<String> dirty) {
+        if (fm == null || at == null) {
+            return;
+        }
+        Function f = fm.getFunctionContaining(at);
+        if (f != null && f.getEntryPoint() != null) {
+            dirty.add(hex(f.getEntryPoint()));
+        }
+    }
+
+    private static void addOverlapping(
+            FunctionManager fm, Address start, Address end, Set<String> dirty) {
+        if (fm == null || start == null) {
+            return;
+        }
+        Address stop = end != null ? end : start;
+        try {
+            AddressSet range = new AddressSet(start, stop);
+            Iterator<Function> it = fm.getFunctionsOverlapping(range);
+            if (it != null) {
+                while (it.hasNext()) {
+                    Function f = it.next();
+                    if (f != null && f.getEntryPoint() != null) {
+                        dirty.add(hex(f.getEntryPoint()));
+                    }
+                }
+                return;
+            }
+        } catch (Exception ignored) {
+            // Mocked addresses in offline tests (and exotic spaces) can refuse
+            // AddressSet construction — degrade to the endpoints.
+        }
+        addContaining(fm, start, dirty);
+        if (end != null && !end.equals(start)) {
+            addContaining(fm, end, dirty);
+        }
+    }
+
+    private static Address startOf(DomainObjectChangeRecord rec) {
+        return rec instanceof ProgramChangeRecord pcr ? pcr.getStart() : null;
+    }
+
+    private static Address endOf(DomainObjectChangeRecord rec) {
+        return rec instanceof ProgramChangeRecord pcr ? pcr.getEnd() : null;
+    }
+
+    private static String hex(Address addr) {
+        return CheckoutTreeNarrower.normalizeHex(addr.toString(false));
+    }
+
+    /** Translation result — addresses to dirty, or a full-reconcile flag. */
+    public record Hint(Set<String> addresses, boolean needsReconcile) {
+        public Hint {
+            addresses = addresses == null ? Set.of() : Set.copyOf(addresses);
+        }
+
+        static Hint none() {
+            return new Hint(Set.of(), false);
+        }
+
+        static Hint of(Set<String> addresses) {
+            return new Hint(addresses, false);
+        }
+
+        /** RESTORED / bound-collapse — reconciler re-diffs; do not enumerate. */
+        static Hint fullReconcile() {
+            return new Hint(Set.of(), true);
+        }
+    }
+}
