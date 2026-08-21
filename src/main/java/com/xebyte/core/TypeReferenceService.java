@@ -1,6 +1,5 @@
 package com.xebyte.core;
 
-import ghidra.app.plugin.core.navigation.locationreferences.LocationReferenceContext;
 import ghidra.app.services.DataTypeReference;
 import ghidra.app.services.DataTypeReferenceFinder;
 import ghidra.app.services.FieldMatcher;
@@ -150,7 +149,11 @@ public class TypeReferenceService {
         if (ref.getAddress() != null) {
             row.put("sample_address", ref.getAddress().toString(false));
         }
-        LocationReferenceContext ctx = ref.getContext();
+        // Ghidra 12.1.3 renamed this type (LocationReferenceContext ->
+        // docking.widgets.search.SearchLocationContext) and moved packages.
+        // Both expose getPlainText(), so `var` keeps one source compiling
+        // against 12.1.2 and 12.1.3 alike.
+        var ctx = ref.getContext();
         if (ctx != null) {
             String text = ctx.getPlainText();
             if (text != null && !text.isBlank()) {

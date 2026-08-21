@@ -91,7 +91,14 @@ public final class SharedProjectLocator {
         }
         // Local project URLs (ghidra:/path/to/project) are a different shape —
         // opening them as a shared project would invent a bogus host.
-        if (GhidraURL.isLocalGhidraURL(trimmed) || !GhidraURL.isServerURL(trimmed)) {
+        //
+        // Tested with isServerURL alone rather than also calling
+        // isLocalGhidraURL: Ghidra 12.1.3 REMOVED isLocalGhidraURL, and the
+        // negation covers it anyway — anything that is not a server URL is
+        // rejected here regardless of why. Keeping the removed call cost a
+        // NoSuchMethodError at runtime on 12.1.3 while still compiling on
+        // 12.1.2, which is the worst of both.
+        if (!GhidraURL.isServerURL(trimmed)) {
             throw new IllegalArgumentException(
                     "expected a Ghidra Server URL (ghidra://host[:port]/repo), got: "
                             + trimmed);
