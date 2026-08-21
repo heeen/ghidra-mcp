@@ -1,6 +1,5 @@
 package com.xebyte.core;
 
-import com.xebyte.core.checkout.BlockSplicer;
 import com.xebyte.core.checkout.Checkout;
 import com.xebyte.core.checkout.CheckoutConfig;
 import com.xebyte.core.checkout.CheckoutKey;
@@ -14,6 +13,7 @@ import com.xebyte.core.checkout.ExclusionRule;
 import com.xebyte.core.checkout.ModuleOverrides;
 import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
+import com.xebyte.core.checkout.TreeReconciler;
 import com.xebyte.core.partition.Partition;
 import com.xebyte.core.partition.PartitionCascade;
 import com.xebyte.core.partition.PartitionContext;
@@ -462,32 +462,29 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /decompile_checkout_refresh — WRITE, splice blocks (never rewrite whole partitions)
+    // /decompile_checkout_refresh — WRITE, reconcile tree with program
     // =========================================================================
 
     @McpTool(path = "/decompile_checkout_refresh", method = "POST",
-        description = "Re-decompile specific functions and splice their blocks into an "
-            + "existing tree, so renaming a symbol or adding a plate comment does not leave "
-            + "the tree asserting names it no longer uses. A rename rewrites every CALLER's "
-            + "text too, so pass the callers as well as the target. Splices blocks rather "
-            + "than rewriting whole files — a compartment can hold hundreds of functions. "
-            + "Addresses not in the tree are skipped, not errors; mark_stale=true marks the "
-            + "checkout stale instead, for bulk edits like reanalyze. Filesystem-only: does "
-            + "not mutate program state. Bridge-only — the agent never calls this; the bridge "
-            + "invokes it after writes so the tree stays current without agent reasoning.",
+        description = "Reconcile a checkout tree with the live program. Three primitives "
+            + "cover every change: replace (re-decompile a function still in both), insert "
+            + "(place a new function by pin or address containment, split the file if over "
+            + "budget), remove (drop a deleted function's block and its file if emptied). "
+            + "Pass addresses to target a set; omit them for a full index-driven pass that "
+            + "compares address sets and input fingerprints and decompiles only mismatches. "
+            + "There is no mark_stale — the reconciler is closed under every program change. "
+            + "Filesystem-only: does not mutate program state. Bridge-only — the agent never "
+            + "calls this; the bridge invokes it after writes so the tree stays current "
+            + "without agent reasoning.",
         category = "decompile-checkout", access = ToolAccess.WRITE, internal = true)
     public Response checkoutRefresh(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
             String checkoutSelector,
             @Param(value = "addresses", source = ParamSource.BODY, defaultValue = "",
-                   description = "CSV of function entry addresses to refresh. Required "
-                       + "unless mark_stale=true.")
+                   description = "CSV of function entry addresses to reconcile. Empty = "
+                       + "full index-driven reconcile (address-set diff + ifp compare).")
             String addresses,
-            @Param(value = "mark_stale", source = ParamSource.BODY, defaultValue = "false",
-                   description = "When true, mark the checkout STALE and skip splicing "
-                       + "(UNBOUNDED program edits are not a refresh).")
-            boolean markStale,
             @Param(value = "program", defaultValue = "",
                    description = "Target program name (omit for the active program).")
             String programName) {
@@ -506,31 +503,22 @@ public class CheckoutService {
                 || phase == SweepProgress.Phase.PARTITIONING
                 || phase == SweepProgress.Phase.DECOMPILING) {
             // Sweep will produce fresh text — racing it would corrupt mid-write files.
-            Map<String, Object> busy = BlockSplicer.RefreshResult.of(
-                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                    0, 0L, false).toMap(checkout.id(), true, phaseName);
+            Map<String, Object> busy = TreeReconciler.ReconcileResult.of(
+                    List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(), List.of(),
+                    0, 0, 0, 0, 0L, checkout.progress().splicedSinceSweep())
+                    .toMap(checkout.id(), true, phaseName);
             busy.put("reason", "sweep_in_progress");
             return Response.ok(busy);
         }
 
-        if (markStale) {
-            try {
-                BlockSplicer.RefreshResult result = BlockSplicer.markStale(checkout);
-                return Response.ok(result.toMap(checkout.id(), false, "stale"));
-            } catch (IOException e) {
-                return Response.err("checkout mark_stale failed: " + e.getMessage());
-            }
-        }
-
         List<String> addrList = parseCsvTokens(addresses);
-        if (addrList.isEmpty()) {
-            return Response.err("addresses is required (CSV of function entry addresses)");
-        }
+        // Empty addresses → full reconcile. The old mark_stale path is gone:
+        // unbounded edits are just a full pass.
+        Set<String> addrSet = addrList.isEmpty() ? null : new LinkedHashSet<>(addrList);
 
         Program live = findOpenProgram(checkout);
         if (live == null || live.isClosed()) {
-            // Prefer the explicit program param when the checkout's domain is closed
-            // but another view of the same binary is open under a different name.
             ServiceUtils.ProgramOrError pe =
                     ServiceUtils.getProgramOrError(programProvider, programName);
             if (pe.hasError()) {
@@ -540,7 +528,8 @@ public class CheckoutService {
         }
 
         try {
-            BlockSplicer.RefreshResult result = BlockSplicer.refresh(checkout, live, addrList);
+            TreeReconciler.ReconcileResult result =
+                    TreeReconciler.reconcile(checkout, live, addrSet);
             return Response.ok(result.toMap(
                     checkout.id(), false,
                     checkout.progress().phase().name().toLowerCase(Locale.ROOT)));
@@ -776,6 +765,7 @@ public class CheckoutService {
         out.put("eta_seconds", progress.etaSeconds());
         out.put("last_error", progress.lastError());
         out.put("status_revision", progress.statusRevision());
+        out.put("spliced_since_sweep", progress.splicedSinceSweep());
         out.put("resource_uri", RESOURCE_URI_PREFIX + checkout.id());
         out.put("config", configToMap(checkout.config()));
 
