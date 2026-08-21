@@ -11,6 +11,7 @@ import com.xebyte.core.checkout.CheckoutStatusMd;
 import com.xebyte.core.checkout.CheckoutTreeNarrower;
 import com.xebyte.core.checkout.ExclusionEvaluator;
 import com.xebyte.core.checkout.ExclusionRule;
+import com.xebyte.core.checkout.ModuleOverrides;
 import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
 import com.xebyte.core.partition.Partition;
@@ -41,9 +42,10 @@ import java.util.stream.Stream;
  * <p>Status is its own {@link ToolAccess#READ_ONLY} endpoint (not an {@code action}
  * on a POST) because plan mode forces a permission prompt for every non-read-only
  * MCP tool that no allow-rule can suppress, and a checkout is polled while
- * planning by construction. All write paths are host-filesystem only: they never
- * mutate program state, which is why the bridge marks them {@code NONE} for
- * resource invalidation.
+ * planning by construction. Most write paths are host-filesystem only (bridge
+ * marks them {@code NONE} for resource invalidation). The exception is
+ * {@code /decompile_checkout_pin_module}, which stores placement on the program
+ * so it survives resweeps.
  *
  * <p>Sweeps run as {@link SweepJob} on {@link CheckoutRegistry}'s daemon thread —
  * never through {@code ThreadingStrategy}.
@@ -545,6 +547,73 @@ public class CheckoutService {
         } catch (IOException e) {
             return Response.err("checkout refresh failed: " + e.getMessage());
         }
+    }
+
+    // =========================================================================
+    // /decompile_checkout_pin_module — WRITE, program property (survives resweep)
+    // =========================================================================
+
+    @McpTool(path = "/decompile_checkout_pin_module", method = "POST",
+        description = "Pin a function to a checkout compartment forever. Use this when you "
+            + "have learned the real module boundary — e.g. after reading evidence that a "
+            + "function belongs with driver code despite the cascade placing it in an "
+            + "address band — and you want that placement to stick across resweeps, "
+            + "checkout delete/recreate, and every other tool. Stored as a program property "
+            + "map (CheckoutModule) at the function entry, not in checkout config. Empty "
+            + "module string unpins. Does not rewrite the tree by itself — the next sweep "
+            + "(or reconcile) honours the pin ahead of the whole partitioner cascade.",
+        category = "decompile-checkout", access = ToolAccess.WRITE)
+    public Response checkoutPinModule(
+            @Param(value = "function", aliases = {"address", "name", "function_address",
+                    "function_name"}, paramType = "address", source = ParamSource.BODY,
+                   description = "Function name or entry address to pin.")
+            String function,
+            @Param(value = "module", source = ParamSource.BODY, defaultValue = "",
+                   description = "Compartment slug to pin to. Empty string removes the pin.")
+            String module,
+            @Param(value = "program", defaultValue = "",
+                   description = "Target program name (omit for the active program).")
+            String programName) {
+
+        ServiceUtils.ProgramOrError pe =
+                ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) {
+            return pe.error();
+        }
+        Program program = pe.program();
+
+        if (function == null || function.isBlank()) {
+            return Response.err("function is required (name or address)");
+        }
+        Function func = ServiceUtils.resolveFunction(program, function.trim());
+        if (func == null) {
+            return Response.err("Function not found: " + function.trim());
+        }
+
+        String slug = module != null ? module.trim() : "";
+        boolean unpin = slug.isEmpty();
+        try {
+            ModuleOverrides.set(program, func.getEntryPoint(), unpin ? null : slug);
+        } catch (IllegalArgumentException e) {
+            return Response.err(e.getMessage());
+        } catch (Exception e) {
+            return Response.err("pin_module failed: " + e.getMessage());
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", true);
+        out.put("function", func.getName());
+        out.put("address", func.getEntryPoint().toString(false));
+        out.put("pinned", !unpin);
+        out.put("module", unpin ? null : slug);
+        out.put("map", ModuleOverrides.MAP_NAME);
+        out.put("note", unpin
+                ? "Pin removed; next sweep will reclassify this function."
+                : "Pin stored on the program; next sweep places this function in '"
+                    + slug + "' with method=pinned (never reclassified). Call save_program "
+                    + "to persist.");
+        out.put("program", program.getName());
+        return Response.ok(out);
     }
 
     // =========================================================================

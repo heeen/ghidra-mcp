@@ -890,7 +890,8 @@ public final class BlockSplicer {
                     cols[1],
                     cols[2],
                     cols[3],
-                    cols.length > 4 && Boolean.parseBoolean(cols[4])));
+                    cols.length > 4 && Boolean.parseBoolean(cols[4]),
+                    cols.length > 5 ? cols[5] : ""));
         }
         return out;
     }
@@ -1000,5 +1001,6 @@ public final class BlockSplicer {
             String name,
             String slug,
             String file,
-            boolean evidenceBacked) {}
+            boolean evidenceBacked,
+            String ifp) {}
 }

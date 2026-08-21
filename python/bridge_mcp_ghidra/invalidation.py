@@ -71,6 +71,9 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/decompile_checkout_stop": InvalidationTier.NONE,
     "/decompile_checkout_delete": InvalidationTier.NONE,
     "/decompile_checkout_refresh": InvalidationTier.NONE,
+    # Placement metadata on the program; no ghidra://function body reports it.
+    # The next sweep/reconcile reads the pin — Stage A does not splice on pin alone.
+    "/decompile_checkout_pin_module": InvalidationTier.NONE,
     # Debugger writes land in a trace, never in the program database.
     "/debugger/launch": InvalidationTier.NONE,
     "/debugger/set_breakpoint": InvalidationTier.NONE,
