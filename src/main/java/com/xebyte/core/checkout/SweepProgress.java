@@ -35,7 +35,9 @@ public record SweepProgress(
         Map<String, Integer> exclusionRemovals,
         int splicedSinceSweep,
         int disassembledOnDemand,
-        int disassemblyFailed) {
+        int disassemblyFailed,
+        int bodiesRecomputed,
+        int bodyRecomputeFailed) {
 
     public enum Phase {
         IDLE,
@@ -86,6 +88,12 @@ public record SweepProgress(
         if (disassemblyFailed < 0) {
             disassemblyFailed = 0;
         }
+        if (bodiesRecomputed < 0) {
+            bodiesRecomputed = 0;
+        }
+        if (bodyRecomputeFailed < 0) {
+            bodyRecomputeFailed = 0;
+        }
         exclusionRemovals = exclusionRemovals == null
                 ? Map.of()
                 : Map.copyOf(exclusionRemovals);
@@ -94,63 +102,63 @@ public record SweepProgress(
     public static SweepProgress idle() {
         return new SweepProgress(
                 Phase.IDLE, 0, 0, 0, 0L, null, 0L, null, 0, null, 0L,
-                0, 0, Map.of(), 0, 0, 0);
+                0, 0, Map.of(), 0, 0, 0, 0, 0);
     }
 
     public SweepProgress withPhase(Phase newPhase) {
         return copy(newPhase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withCounts(int total, int done, int failed) {
         return copy(phase, total, done, failed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withBytesWritten(long bytes) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytes,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withCurrentPartition(String partition) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 partition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withStartedEpochMs(long epochMs) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, epochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withEtaSeconds(Long eta) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, eta, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withRootRecreated(int count) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, count, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withLastError(String error) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, error,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withScope(int eligible, int inScope, Map<String, Integer> removals) {
@@ -158,21 +166,28 @@ public record SweepProgress(
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligible, inScope, map, splicedSinceSweep,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withSplicedSinceSweep(int count) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, count,
-                disassembledOnDemand, disassemblyFailed);
+                disassembledOnDemand, disassemblyFailed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     public SweepProgress withDisassemblyCounts(int succeeded, int failed) {
         return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
                 currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
                 eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
-                succeeded, failed);
+                succeeded, failed, bodiesRecomputed, bodyRecomputeFailed);
+    }
+
+    public SweepProgress withBodyReflowCounts(int recomputed, int failed) {
+        return copy(phase, functionsTotal, functionsDone, functionsFailed, bytesWritten,
+                currentPartition, startedEpochMs, etaSeconds, rootRecreated, lastError,
+                eligibleFunctions, functionsInScope, exclusionRemovals, splicedSinceSweep,
+                disassembledOnDemand, disassemblyFailed, recomputed, failed);
     }
 
     private SweepProgress copy(
@@ -191,10 +206,12 @@ public record SweepProgress(
             Map<String, Integer> removals,
             int spliced,
             int disassembled,
-            int disassemblyFailures) {
+            int disassemblyFailures,
+            int bodies,
+            int bodyFailures) {
         return new SweepProgress(
                 newPhase, total, done, failed, bytes, partition, started, eta, recreated, error,
                 statusRevision + 1, eligible, inScope, removals, spliced,
-                disassembled, disassemblyFailures);
+                disassembled, disassemblyFailures, bodies, bodyFailures);
     }
 }

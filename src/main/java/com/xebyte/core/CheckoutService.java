@@ -791,6 +791,8 @@ public class CheckoutService {
         out.put("functions_failed", progress.functionsFailed());
         out.put("disassembled_on_demand", progress.disassembledOnDemand());
         out.put("disassembly_failed", progress.disassemblyFailed());
+        out.put("bodies_recomputed", progress.bodiesRecomputed());
+        out.put("body_recompute_failed", progress.bodyRecomputeFailed());
         out.put("bytes_written", progress.bytesWritten());
         out.put("eligible_functions", progress.eligibleFunctions());
         out.put("functions_in_scope", progress.functionsInScope());

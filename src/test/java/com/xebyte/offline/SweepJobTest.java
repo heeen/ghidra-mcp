@@ -8,13 +8,17 @@ import com.xebyte.core.checkout.CheckoutRoot;
 import com.xebyte.core.checkout.CheckoutStatusMd;
 import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
+import ghidra.framework.model.TransactionInfo;
+import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
+import ghidra.util.task.TaskMonitor;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,6 +33,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.junit.Assert.assertEquals;
@@ -249,6 +255,8 @@ public class SweepJobTest {
         assertTrue(dirty.contains("functions_failed: 1"));
         assertTrue(dirty.contains("disassembled_on_demand: 0"));
         assertTrue(dirty.contains("disassembly_failed: 0"));
+        assertTrue(dirty.contains("bodies_recomputed: 0"));
+        assertTrue(dirty.contains("body_recompute_failed: 0"));
         assertTrue(dirty.contains("swept_at_modification_number: \n")
                 || dirty.contains("swept_at_modification_number:\n"));
 
@@ -366,6 +374,144 @@ public class SweepJobTest {
         SweepProgress progress = SweepProgress.idle().withDisassemblyCounts(12, 3);
         assertEquals(12, progress.disassembledOnDemand());
         assertEquals(3, progress.disassemblyFailed());
+        assertEquals(0, progress.bodiesRecomputed());
+        assertEquals(0, progress.bodyRecomputeFailed());
+    }
+
+    @Test
+    public void bodyReflowCountsReachStatusMd() {
+        CheckoutKey key = CheckoutKey.of("/proj/app.exe", tempRoot.toString());
+        CheckoutRoot root = CheckoutRoot.ofResolved(tempRoot);
+        Checkout checkout = new Checkout(key, "app.exe", CheckoutConfig.defaults(), root);
+        checkout.setProgress(checkout.progress()
+                .withDisassemblyCounts(12, 3)
+                .withBodyReflowCounts(10, 2));
+        String status = CheckoutStatusMd.render(checkout, "dirty", null);
+        assertTrue(status.contains("disassembled_on_demand: 12"));
+        assertTrue(status.contains("disassembly_failed: 3"));
+        assertTrue(status.contains("bodies_recomputed: 10"));
+        assertTrue(status.contains("body_recompute_failed: 2"));
+    }
+
+    @Test
+    public void recomputeBodyLeavesRealBodyAlone() throws Exception {
+        Program program = mock(Program.class);
+        when(program.getCurrentTransactionInfo()).thenReturn(mock(TransactionInfo.class));
+
+        Function func = mock(Function.class);
+        AddressSetView realBody = mock(AddressSetView.class);
+        when(realBody.getNumAddresses()).thenReturn(64L);
+        when(func.getBody()).thenReturn(realBody);
+
+        AddressSetView candidate = mock(AddressSetView.class);
+        when(candidate.getNumAddresses()).thenReturn(128L);
+
+        SweepJob.BodyReflowOutcome outcome = SweepJob.recomputeBodyIfDegenerate(
+                program, func, TaskMonitor.DUMMY,
+                (prog, entry, mon) -> candidate);
+
+        assertEquals(SweepJob.BodyReflowOutcome.SKIPPED, outcome);
+        verify(func, never()).setBody(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    public void recomputeBodySetsBiggerBodyOnDegenerate() throws Exception {
+        Program program = mock(Program.class);
+        when(program.getCurrentTransactionInfo()).thenReturn(mock(TransactionInfo.class));
+
+        Function func = mock(Function.class);
+        Address entry = mock(Address.class);
+        AddressSetView stubBody = mock(AddressSetView.class);
+        when(stubBody.getNumAddresses()).thenReturn(1L);
+        when(func.getBody()).thenReturn(stubBody);
+        when(func.getEntryPoint()).thenReturn(entry);
+
+        AddressSetView candidate = mock(AddressSetView.class);
+        when(candidate.getNumAddresses()).thenReturn(40L);
+
+        SweepJob.BodyReflowOutcome outcome = SweepJob.recomputeBodyIfDegenerate(
+                program, func, TaskMonitor.DUMMY,
+                (prog, e, mon) -> candidate);
+
+        assertEquals(SweepJob.BodyReflowOutcome.RECOMPUTED, outcome);
+        verify(func).setBody(candidate);
+    }
+
+    @Test
+    public void recomputeBodyCountsOverlapAsFailure() throws Exception {
+        Program program = mock(Program.class);
+        when(program.getCurrentTransactionInfo()).thenReturn(mock(TransactionInfo.class));
+
+        Function func = mock(Function.class);
+        Address entry = mock(Address.class);
+        AddressSetView stubBody = mock(AddressSetView.class);
+        when(stubBody.getNumAddresses()).thenReturn(1L);
+        when(func.getBody()).thenReturn(stubBody);
+        when(func.getEntryPoint()).thenReturn(entry);
+
+        AddressSetView candidate = mock(AddressSetView.class);
+        when(candidate.getNumAddresses()).thenReturn(40L);
+        org.mockito.Mockito.doThrow(new OverlappingFunctionException(entry))
+                .when(func).setBody(candidate);
+
+        SweepJob.BodyReflowOutcome outcome = SweepJob.recomputeBodyIfDegenerate(
+                program, func, TaskMonitor.DUMMY,
+                (prog, e, mon) -> candidate);
+
+        assertEquals(SweepJob.BodyReflowOutcome.FAILED, outcome);
+    }
+
+    @Test
+    public void disassemblePassReflowsDegenerateBodiesAndCountsOverlap() throws Exception {
+        Program program = mock(Program.class);
+        FunctionManager fm = mock(FunctionManager.class);
+        Listing listing = mock(Listing.class);
+        when(program.getFunctionManager()).thenReturn(fm);
+        when(program.getListing()).thenReturn(listing);
+        when(program.getCurrentTransactionInfo()).thenReturn(mock(TransactionInfo.class));
+
+        Function needs = mock(Function.class);
+        Address missing = mock(Address.class);
+        AddressSetView stubBody = mock(AddressSetView.class);
+        when(stubBody.getNumAddresses()).thenReturn(1L);
+        when(needs.isExternal()).thenReturn(false);
+        when(needs.isThunk()).thenReturn(false);
+        when(needs.getEntryPoint()).thenReturn(missing);
+        when(needs.getBody()).thenReturn(stubBody);
+        when(listing.getInstructionAt(missing)).thenReturn(null);
+
+        FunctionIterator it = mock(FunctionIterator.class);
+        when(fm.getFunctions(true)).thenReturn(it);
+        when(it.hasNext()).thenReturn(true, false);
+        when(it.next()).thenReturn(needs);
+
+        AddressSetView bigger = mock(AddressSetView.class);
+        when(bigger.getNumAddresses()).thenReturn(32L);
+
+        SweepJob.DisassemblyPassResult ok = SweepJob.disassembleMissingAtEntries(
+                program,
+                new SweepJob.CancelSignal(),
+                0,
+                (prog, entry) -> true,
+                (prog, entry, mon) -> bigger);
+        assertEquals(1, ok.disassembledOnDemand());
+        assertEquals(1, ok.bodiesRecomputed());
+        assertEquals(0, ok.bodyRecomputeFailed());
+
+        when(it.hasNext()).thenReturn(true, false);
+        when(it.next()).thenReturn(needs);
+        org.mockito.Mockito.doThrow(new OverlappingFunctionException(missing))
+                .when(needs).setBody(bigger);
+
+        SweepJob.DisassemblyPassResult overlap = SweepJob.disassembleMissingAtEntries(
+                program,
+                new SweepJob.CancelSignal(),
+                0,
+                (prog, entry) -> true,
+                (prog, entry, mon) -> bigger);
+        assertEquals(1, overlap.disassembledOnDemand());
+        assertEquals(0, overlap.bodiesRecomputed());
+        assertEquals(1, overlap.bodyRecomputeFailed());
     }
 
     @Test
