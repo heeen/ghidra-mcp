@@ -348,10 +348,10 @@ class TestProgramManagement:
             assert "programs" in data or "count" in data or "error" in data
 
     @pytest.mark.requires_server
-    def test_get_current_program_info(self, http_client, server_available):
-        """get_current_program_info should return info or error."""
+    def test_get_ui_cursor(self, http_client, server_available):
+        """get_ui_cursor should return info or error."""
         if not server_available:
             pytest.skip("Server not available")
 
-        response = http_client.get("/get_current_program_info")
+        response = http_client.get("/get_ui_cursor")
         assert response.status_code == 200

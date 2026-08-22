@@ -54,9 +54,6 @@ public final class ManualToolDescriptors {
     public static final List<String> SHARED_ROUTES = List.of(
         "/batch_apply_documentation",
         "/exit_ghidra",
-        "/get_current_address",
-        "/get_current_function",
-        "/get_current_selection",
         "/mcp/health",
         "/mcp/schema",
         "/open_project",
@@ -154,9 +151,6 @@ public final class ManualToolDescriptors {
         add(m, "/delete_project", "POST", "project", "Delete a Ghidra project", ToolAccess.DESTRUCTIVE,
             "projectPath", "Filesystem path of the project to delete: its .gpr file or the project directory. Headless mode only; the GUI plugin does not register this route.");
         add(m, "/exit_ghidra", "POST", "program", "Save and exit Ghidra", ToolAccess.DESTRUCTIVE);
-        add(m, "/get_current_address", "GET", "getter", "Get cursor address (GUI only)", ToolAccess.READ_ONLY);
-        add(m, "/get_current_function", "GET", "getter", "Get function at cursor (GUI only)", ToolAccess.READ_ONLY);
-        add(m, "/get_current_selection", "GET", "getter", "Get highlighted address ranges in the CodeBrowser listing (GUI only). Returns {program, is_empty, ranges:[{start,end,length}], min_address, max_address, num_addresses} or an empty-selection payload when nothing is highlighted.", ToolAccess.READ_ONLY);
         add(m, "/health", "GET", "utility", "Health check endpoint for headless server", ToolAccess.READ_ONLY);
         add(m, "/list_projects", "GET", "project", "List available Ghidra projects", ToolAccess.READ_ONLY,
             "searchDir", "Directory to scan for .gpr projects. Headless mode only; the GUI plugin does not register this route.");

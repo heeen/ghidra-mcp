@@ -24,7 +24,6 @@ import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
-import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.app.services.GoToService;
 
@@ -39,7 +38,6 @@ import ghidra.program.model.data.*;
 import ghidra.program.model.mem.Memory;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.util.PluginStatus;
-import ghidra.program.util.ProgramLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.trace.model.Trace;
@@ -882,136 +880,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * Get current address selected in Ghidra GUI
-     */
-    private String getCurrentAddress() {
-        CodeViewerService service = findCodeViewerService();
-        if (service == null) return "Code viewer service not available";
-
-        ProgramLocation location = service.getCurrentLocation();
-        if (location == null) return "No current location";
-
-        Program program = location.getProgram();
-        String programPath = (program != null && program.getDomainFile() != null)
-                ? program.getDomainFile().getPathname() : null;
-        if (programPath != null) {
-            return JsonHelper.toJson(JsonHelper.mapOf(
-                    "address", location.getAddress().toString(),
-                    "program", programPath));
-        }
-        return location.getAddress().toString();
-    }
-
-    /**
-     * Get current function selected in Ghidra GUI
-     */
-    private String getCurrentFunction() {
-        CodeViewerService service = findCodeViewerService();
-        if (service == null) return "Code viewer service not available";
-
-        ProgramLocation location = service.getCurrentLocation();
-        if (location == null) return "No current location";
-
-        // Use the program from the location (not getCurrentProgram which may differ)
-        Program program = location.getProgram();
-        if (program == null) {
-            program = getCurrentProgram();
-        }
-        if (program == null) return "No program loaded";
-
-        Function func = program.getFunctionManager().getFunctionContaining(location.getAddress());
-        if (func == null) return "No function at current location: " + location.getAddress();
-
-        // Return JSON with program path for reliable parsing
-        String programPath = program.getDomainFile() != null
-                ? program.getDomainFile().getPathname() : program.getName();
-        return JsonHelper.toJson(JsonHelper.mapOf(
-                "function_name", func.getName(),
-                "address", func.getEntryPoint().toString(),
-                "program", programPath,
-                "signature", func.getSignature().getPrototypeString()));
-    }
-
-    /**
-     * Get the current selection (highlighted address ranges) from the
-     * CodeBrowser listing. Returns a payload shape that matches the
-     * other GUI-only ``/get_current_*`` tools and that AI clients can
-     * consume directly without scraping prose.
-     *
-     * <p>Shapes:
-     * <ul>
-     *   <li>No CodeBrowser available → ``"Code viewer service not available"``
-     *       (same prose the other current_* tools use, so clients can
-     *       fall through with one error path).</li>
-     *   <li>CodeBrowser running but selection is empty → JSON
-     *       ``{"program": "...", "is_empty": true, "ranges": []}``.</li>
-     *   <li>Selection present → JSON with the program path, an
-     *       ``is_empty: false`` marker, every contiguous range with its
-     *       start/end/length, plus the overall bounds + total address
-     *       count for convenience.</li>
-     * </ul>
-     */
-    private String getCurrentSelection() {
-        CodeViewerService service = findCodeViewerService();
-        if (service == null) return "Code viewer service not available";
-
-        ghidra.program.util.ProgramSelection selection = service.getCurrentSelection();
-        ghidra.program.util.ProgramLocation location = service.getCurrentLocation();
-        Program program = location != null ? location.getProgram() : getCurrentProgram();
-        String programPath = (program != null && program.getDomainFile() != null)
-                ? program.getDomainFile().getPathname()
-                : (program != null ? program.getName() : null);
-
-        if (selection == null || selection.isEmpty()) {
-            return JsonHelper.toJson(JsonHelper.mapOf(
-                    "program", programPath,
-                    "is_empty", true,
-                    "ranges", new java.util.ArrayList<>()));
-        }
-
-        java.util.List<Map<String, Object>> ranges = new java.util.ArrayList<>();
-        for (ghidra.program.model.address.AddressRange range : selection.getAddressRanges()) {
-            ranges.add(JsonHelper.mapOf(
-                    "start", range.getMinAddress().toString(),
-                    "end", range.getMaxAddress().toString(),
-                    "length", range.getLength()));
-        }
-
-        return JsonHelper.toJson(JsonHelper.mapOf(
-                "program", programPath,
-                "is_empty", false,
-                "ranges", ranges,
-                "min_address", selection.getMinAddress().toString(),
-                "max_address", selection.getMaxAddress().toString(),
-                "num_addresses", selection.getNumAddresses()));
-    }
-
-    /**
-     * Find CodeViewerService from any running CodeBrowser instance.
-     * The FrontEnd tool doesn't have this service — only CodeBrowser does.
-     */
-    private CodeViewerService findCodeViewerService() {
-        // Try the plugin's own tool first (works if plugin is in CodeBrowser)
-        CodeViewerService service = tool.getService(CodeViewerService.class);
-        if (service != null) return service;
-
-        // Search running CodeBrowser instances via ToolManager
-        try {
-            Project project = tool.getProject();
-            if (project == null) return null;
-            ghidra.framework.model.ToolManager tm = project.getToolManager();
-            if (tm == null) return null;
-            for (ghidra.framework.plugintool.PluginTool runningTool : tm.getRunningTools()) {
-                service = runningTool.getService(CodeViewerService.class);
-                if (service != null) return service;
-            }
-        } catch (Exception e) {
-            // ToolManager may not be available in all contexts
-        }
-        return null;
-    }
-
-    /**
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
@@ -1801,13 +1669,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * Get detailed information about the currently active program
-     */
-    private String getCurrentProgramInfo() {
-        return programScriptService.getCurrentProgramInfo().toJson();
-    }
-
-    /**
      * Switch MCP context to a different open program by name
      */
     private String switchProgram(String programName) {
@@ -1975,25 +1836,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // ==========================================================================
         // GUI-ONLY ENDPOINTS (require PluginTool/CodeBrowser/Swing context)
         // ==========================================================================
-
-        reg.add("/get_current_address", safeHandler(exchange -> {
-            sendResponse(exchange, getCurrentAddress());
-        }));
-
-        reg.add("/get_current_function", safeHandler(exchange -> {
-            sendResponse(exchange, getCurrentFunction());
-        }));
-
-        // /get_current_selection — filed by @I-Knight-I on issue #153 as
-        // the third "where am I?" tool an AI client expects, alongside
-        // /get_current_address and /get_current_function. Returns the
-        // address ranges the user has highlighted in the CodeBrowser
-        // listing, or an empty-selection payload when nothing is
-        // highlighted. GUI-only (no equivalent on the headless server
-        // — selection is a UI concept that has no meaning there).
-        reg.add("/get_current_selection", safeHandler(exchange -> {
-            sendResponse(exchange, getCurrentSelection());
-        }));
 
         // /open_project — open (or switch to) a Ghidra project from the
         // FrontEnd plugin programmatically. Mirrors the headless server's

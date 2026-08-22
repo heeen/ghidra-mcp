@@ -22,7 +22,7 @@ Task(
   description: "Document FunctionName",
   prompt: "Follow docs/prompts/FUNCTION_DOC_WORKFLOW_V5.md to document the function
   at address 0xADDRESS (currently named 'FUN_XXXXXXXX').
-  Skip get_current_selection() — the address is provided above.
+  Skip get_ui_cursor(type="selection") — the address is provided above.
   Apply all changes directly in Ghidra using MCP tools.
 
   CRITICAL: In Step 3, you MUST call get_function_variables to check actual

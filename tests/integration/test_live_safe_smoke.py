@@ -172,7 +172,7 @@ class TestLiveServerSmoke:
         assert payload["count"] > 0, "a program is loaded, so there are functions"
 
     def test_current_selection_optional(self, http_client):
-        response = http_client.get("/get_current_selection")
+        response = http_client.get("/get_ui_cursor", params={"type": "selection"})
         assert response.status_code in [200, 404]
 
 

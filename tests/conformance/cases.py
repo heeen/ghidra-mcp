@@ -64,7 +64,7 @@ ENVIRONMENT_COUPLED = {
     "project_info", "list_open_programs", "list_project_files", "list_instances",
     "mcp_instance_info", "mcp_health", "compare_programs_documentation",
     "merge_program_documentation", "tool_running_tools", "server_status",
-    "get_current_program_info", "analysis_status", "list_scripts",
+    "get_ui_cursor", "analysis_status", "list_scripts",
 }
 
 

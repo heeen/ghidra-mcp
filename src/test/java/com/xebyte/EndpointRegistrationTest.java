@@ -142,8 +142,7 @@ public class EndpointRegistrationTest extends TestCase {
     public void testCurrentStateEndpointsRegistered() {
         if (!shouldRunLiveTest()) return;
         Map<String, String> stateEndpoints = new HashMap<>();
-        stateEndpoints.put("get_current_address", "Get current cursor address");
-        stateEndpoints.put("get_current_function", "Get current function");
+        stateEndpoints.put("get_ui_cursor", "Get UI cursor state");
 
         for (Map.Entry<String, String> entry : stateEndpoints.entrySet()) {
             assertTrue("Current state endpoint '" + entry.getKey() + "' (" + entry.getValue() + ") should be registered",
@@ -223,8 +222,8 @@ public class EndpointRegistrationTest extends TestCase {
             "list_functions", "methods", "classes", "segments", "imports", "exports",
             "namespaces", "data", "strings", "searchFunctions", "decompile",
             "renameFunction", "renameData", "xrefs_to", "xrefs_from", "function_xrefs",
-            "function_labels", "get_function_by_address", "get_current_address",
-            "get_current_function", "disassemble_function", "set_comment",
+            "function_labels", "get_function_by_address", "get_ui_cursor",
+            "disassemble_function", "set_comment",
             "rename_function", "set_function_prototype",
             "set_variable_type",
 
