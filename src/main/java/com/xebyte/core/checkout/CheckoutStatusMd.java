@@ -41,6 +41,8 @@ public final class CheckoutStatusMd {
         sb.append("functions_total: ").append(p.functionsTotal()).append('\n');
         sb.append("functions_done: ").append(p.functionsDone()).append('\n');
         sb.append("functions_failed: ").append(p.functionsFailed()).append('\n');
+        sb.append("disassembled_on_demand: ").append(p.disassembledOnDemand()).append('\n');
+        sb.append("disassembly_failed: ").append(p.disassemblyFailed()).append('\n');
         sb.append("bytes_written: ").append(p.bytesWritten()).append('\n');
         sb.append("spliced_since_sweep: ").append(p.splicedSinceSweep()).append('\n');
         sb.append("updated: ").append(Instant.now()).append('\n');

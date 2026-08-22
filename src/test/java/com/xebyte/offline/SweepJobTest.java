@@ -8,6 +8,13 @@ import com.xebyte.core.checkout.CheckoutRoot;
 import com.xebyte.core.checkout.CheckoutStatusMd;
 import com.xebyte.core.checkout.SweepJob;
 import com.xebyte.core.checkout.SweepProgress;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.Program;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -16,9 +23,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -236,6 +247,8 @@ public class SweepJobTest {
         assertTrue(dirty.contains("functions_total: 100"));
         assertTrue(dirty.contains("functions_done: 10"));
         assertTrue(dirty.contains("functions_failed: 1"));
+        assertTrue(dirty.contains("disassembled_on_demand: 0"));
+        assertTrue(dirty.contains("disassembly_failed: 0"));
         assertTrue(dirty.contains("swept_at_modification_number: \n")
                 || dirty.contains("swept_at_modification_number:\n"));
 
@@ -257,6 +270,102 @@ public class SweepJobTest {
         assertEquals("cancelled", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.CANCELLED));
         assertEquals("failed", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.FAILED));
         assertEquals("dirty", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.DECOMPILING));
+    }
+
+    @Test
+    public void disassemblePassSkipsFunctionsThatAlreadyHaveInstructions() {
+        Program program = mock(Program.class);
+        FunctionManager fm = mock(FunctionManager.class);
+        Listing listing = mock(Listing.class);
+        when(program.getFunctionManager()).thenReturn(fm);
+        when(program.getListing()).thenReturn(listing);
+
+        Function needs = mock(Function.class);
+        Function hasInsn = mock(Function.class);
+        Address missing = mock(Address.class);
+        Address present = mock(Address.class);
+
+        when(needs.isExternal()).thenReturn(false);
+        when(needs.isThunk()).thenReturn(false);
+        when(needs.getEntryPoint()).thenReturn(missing);
+
+        when(hasInsn.isExternal()).thenReturn(false);
+        when(hasInsn.isThunk()).thenReturn(false);
+        when(hasInsn.getEntryPoint()).thenReturn(present);
+
+        when(listing.getInstructionAt(missing)).thenReturn(null);
+        when(listing.getInstructionAt(present)).thenReturn(mock(Instruction.class));
+
+        FunctionIterator it = mock(FunctionIterator.class);
+        when(fm.getFunctions(true)).thenReturn(it);
+        when(it.hasNext()).thenReturn(true, true, false);
+        when(it.next()).thenReturn(needs, hasInsn);
+
+        List<Address> touched = new ArrayList<>();
+        SweepJob.DisassemblyPassResult result = SweepJob.disassembleMissingAtEntries(
+                program,
+                new SweepJob.CancelSignal(),
+                0,
+                (prog, entry) -> {
+                    touched.add(entry);
+                    return true;
+                });
+
+        assertEquals(1, result.disassembledOnDemand());
+        assertEquals(0, result.disassemblyFailed());
+        assertEquals(1, touched.size());
+        assertEquals(missing, touched.get(0));
+    }
+
+    @Test
+    public void disassemblePassCountsFailuresAndHonoursCancel() {
+        Program program = mock(Program.class);
+        FunctionManager fm = mock(FunctionManager.class);
+        Listing listing = mock(Listing.class);
+        when(program.getFunctionManager()).thenReturn(fm);
+        when(program.getListing()).thenReturn(listing);
+
+        Function a = mock(Function.class);
+        Function b = mock(Function.class);
+        Address addrA = mock(Address.class);
+        Address addrB = mock(Address.class);
+
+        when(a.isExternal()).thenReturn(false);
+        when(a.isThunk()).thenReturn(false);
+        when(a.getEntryPoint()).thenReturn(addrA);
+        when(b.isExternal()).thenReturn(false);
+        when(b.isThunk()).thenReturn(false);
+        when(b.getEntryPoint()).thenReturn(addrB);
+        when(listing.getInstructionAt(addrA)).thenReturn(null);
+        when(listing.getInstructionAt(addrB)).thenReturn(null);
+
+        FunctionIterator it = mock(FunctionIterator.class);
+        when(fm.getFunctions(true)).thenReturn(it);
+        when(it.hasNext()).thenReturn(true, true, false);
+        when(it.next()).thenReturn(a, b);
+
+        SweepJob.DisassemblyPassResult result = SweepJob.disassembleMissingAtEntries(
+                program,
+                new SweepJob.CancelSignal(),
+                0,
+                (prog, entry) -> entry.equals(addrA));
+
+        assertEquals(1, result.disassembledOnDemand());
+        assertEquals(1, result.disassemblyFailed());
+
+        SweepJob.CancelSignal cancel = new SweepJob.CancelSignal();
+        cancel.cancel();
+        SweepJob.DisassemblyPassResult cancelled = SweepJob.disassembleMissingAtEntries(
+                program, cancel, 0, (prog, entry) -> true);
+        assertEquals(0, cancelled.disassembledOnDemand());
+        assertEquals(0, cancelled.disassemblyFailed());
+    }
+
+    @Test
+    public void sweepProgressReportsDisassemblyCounts() {
+        SweepProgress progress = SweepProgress.idle().withDisassemblyCounts(12, 3);
+        assertEquals(12, progress.disassembledOnDemand());
+        assertEquals(3, progress.disassemblyFailed());
     }
 
     @Test

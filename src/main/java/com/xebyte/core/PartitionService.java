@@ -79,10 +79,20 @@ public class PartitionService {
         }
 
         long started = System.nanoTime();
-        PartitionContext ctx = new PartitionContext(program);
-        if (ctx.size() == 0) {
-            return Response.err("Program has no eligible functions (all external, thunk, or undefined)");
+        PartitionContext.EligibilityScan scan = PartitionContext.scanEligibility(program);
+        if (scan.eligible() == 0) {
+            if (scan.noInstructionAtEntry() > 0) {
+                int candidate = scan.eligible() + scan.noInstructionAtEntry();
+                return Response.err(String.format(
+                        "Program has no eligible functions: %d of %d have no instruction at "
+                                + "their entry (imported but never analyzed). Run analysis, or "
+                                + "create a decompile checkout with disassemble_missing=true.",
+                        scan.noInstructionAtEntry(), candidate));
+            }
+            return Response.err(
+                    "Program has no eligible functions (all external or thunk)");
         }
+        PartitionContext ctx = new PartitionContext(program);
         PartitionCascade.Result result = new PartitionCascade(chain).run(ctx);
         long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
 

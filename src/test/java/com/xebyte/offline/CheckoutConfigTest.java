@@ -7,6 +7,7 @@ import org.junit.Test;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -80,6 +81,15 @@ public class CheckoutConfigTest {
         assertEquals(30, cfg.decompileTimeoutSeconds());
         assertEquals(600, cfg.analysisWaitSeconds());
         assertEquals(32768, cfg.maxFileBytes());
+        assertTrue(cfg.disassembleMissing());
+    }
+
+    @Test
+    public void disassembleMissingDefaultsTrueAndRoundTrips() {
+        assertTrue(CheckoutConfig.defaults().disassembleMissing());
+        assertFalse(CheckoutConfig.builder().disassembleMissing(false).build().disassembleMissing());
+        assertTrue(CheckoutConfig.defaults().withDisassembleMissing(false).withDisassembleMissing(true)
+                .disassembleMissing());
     }
 
     @Test

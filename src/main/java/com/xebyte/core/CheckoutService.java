@@ -173,7 +173,11 @@ public class CheckoutService {
             String includeOnly,
             @Param(value = "throttle_percent", source = ParamSource.BODY, defaultValue = "10",
                    description = "Interactive yield 0..90 after each decompiled function.")
-            int throttlePercent) {
+            int throttlePercent,
+            @Param(value = "disassemble_missing", source = ParamSource.BODY, defaultValue = "true",
+                   description = "Before partitioning, disassemble at function entries with "
+                       + "no instruction yet (typical for PE .pdata imports).")
+            boolean disassembleMissing) {
 
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
         if (pe.hasError()) {
@@ -200,6 +204,7 @@ public class CheckoutService {
                 .exclusions(exclRules)
                 .includeOnly(includeRules)
                 .throttlePercent(throttlePercent)
+                .disassembleMissing(disassembleMissing)
                 .build();
 
         try {
@@ -273,7 +278,11 @@ public class CheckoutService {
             String includeOnly,
             @Param(value = "throttle_percent", source = ParamSource.BODY, defaultValue = "",
                    description = "Interactive yield 0..90. Omit to leave unchanged.")
-            Integer throttlePercent) {
+            Integer throttlePercent,
+            @Param(value = "disassemble_missing", source = ParamSource.BODY, defaultValue = "",
+                   description = "Disassemble at entries without instructions before sweep. "
+                       + "Omit to leave unchanged.")
+            Boolean disassembleMissing) {
 
         CheckoutRegistry.ResolveResult resolved =
                 CheckoutRegistry.getInstance().resolve(checkoutSelector);
@@ -303,7 +312,8 @@ public class CheckoutService {
                 .throttlePercent(old.throttlePercent())
                 .decompileTimeoutSeconds(old.decompileTimeoutSeconds())
                 .analysisWaitSeconds(old.analysisWaitSeconds())
-                .maxFileBytes(old.maxFileBytes());
+                .maxFileBytes(old.maxFileBytes())
+                .disassembleMissing(old.disassembleMissing());
 
         boolean strategiesTouched = strategies != null && !strategies.isBlank();
         boolean exclusionsTouched = exclusions != null && !exclusions.isBlank();
@@ -327,6 +337,9 @@ public class CheckoutService {
             }
             if (throttlePercent != null) {
                 b.throttlePercent(throttlePercent);
+            }
+            if (disassembleMissing != null) {
+                b.disassembleMissing(disassembleMissing);
             }
         } catch (IllegalArgumentException e) {
             return Response.err(e.getMessage());
@@ -776,6 +789,8 @@ public class CheckoutService {
         out.put("functions_total", progress.functionsTotal());
         out.put("functions_done", progress.functionsDone());
         out.put("functions_failed", progress.functionsFailed());
+        out.put("disassembled_on_demand", progress.disassembledOnDemand());
+        out.put("disassembly_failed", progress.disassemblyFailed());
         out.put("bytes_written", progress.bytesWritten());
         out.put("eligible_functions", progress.eligibleFunctions());
         out.put("functions_in_scope", progress.functionsInScope());
@@ -994,6 +1009,10 @@ public class CheckoutService {
         if (analysisWait != null) {
             b.analysisWaitSeconds(analysisWait);
         }
+        Boolean disassembleMissing = boolField(disk, "disassemble_missing");
+        if (disassembleMissing != null) {
+            b.disassembleMissing(disassembleMissing);
+        }
         b.exclusions(rulesFromDisk(disk.get("exclusions")));
         b.includeOnly(rulesFromDisk(disk.get("include_only")));
         return b.build();
@@ -1033,6 +1052,7 @@ public class CheckoutService {
         m.put("throttle_percent", cfg.throttlePercent());
         m.put("decompile_timeout_seconds", cfg.decompileTimeoutSeconds());
         m.put("analysis_wait_seconds", cfg.analysisWaitSeconds());
+        m.put("disassemble_missing", cfg.disassembleMissing());
         return m;
     }
 
@@ -1390,6 +1410,17 @@ public class CheckoutService {
             } catch (NumberFormatException e) {
                 return null;
             }
+        }
+        return null;
+    }
+
+    private static Boolean boolField(Map<String, Object> map, String key) {
+        Object v = map.get(key);
+        if (v instanceof Boolean b) {
+            return b;
+        }
+        if (v instanceof String s && !s.isBlank()) {
+            return Boolean.parseBoolean(s.trim());
         }
         return null;
     }

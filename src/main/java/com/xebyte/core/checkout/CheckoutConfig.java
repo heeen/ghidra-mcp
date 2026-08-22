@@ -23,6 +23,8 @@ import java.util.List;
  * @param maxFileBytes             Read-budget for each {@code .c} inside a
  *                                 compartment (default 32 KiB); changing it
  *                                 moves file paths → repartitioning
+ * @param disassembleMissing       before partitioning, disassemble at entries
+ *                                 with no instruction (PE {@code .pdata} stubs)
  */
 public record CheckoutConfig(
         String rootPath,
@@ -33,7 +35,8 @@ public record CheckoutConfig(
         int throttlePercent,
         int decompileTimeoutSeconds,
         int analysisWaitSeconds,
-        int maxFileBytes) {
+        int maxFileBytes,
+        boolean disassembleMissing) {
 
     public static final int DEFAULT_BAND_SIZE = 20;
     public static final int DEFAULT_THROTTLE_PERCENT = 10;
@@ -77,7 +80,8 @@ public record CheckoutConfig(
                 DEFAULT_THROTTLE_PERCENT,
                 DEFAULT_DECOMPILE_TIMEOUT_SECONDS,
                 DEFAULT_ANALYSIS_WAIT_SECONDS,
-                DEFAULT_MAX_FILE_BYTES);
+                DEFAULT_MAX_FILE_BYTES,
+                true);
     }
 
     public static Builder builder() {
@@ -87,55 +91,71 @@ public record CheckoutConfig(
     public CheckoutConfig withRootPath(String newRootPath) {
         return new CheckoutConfig(
                 newRootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withEnabledStrategies(List<String> strategies) {
         return new CheckoutConfig(
                 rootPath, strategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withBandSize(int newBandSize) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, newBandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withExclusions(List<ExclusionRule> rules) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, rules, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withIncludeOnly(List<ExclusionRule> rules) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, rules,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withThrottlePercent(int percent) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                percent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes);
+                percent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withDecompileTimeoutSeconds(int seconds) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, seconds, analysisWaitSeconds, maxFileBytes);
+                throttlePercent, seconds, analysisWaitSeconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withAnalysisWaitSeconds(int seconds) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, seconds, maxFileBytes);
+                throttlePercent, decompileTimeoutSeconds, seconds, maxFileBytes,
+                disassembleMissing);
     }
 
     public CheckoutConfig withMaxFileBytes(int bytes) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, bytes);
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, bytes,
+                disassembleMissing);
+    }
+
+    public CheckoutConfig withDisassembleMissing(boolean enabled) {
+        return new CheckoutConfig(
+                rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
+                throttlePercent, decompileTimeoutSeconds, analysisWaitSeconds, maxFileBytes,
+                enabled);
     }
 
     public static final class Builder {
@@ -148,6 +168,7 @@ public record CheckoutConfig(
         private int decompileTimeoutSeconds = DEFAULT_DECOMPILE_TIMEOUT_SECONDS;
         private int analysisWaitSeconds = DEFAULT_ANALYSIS_WAIT_SECONDS;
         private int maxFileBytes = DEFAULT_MAX_FILE_BYTES;
+        private boolean disassembleMissing = true;
 
         public Builder rootPath(String rootPath) {
             this.rootPath = rootPath;
@@ -194,6 +215,11 @@ public record CheckoutConfig(
             return this;
         }
 
+        public Builder disassembleMissing(boolean disassembleMissing) {
+            this.disassembleMissing = disassembleMissing;
+            return this;
+        }
+
         public CheckoutConfig build() {
             return new CheckoutConfig(
                     rootPath,
@@ -204,7 +230,8 @@ public record CheckoutConfig(
                     throttlePercent,
                     decompileTimeoutSeconds,
                     analysisWaitSeconds,
-                    maxFileBytes);
+                    maxFileBytes,
+                    disassembleMissing);
         }
     }
 }
