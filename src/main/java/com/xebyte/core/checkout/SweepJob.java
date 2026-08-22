@@ -7,12 +7,15 @@ import com.xebyte.core.partition.PartitionCascade;
 import com.xebyte.core.partition.PartitionContext;
 import com.xebyte.core.partition.Partitioner;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
+import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
+import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Listing;
@@ -154,7 +157,9 @@ public final class SweepJob implements Runnable {
                         program, cancel, cfg.throttlePercent(), SweepJob::disassembleAtEntry);
                 publish(checkout.progress()
                         .withDisassemblyCounts(
-                                disasm.disassembledOnDemand(), disasm.disassemblyFailed()),
+                                disasm.disassembledOnDemand(), disasm.disassemblyFailed())
+                        .withBodyReflowCounts(
+                                disasm.bodiesRecomputed(), disasm.bodyRecomputeFailed()),
                         "dirty", null);
                 if (cancel.isCancelled() || !ensureProgramOpen()) {
                     return;
@@ -792,14 +797,38 @@ public final class SweepJob implements Runnable {
      * PE {@code .pdata} creates function entries without disassembly; partition
      * eligibility requires an instruction at the entry. Entry-only disassembly —
      * no auto-analysis, no new functions elsewhere.
+     *
+     * <p>Disassembly alone leaves the PE-loader body at one byte
+     * ({@code body_start == body_end}). Every partitioner reads strings/scalars
+     * out of the body, so that 1-byte body yields only address-band fallbacks.
+     * After each successful entry disassembly we reflow the body via
+     * {@link CreateFunctionCmd#getFunctionBody} + {@link Function#setBody} —
+     * never {@code CreateFunctionCmd(..., recreate=true)}, which would discard
+     * curated names/comments/signatures.
      */
     public static DisassemblyPassResult disassembleMissingAtEntries(
             Program program,
             CancelSignal cancel,
             int throttlePercent,
             EntryDisassembler disassembler) {
+        return disassembleMissingAtEntries(
+                program, cancel, throttlePercent, disassembler, SweepJob::defaultBodyComputer);
+    }
+
+    /**
+     * Same as {@link #disassembleMissingAtEntries(Program, CancelSignal, int, EntryDisassembler)}
+     * with an injectable body computer for offline tests.
+     */
+    public static DisassemblyPassResult disassembleMissingAtEntries(
+            Program program,
+            CancelSignal cancel,
+            int throttlePercent,
+            EntryDisassembler disassembler,
+            BodyComputer bodyComputer) {
         int succeeded = 0;
         int failed = 0;
+        int bodiesRecomputed = 0;
+        int bodyRecomputeFailed = 0;
         long sliceStartNs = System.nanoTime();
         Listing listing = program.getListing();
         FunctionIterator it = program.getFunctionManager().getFunctions(true);
@@ -817,12 +846,20 @@ public final class SweepJob implements Runnable {
             }
             if (disassembler.disassemble(program, entry)) {
                 succeeded++;
+                BodyReflowOutcome bodyOutcome = recomputeBodyIfDegenerate(
+                        program, f, cancel.monitor(), bodyComputer);
+                if (bodyOutcome == BodyReflowOutcome.RECOMPUTED) {
+                    bodiesRecomputed++;
+                } else if (bodyOutcome == BodyReflowOutcome.FAILED) {
+                    bodyRecomputeFailed++;
+                }
             } else {
                 failed++;
             }
             sliceStartNs = maybeThrottleSlice(sliceStartNs, throttlePercent, cancel);
         }
-        return new DisassemblyPassResult(succeeded, failed);
+        return new DisassemblyPassResult(
+                succeeded, failed, bodiesRecomputed, bodyRecomputeFailed);
     }
 
     /** Disassemble one known entry; package-visible for offline injection tests. */
@@ -831,7 +868,71 @@ public final class SweepJob implements Runnable {
         boolean disassemble(Program program, Address entry);
     }
 
-    public record DisassemblyPassResult(int disassembledOnDemand, int disassemblyFailed) {
+    /**
+     * Computes a candidate body by following flow — creates nothing.
+     * Injectable so offline tests do not need a live listing.
+     */
+    @FunctionalInterface
+    public interface BodyComputer {
+        AddressSetView compute(Program program, Address entry, TaskMonitor monitor);
+    }
+
+    public enum BodyReflowOutcome {
+        SKIPPED,
+        RECOMPUTED,
+        FAILED
+    }
+
+    public record DisassemblyPassResult(
+            int disassembledOnDemand,
+            int disassemblyFailed,
+            int bodiesRecomputed,
+            int bodyRecomputeFailed) {
+    }
+
+    private static AddressSetView defaultBodyComputer(
+            Program program, Address entry, TaskMonitor monitor) {
+        return CreateFunctionCmd.getFunctionBody(monitor, program, entry);
+    }
+
+    /**
+     * Reflow a PE-loader stub body after disassembly. Never shrinks a real body;
+     * never recreates the function. Overlap with a neighbour is counted, not thrown.
+     */
+    public static BodyReflowOutcome recomputeBodyIfDegenerate(
+            Program program,
+            Function function,
+            TaskMonitor monitor,
+            BodyComputer bodyComputer) {
+        AddressSetView current = function.getBody();
+        // PE .pdata stubs are one address (start == end). A real body is larger —
+        // leave it alone; curated extents must not be "fixed".
+        if (current == null || current.getNumAddresses() > 1) {
+            return BodyReflowOutcome.SKIPPED;
+        }
+        Address entry = function.getEntryPoint();
+        AddressSetView body;
+        try {
+            body = bodyComputer.compute(program, entry, monitor);
+        } catch (Exception e) {
+            return BodyReflowOutcome.FAILED;
+        }
+        if (body == null || body.getNumAddresses() <= current.getNumAddresses()) {
+            return BodyReflowOutcome.SKIPPED;
+        }
+        WriteTx tx = WriteTx.begin(program, "Checkout recompute function body");
+        try {
+            function.setBody(body);
+            tx.end(true);
+            return BodyReflowOutcome.RECOMPUTED;
+        } catch (OverlappingFunctionException e) {
+            // One bad neighbour must not abort the sweep — count and continue.
+            tx.end(false);
+            return BodyReflowOutcome.FAILED;
+        } catch (Exception e) {
+            tx.end(false);
+            return BodyReflowOutcome.FAILED;
+        }
     }
 
     private static boolean disassembleAtEntry(Program program, Address entry) {
