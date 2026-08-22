@@ -1551,17 +1551,32 @@ public class ProgramScriptService {
                 "num_addresses", selection.getNumAddresses()));
     }
 
-    private CursorPart cursorProgramPart(String programName) {
-        // Explicit name still resolves by name; omit uses the active helper
-        // (sole open headless, or GUI focus). Do NOT route omit through
-        // getProgramOrError — that refuses when more than one is open.
-        ServiceUtils.ProgramOrError pe = (programName != null && !programName.isEmpty())
-                ? ServiceUtils.getProgramOrError(programProvider, programName)
-                : ServiceUtils.getActiveProgramOrError(programProvider);
-        if (pe.hasError()) {
-            return CursorPart.missing(((Response.Err) pe.error()).message());
+    /**
+     * The program the cursor is in — derived, never supplied.
+     *
+     * <p>This tool answers "what is the analyst looking at", so the program is an
+     * ANSWER, not a question. It briefly took a {@code program} parameter, which
+     * could only be redundant (you named the focused one) or a lie (you named
+     * another and got its details labelled as cursor state). Worse, omitting it
+     * with several programs open produced "'program' is required" — nonsense
+     * here: if the analyst is looking at something there is exactly one answer,
+     * and if they are not, no argument can conjure one.
+     *
+     * <p>Headless has no analyst and no cursor, so this reports unavailable
+     * rather than falling back to the sole open program. "Which program is
+     * focused" and "which program should I default to" are different questions;
+     * conflating them is what the ambiguity rule exists to stop.
+     */
+    private CursorPart cursorProgramPart() {
+        PluginTool tool = getToolFromProvider();
+        if (tool == null) {
+            return CursorPart.missing("Headless mode has no GUI cursor");
         }
-        return CursorPart.ok(buildProgramInfoMap(pe.program()));
+        Program focused = programProvider.getCurrentProgram();
+        if (focused == null) {
+            return CursorPart.missing("No program is open in the GUI");
+        }
+        return CursorPart.ok(buildProgramInfoMap(focused));
     }
 
     /**
@@ -1570,30 +1585,29 @@ public class ProgramScriptService {
      * {@code /get_current_*} tools).
      */
     @McpTool(path = "/get_ui_cursor",
-            description = "Get the analyst's UI cursor state: address, function, selection, "
-                    + "and/or active program. type=address|function|selection|program|all "
-                    + "(default all). Headless has no GUI cursor — those parts report null "
-                    + "with a reason; type=program still resolves via the active-program helper. "
-                    + "Replaces get_current_address, get_current_function, get_current_selection, "
-                    + "and get_current_program_info.",
+            description = "What the analyst is looking at right now: cursor address, the "
+                    + "function under it, the listing selection, and the focused program — one "
+                    + "call instead of four. type=address|function|selection|program|all "
+                    + "(default all). Takes NO program parameter: the focused program is an "
+                    + "answer this reports, not an input. Headless has no analyst and no cursor, "
+                    + "so every facet reports null with a reason there — use the program "
+                    + "parameter on a data endpoint instead. Replaces get_current_address, "
+                    + "get_current_function, get_current_selection and get_current_program_info.",
             category = "getter", access = ToolAccess.READ_ONLY)
     public Response getUiCursor(
             @Param(value = "type", defaultValue = "all",
-                    description = "Which facet: address | function | selection | program | all") String type,
-            @Param(value = "program", defaultValue = "",
-                    description = "Optional program name for type=program (or the program facet of all); "
-                            + "omit to use the active program") String programName) {
+                    description = "Which facet: address | function | selection | program | all") String type) {
         String t = (type == null || type.isBlank()) ? "all" : type.trim().toLowerCase();
         return switch (t) {
             case "address" -> respondCursorPart(cursorAddressPart());
             case "function" -> respondCursorPart(cursorFunctionPart());
             case "selection" -> respondCursorPart(cursorSelectionPart());
-            case "program" -> respondCursorPart(cursorProgramPart(programName));
+            case "program" -> respondCursorPart(cursorProgramPart());
             case "all" -> {
                 CursorPart address = cursorAddressPart();
                 CursorPart function = cursorFunctionPart();
                 CursorPart selection = cursorSelectionPart();
-                CursorPart program = cursorProgramPart(programName);
+                CursorPart program = cursorProgramPart();
                 Map<String, Object> all = new LinkedHashMap<>();
                 // Unavailable facets stay present as null + reason — omitting
                 // them made clients guess whether the key was unsupported.
