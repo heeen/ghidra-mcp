@@ -93,16 +93,23 @@ public interface ProgramProvider {
     }
 
     /**
-     * Get a program by name, falling back to current program if name is null or empty.
+     * Get a program by name, falling back to the current program only when
+     * {@code name} is null or empty.
+     *
+     * <p>A non-blank name that misses must return null — falling back to the
+     * current program made a typo (or a closed program) silently operate on
+     * the wrong binary. Callers that need a hard error on miss should use
+     * {@link ServiceUtils#getProgramOrError}.
      *
      * @param name The program name (may be null)
-     * @return The resolved program
+     * @return The resolved program, or null when a non-blank name misses
      */
     default Program resolveProgram(String name) {
         if (name == null || name.isEmpty()) {
             return getCurrentProgram();
         }
-        Program program = getProgram(name);
-        return program != null ? program : getCurrentProgram();
+        // Miss stays a miss: never substitute the current program for a
+        // name that was explicitly requested but not found.
+        return getProgram(name);
     }
 }
