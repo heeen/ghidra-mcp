@@ -72,6 +72,41 @@ public final class PartitionContext {
         this.assigned = new BitSet(functions.size());
     }
 
+    /**
+     * Count why {@link #size()} may be zero — used by {@code /partition_program}
+     * to name the {@code .pdata}-without-disassembly case instead of blaming thunks.
+     */
+    public static EligibilityScan scanEligibility(Program program) {
+        Listing listing = program.getListing();
+        int total = 0;
+        int externalOrThunk = 0;
+        int noInstruction = 0;
+        int eligible = 0;
+        FunctionIterator it = program.getFunctionManager().getFunctions(true);
+        while (it.hasNext()) {
+            Function f = it.next();
+            total++;
+            if (f.isExternal() || f.isThunk()) {
+                externalOrThunk++;
+                continue;
+            }
+            if (listing.getInstructionAt(f.getEntryPoint()) == null) {
+                noInstruction++;
+                continue;
+            }
+            eligible++;
+        }
+        return new EligibilityScan(total, externalOrThunk, noInstruction, eligible);
+    }
+
+    /** Partition eligibility breakdown for one program. */
+    public record EligibilityScan(
+            int totalFunctions,
+            int externalOrThunk,
+            int noInstructionAtEntry,
+            int eligible) {
+    }
+
     public Program program() {
         return program;
     }

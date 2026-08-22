@@ -1,15 +1,21 @@
 package com.xebyte.core.checkout;
 
 import com.xebyte.core.ServiceUtils;
+import com.xebyte.core.WriteTx;
 import com.xebyte.core.partition.Partition;
 import com.xebyte.core.partition.PartitionCascade;
 import com.xebyte.core.partition.PartitionContext;
 import com.xebyte.core.partition.Partitioner;
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.util.task.TaskMonitor;
 import ghidra.util.task.TaskMonitorAdapter;
@@ -143,6 +149,18 @@ public final class SweepJob implements Runnable {
                     "dirty", null);
 
             CheckoutConfig cfg = checkout.config();
+            if (cfg.disassembleMissing()) {
+                DisassemblyPassResult disasm = disassembleMissingAtEntries(
+                        program, cancel, cfg.throttlePercent(), SweepJob::disassembleAtEntry);
+                publish(checkout.progress()
+                        .withDisassemblyCounts(
+                                disasm.disassembledOnDemand(), disasm.disassemblyFailed()),
+                        "dirty", null);
+                if (cancel.isCancelled() || !ensureProgramOpen()) {
+                    return;
+                }
+            }
+
             List<Partitioner> chain = PartitionCascade.buildChain(
                     cfg.bandSize(), cfg.enabledStrategies());
             if (chain.isEmpty()) {
@@ -767,6 +785,83 @@ public final class SweepJob implements Runnable {
     }
 
     private long maybeThrottle(long sliceStartNs, int throttlePercent) {
+        return maybeThrottleSlice(sliceStartNs, throttlePercent, cancel);
+    }
+
+    /**
+     * PE {@code .pdata} creates function entries without disassembly; partition
+     * eligibility requires an instruction at the entry. Entry-only disassembly —
+     * no auto-analysis, no new functions elsewhere.
+     */
+    public static DisassemblyPassResult disassembleMissingAtEntries(
+            Program program,
+            CancelSignal cancel,
+            int throttlePercent,
+            EntryDisassembler disassembler) {
+        int succeeded = 0;
+        int failed = 0;
+        long sliceStartNs = System.nanoTime();
+        Listing listing = program.getListing();
+        FunctionIterator it = program.getFunctionManager().getFunctions(true);
+        while (it.hasNext()) {
+            if (cancel.isCancelled()) {
+                break;
+            }
+            Function f = it.next();
+            if (f.isExternal() || f.isThunk()) {
+                continue;
+            }
+            Address entry = f.getEntryPoint();
+            if (listing.getInstructionAt(entry) != null) {
+                continue;
+            }
+            if (disassembler.disassemble(program, entry)) {
+                succeeded++;
+            } else {
+                failed++;
+            }
+            sliceStartNs = maybeThrottleSlice(sliceStartNs, throttlePercent, cancel);
+        }
+        return new DisassemblyPassResult(succeeded, failed);
+    }
+
+    /** Disassemble one known entry; package-visible for offline injection tests. */
+    @FunctionalInterface
+    public interface EntryDisassembler {
+        boolean disassemble(Program program, Address entry);
+    }
+
+    public record DisassemblyPassResult(int disassembledOnDemand, int disassemblyFailed) {
+    }
+
+    private static boolean disassembleAtEntry(Program program, Address entry) {
+        Listing listing = program.getListing();
+        if (listing.getInstructionAt(entry) != null) {
+            return true;
+        }
+        WriteTx tx = WriteTx.begin(program, "Checkout disassemble entry");
+        try {
+            AddressSet addrSet = new AddressSet(entry, entry);
+            DisassembleCommand cmd = new DisassembleCommand(addrSet, null, true);
+            // Follow flow from the entry only — do not pull in auto-analysis or
+            // rename anything beyond what disassembly requires.
+            cmd.setSeedContext(null);
+            cmd.setInitialContext(null);
+            cmd.enableCodeAnalysis(false);
+            if (!cmd.applyTo(program, TaskMonitor.DUMMY)) {
+                tx.end(false);
+                return false;
+            }
+            tx.end(true);
+            return listing.getInstructionAt(entry) != null;
+        } catch (Exception e) {
+            tx.end(false);
+            return false;
+        }
+    }
+
+    private static long maybeThrottleSlice(
+            long sliceStartNs, int throttlePercent, CancelSignal cancel) {
         if (throttlePercent <= 0) {
             return sliceStartNs;
         }
@@ -774,14 +869,12 @@ public final class SweepJob implements Runnable {
         if (heldMs < SLICE_MS) {
             return sliceStartNs;
         }
-        // sleep = slice * throttle / (100 - throttle); 10% → ~28 ms per 250 ms slice
-        // (~20 s added on ls). Releases ProgramDB so interactive GETs stay live.
         long sleepMs = Math.max(1L, (long) SLICE_MS * throttlePercent / (100 - throttlePercent));
         try {
             Thread.sleep(sleepMs);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            requestCancel("interrupted");
+            cancel.cancel();
         }
         return System.nanoTime();
     }
