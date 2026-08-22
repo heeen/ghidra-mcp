@@ -190,7 +190,7 @@ class TestResourceHandlers(unittest.TestCase):
         async def fake_read(endpoint, **params):
             if endpoint == "/find_functions":
                 return json.dumps({"functions": rows, "count": len(rows)})
-            if endpoint == "/get_current_program_info":
+            if endpoint == "/get_ui_cursor":
                 return json.dumps({"name": "ls", "function_count": 25514})
             raise AssertionError(endpoint)
 

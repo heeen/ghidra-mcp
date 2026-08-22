@@ -63,7 +63,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class HeadlessProgramProvider implements ProgramProvider {
 
     private final Map<String, Program> openPrograms = new ConcurrentHashMap<>();
-    private volatile Program currentProgram;
     private final TaskMonitor monitor;
     private Project project;
     private GhidraProject ghidraProject;  // For headless project management
@@ -87,7 +86,13 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
     @Override
     public Program getCurrentProgram() {
-        return currentProgram;
+        // Headless has no GUI focus. Exactly one open program is unambiguous;
+        // zero or many leaves nothing honest to return — inventing sticky
+        // "current" state is what made a 17-program survey return one binary's
+        // numbers seventeen times (headless never reassigned after the first load,
+        // and /switch_program is not even registered headless).
+        Program[] open = getAllOpenPrograms();
+        return (open != null && open.length == 1) ? open[0] : null;
     }
 
     @Override
@@ -166,9 +171,17 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
     @Override
     public void setCurrentProgram(Program program) {
+        // Explicit no-op: headless has no current-program concept. GUI providers
+        // implement this against ProgramManager / CodeBrowser focus; pretending
+        // here would reintroduce sticky omit-program state with no way to steer it.
+    }
+
+    /**
+     * Track an already-open Program in the open set without implying current-program
+     * state. Load paths use this; tests that inject ProgramBuilder programs do too.
+     */
+    public void trackOpenProgram(Program program) {
         if (program != null) {
-            this.currentProgram = program;
-            // Ensure it's in our map
             registerProgram(program);
         }
     }
@@ -198,9 +211,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
             } catch (Exception e) {
                 Msg.warn(this, "Error releasing displaced program '" + name
                     + "': " + e.getMessage());
-            }
-            if (currentProgram == prior) {
-                currentProgram = program;
             }
         }
     }
@@ -257,9 +267,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
             if (program != null) {
                 registerProgram(program);
-                if (currentProgram == null) {
-                    currentProgram = program;
-                }
                 Msg.info(this, "Loaded program: " + program.getName() +
                     " (" + file.getAbsolutePath() + ")");
             } else {
@@ -281,9 +288,9 @@ public class HeadlessProgramProvider implements ProgramProvider {
      *
      * Used for firmware blobs and other raw images where AutoImporter's best-guess
      * format detection has no header to latch onto (e.g. ARM Cortex-M .mem dumps).
-     * Mirrors {@link #loadProgramFromFile(File)} for openPrograms / currentProgram
-     * bookkeeping so subsequent /list_functions, /decompile_function, etc. resolve
-     * the result transparently.
+     * Mirrors {@link #loadProgramFromFile(File)} for openPrograms bookkeeping so
+     * subsequent /list_functions, /decompile_function, etc. resolve the result
+     * transparently.
      *
      * @param file         The raw binary file
      * @param languageId   Ghidra language ID, e.g. "ARM:LE:32:Cortex"
@@ -355,9 +362,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
             if (program != null) {
                 registerProgram(program);
-                if (currentProgram == null) {
-                    currentProgram = program;
-                }
                 Msg.info(this, "Loaded raw binary: " + program.getName()
                     + " (" + file.getAbsolutePath() + ") as " + languageId);
             } else {
@@ -406,9 +410,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
             Program program = (Program) df.getDomainObject(this, true, false, monitor);
             if (program != null) {
                 openPrograms.put(program.getName(), program);
-                if (currentProgram == null) {
-                    currentProgram = program;
-                }
             }
             return program;
         } catch (Exception e) {
@@ -503,9 +504,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
                     + (serverHint.isEmpty() ? "" : " (" + serverHint + ")"));
             }
             registerProgram(program);
-            if (currentProgram == null) {
-                currentProgram = program;
-            }
             Msg.info(this, "Loaded program from project: " + program.getName());
             return ProgramLoadResult.success(program);
         } catch (Exception e) {
@@ -650,12 +648,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
 
         openPrograms.remove(program.getName());
 
-        if (currentProgram == program) {
-            // Switch to another open program, or null if none
-            currentProgram = openPrograms.isEmpty() ? null :
-                openPrograms.values().iterator().next();
-        }
-
         try {
             program.release(this);
         } catch (Exception e) {
@@ -676,7 +668,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
             }
         }
         openPrograms.clear();
-        currentProgram = null;
     }
 
     /**
@@ -730,10 +721,10 @@ public class HeadlessProgramProvider implements ProgramProvider {
         Program prog;
         DomainFile file;
         if (path == null || path.isEmpty()) {
-            prog = currentProgram;
+            prog = getCurrentProgram();
             if (prog == null) {
                 out.put("success", false);
-                out.put("error", "No current program open; supply 'path'.");
+                out.put("error", "No sole open program; supply 'path'.");
                 return out;
             }
             file = prog.getDomainFile();

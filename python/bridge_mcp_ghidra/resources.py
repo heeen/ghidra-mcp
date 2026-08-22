@@ -177,7 +177,7 @@ async def program_index_resource(program: str) -> str:
     name = unquote(program)
     uri = f"ghidra://program/{quote(name, safe='')}/index"
     subscriptions.note_resource_read(uri)
-    return await _read_async("/get_current_program_info", program=name)
+    return await _read_async("/get_ui_cursor", type="program", program=name)
 
 
 @mcp.resource(
@@ -213,7 +213,7 @@ async def function_index_resource(program: str) -> str:
     total = len(rows)
     if truncated:
         try:
-            info = json.loads(await _read_async("/get_current_program_info", program=name))
+            info = json.loads(await _read_async("/get_ui_cursor", type="program", program=name))
             if isinstance(info, dict) and info.get("function_count") is not None:
                 total = int(info["function_count"])
         except Exception:

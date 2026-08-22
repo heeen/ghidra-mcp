@@ -3102,7 +3102,7 @@ public class AnalysisService {
                 recommendations.add("4. Re-score and stop when only structural deductions remain.");
             } else {
                 recommendations.add("COMPLETE WORKFLOW (FUNCTION_DOC_WORKFLOW_V5.md):");
-                recommendations.add("1. Initialize: get_current_selection() + analyze_function_complete() -- gather decompiled code, xrefs, callees, callers, disassembly, variables");
+                recommendations.add("1. Initialize: get_ui_cursor() + analyze_function_complete() -- gather decompiled code, xrefs, callees, callers, disassembly, variables");
                 recommendations.add("2. Classify: Leaf/Worker/Thunk/Init/Callback/Public API/Internal utility");
                 recommendations.add("3. Mandatory Undefined Type Audit: examine BOTH decompiled code and disassembly for undefined types");
                 recommendations.add("4. Verify Decompiler vs Assembly: loops, type casts, pointer arithmetic, conditionals, early exits");

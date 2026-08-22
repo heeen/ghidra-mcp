@@ -431,8 +431,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // source. Found via a live-schema-vs-catalog diff (v6.0.0).
         com.xebyte.core.ManualToolDescriptors.addAll(scanner,
             "/configure_analyzer",
-            "/delete_project", "/exit_ghidra", "/get_current_address",
-            "/get_current_function", "/health",
+            "/delete_project", "/exit_ghidra", "/health",
             "/list_projects", "/mcp/schema",
             "/server/admin/set_permissions", "/server/admin/terminate_all_checkouts",
             "/server/admin/terminate_checkout", "/server/admin/users",
@@ -459,14 +458,6 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // ==========================================================================
         // HEADLESS-ONLY ENDPOINTS (no GUI equivalent)
         // ==========================================================================
-
-        safeContext("/get_current_address", exchange -> {
-            sendResponse(exchange, "{\"error\": \"Headless mode - use address parameter with specific endpoints\"}");
-        });
-
-        safeContext("/get_current_function", exchange -> {
-            sendResponse(exchange, "{\"error\": \"Headless mode - use get_function_by_address\"}");
-        });
 
         // --- Program Management --- (registered via HeadlessManagementService)
 

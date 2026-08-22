@@ -333,10 +333,6 @@ public class HeadlessEndpointHandler {
         return programScriptService.listOpenPrograms().toJson();
     }
 
-    public String getCurrentProgramInfo() {
-        return programScriptService.getCurrentProgramInfo().toJson();
-    }
-
     public String switchProgram(String name) {
         return programScriptService.switchProgram(name).toJson();
     }

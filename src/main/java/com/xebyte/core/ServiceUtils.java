@@ -721,11 +721,10 @@ public final class ServiceUtils {
      * Resolve the active (current) program without the multi-program omit rule.
      *
      * <p>Use ONLY for endpoints whose contract IS the active program:
-     * {@code /get_current_program_info}, {@code /get_current_address},
-     * {@code /get_current_function}, {@code /get_current_selection},
-     * {@code /list_open_programs}, {@code /switch_program}. A distinct helper
-     * (not a boolean on {@link #getProgramOrError}) keeps the exemption a
-     * greppable list rather than a flag someone can flip by accident.
+     * {@code /get_ui_cursor} (program facet), {@code /list_open_programs},
+     * {@code /switch_program}. A distinct helper (not a boolean on
+     * {@link #getProgramOrError}) keeps the exemption a greppable list rather
+     * than a flag someone can flip by accident.
      *
      * <p>{@code /switch_program} does NOT create an exemption for later calls —
      * having switched N calls ago is exactly the stale implicit state
@@ -734,8 +733,17 @@ public final class ServiceUtils {
     public static ProgramOrError getActiveProgramOrError(ProgramProvider provider) {
         Program program = provider.getCurrentProgram();
         if (program == null) {
-            return new ProgramOrError(null, Response.err(
-                    "No program loaded." + formatAvailablePrograms(provider)));
+            // Distinguish "nothing is open" from "several are open and none is
+            // active". Headless no longer has a current-program concept, so this
+            // returns null the moment a second program opens — and answering
+            // "No program loaded." while listing two loaded programs is a message
+            // that contradicts its own evidence.
+            Program[] all = provider.getAllOpenPrograms();
+            String message = (all != null && all.length > 1)
+                    ? "Multiple programs open and none is active; 'program' is required."
+                            + formatAvailablePrograms(provider)
+                    : "No program loaded." + formatAvailablePrograms(provider);
+            return new ProgramOrError(null, Response.err(message));
         }
         return new ProgramOrError(program, null);
     }

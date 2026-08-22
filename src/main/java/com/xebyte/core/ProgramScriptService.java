@@ -1,5 +1,6 @@
 package com.xebyte.core;
 
+import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.options.OptionType;
 import ghidra.framework.options.Options;
@@ -11,6 +12,8 @@ import ghidra.program.model.address.OverlayAddressSpace;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.util.ProgramLocation;
+import ghidra.program.util.ProgramSelection;
 import ghidra.program.model.util.IntPropertyMap;
 import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.ObjectPropertyMap;
@@ -1331,7 +1334,7 @@ public class ProgramScriptService {
     /**
      * Build JSON entries for the program's overlay address spaces, each marked
      * is_overlay=true with the name of the physical space it overlays. Kept
-     * SEPARATE from buildAddressSpacesList so get_current_program_info's
+     * SEPARATE from buildAddressSpacesList so program-info's
      * has_multiple_address_spaces flag continues to reflect PHYSICAL ambiguity only.
      */
     private List<Map<String, Object>> buildOverlaySpacesList(Program program) {
@@ -1358,26 +1361,9 @@ public class ProgramScriptService {
     }
 
     /**
-     * Get detailed information about the currently active program.
+     * Detailed metadata for one program (formerly {@code /get_current_program_info}).
      */
-    public Response getCurrentProgramInfo() {
-        return getCurrentProgramInfo(null);
-    }
-
-    @McpTool(path = "/get_current_program_info", description = "Get detailed info about the active program. With multiple programs open, other tools require program=; this endpoint reports the active one without that argument.", category = "program", access = ToolAccess.READ_ONLY)
-    public Response getCurrentProgramInfo(
-            @Param(value = "program", description = "Optional program name; omit to use the active program (allowed even when several are open — this endpoint's contract IS the active program)", defaultValue = "") String programName) {
-        // Explicit name still resolves by name; omit uses the active program
-        // even when several are open. Do NOT route omit through getProgramOrError —
-        // that helper refuses omit when more than one program is open, and this
-        // endpoint's contract IS the active program. switch_program does not
-        // create an exemption for later non-exempt calls.
-        ServiceUtils.ProgramOrError pe = (programName != null && !programName.isEmpty())
-                ? ServiceUtils.getProgramOrError(programProvider, programName)
-                : ServiceUtils.getActiveProgramOrError(programProvider);
-        if (pe.hasError()) return pe.error();
-        Program program = pe.program();
-
+    private Map<String, Object> buildProgramInfoMap(Program program) {
         List<Map<String, Object>> addressSpaces = buildAddressSpacesList(program);
         boolean multiSpace = addressSpaces.size() > 1;
         List<Map<String, Object>> overlaySpaces = buildOverlaySpacesList(program);
@@ -1386,7 +1372,7 @@ public class ProgramScriptService {
         // append so it continues to reflect physical ambiguity only.
         addressSpaces.addAll(overlaySpaces);
 
-        Map<String, Object> info = new java.util.LinkedHashMap<>();
+        Map<String, Object> info = new LinkedHashMap<>();
         info.put("name", program.getName());
         info.put("path", program.getDomainFile().getPathname());
         info.put("executable_path", program.getExecutablePath() != null ? program.getExecutablePath() : "");
@@ -1418,7 +1404,219 @@ public class ProgramScriptService {
                 + "<overlay>::<hex> (e.g., " + overlaySpaces.get(0).get("name") + "::<hex>) — overlay "
                 + "names are case-sensitive. Plain hex resolves to the default physical space.");
         }
-        return Response.ok(info);
+        return info;
+    }
+
+    private static final String NO_GUI_CURSOR = "Headless mode has no GUI cursor";
+
+    /**
+     * CodeViewerService from this tool or any running CodeBrowser — FrontEnd
+     * alone has none.
+     */
+    private CodeViewerService findCodeViewerService() {
+        PluginTool tool = getToolFromProvider();
+        if (tool == null) {
+            return null;
+        }
+        CodeViewerService service = tool.getService(CodeViewerService.class);
+        if (service != null) {
+            return service;
+        }
+        try {
+            ghidra.framework.model.Project project = tool.getProject();
+            if (project == null) {
+                return null;
+            }
+            ghidra.framework.model.ToolManager tm = project.getToolManager();
+            if (tm == null) {
+                return null;
+            }
+            for (PluginTool runningTool : tm.getRunningTools()) {
+                service = runningTool.getService(CodeViewerService.class);
+                if (service != null) {
+                    return service;
+                }
+            }
+        } catch (Exception e) {
+            // ToolManager may not be available in all contexts
+        }
+        return null;
+    }
+
+    /** One cursor facet: value when present, else null + reason (never omit the key). */
+    private static final class CursorPart {
+        final Object value;
+        final String unavailable;
+
+        CursorPart(Object value, String unavailable) {
+            this.value = value;
+            this.unavailable = unavailable;
+        }
+
+        static CursorPart ok(Object value) {
+            return new CursorPart(value, null);
+        }
+
+        static CursorPart missing(String reason) {
+            return new CursorPart(null, reason);
+        }
+    }
+
+    private CursorPart cursorAddressPart() {
+        CodeViewerService service = findCodeViewerService();
+        if (service == null) {
+            return CursorPart.missing(getToolFromProvider() == null
+                    ? NO_GUI_CURSOR
+                    : "Code viewer service not available");
+        }
+        ProgramLocation location = service.getCurrentLocation();
+        if (location == null) {
+            return CursorPart.missing("No current location");
+        }
+        Program program = location.getProgram();
+        String programPath = (program != null && program.getDomainFile() != null)
+                ? program.getDomainFile().getPathname() : null;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("address", location.getAddress().toString());
+        body.put("program", programPath);
+        return CursorPart.ok(body);
+    }
+
+    private CursorPart cursorFunctionPart() {
+        CodeViewerService service = findCodeViewerService();
+        if (service == null) {
+            return CursorPart.missing(getToolFromProvider() == null
+                    ? NO_GUI_CURSOR
+                    : "Code viewer service not available");
+        }
+        ProgramLocation location = service.getCurrentLocation();
+        if (location == null) {
+            return CursorPart.missing("No current location");
+        }
+        // Location's program, not provider current — they can disagree.
+        Program program = location.getProgram();
+        if (program == null) {
+            program = programProvider.getCurrentProgram();
+        }
+        if (program == null) {
+            return CursorPart.missing("No program loaded");
+        }
+        Function func = program.getFunctionManager().getFunctionContaining(location.getAddress());
+        if (func == null) {
+            return CursorPart.missing("No function at current location: " + location.getAddress());
+        }
+        String programPath = program.getDomainFile() != null
+                ? program.getDomainFile().getPathname() : program.getName();
+        return CursorPart.ok(JsonHelper.mapOf(
+                "function_name", func.getName(),
+                "address", func.getEntryPoint().toString(),
+                "program", programPath,
+                "signature", func.getSignature().getPrototypeString()));
+    }
+
+    private CursorPart cursorSelectionPart() {
+        CodeViewerService service = findCodeViewerService();
+        if (service == null) {
+            return CursorPart.missing(getToolFromProvider() == null
+                    ? NO_GUI_CURSOR
+                    : "Code viewer service not available");
+        }
+        ProgramSelection selection = service.getCurrentSelection();
+        ProgramLocation location = service.getCurrentLocation();
+        Program program = location != null ? location.getProgram() : programProvider.getCurrentProgram();
+        String programPath = (program != null && program.getDomainFile() != null)
+                ? program.getDomainFile().getPathname()
+                : (program != null ? program.getName() : null);
+
+        if (selection == null || selection.isEmpty()) {
+            return CursorPart.ok(JsonHelper.mapOf(
+                    "program", programPath,
+                    "is_empty", true,
+                    "ranges", new ArrayList<>()));
+        }
+
+        List<Map<String, Object>> ranges = new ArrayList<>();
+        for (ghidra.program.model.address.AddressRange range : selection.getAddressRanges()) {
+            ranges.add(JsonHelper.mapOf(
+                    "start", range.getMinAddress().toString(),
+                    "end", range.getMaxAddress().toString(),
+                    "length", range.getLength()));
+        }
+        return CursorPart.ok(JsonHelper.mapOf(
+                "program", programPath,
+                "is_empty", false,
+                "ranges", ranges,
+                "min_address", selection.getMinAddress().toString(),
+                "max_address", selection.getMaxAddress().toString(),
+                "num_addresses", selection.getNumAddresses()));
+    }
+
+    private CursorPart cursorProgramPart(String programName) {
+        // Explicit name still resolves by name; omit uses the active helper
+        // (sole open headless, or GUI focus). Do NOT route omit through
+        // getProgramOrError — that refuses when more than one is open.
+        ServiceUtils.ProgramOrError pe = (programName != null && !programName.isEmpty())
+                ? ServiceUtils.getProgramOrError(programProvider, programName)
+                : ServiceUtils.getActiveProgramOrError(programProvider);
+        if (pe.hasError()) {
+            return CursorPart.missing(((Response.Err) pe.error()).message());
+        }
+        return CursorPart.ok(buildProgramInfoMap(pe.program()));
+    }
+
+    /**
+     * What the analyst is looking at right now — address, function, selection,
+     * and/or active program — in one round trip (replaces the four former
+     * {@code /get_current_*} tools).
+     */
+    @McpTool(path = "/get_ui_cursor",
+            description = "Get the analyst's UI cursor state: address, function, selection, "
+                    + "and/or active program. type=address|function|selection|program|all "
+                    + "(default all). Headless has no GUI cursor — those parts report null "
+                    + "with a reason; type=program still resolves via the active-program helper. "
+                    + "Replaces get_current_address, get_current_function, get_current_selection, "
+                    + "and get_current_program_info.",
+            category = "getter", access = ToolAccess.READ_ONLY)
+    public Response getUiCursor(
+            @Param(value = "type", defaultValue = "all",
+                    description = "Which facet: address | function | selection | program | all") String type,
+            @Param(value = "program", defaultValue = "",
+                    description = "Optional program name for type=program (or the program facet of all); "
+                            + "omit to use the active program") String programName) {
+        String t = (type == null || type.isBlank()) ? "all" : type.trim().toLowerCase();
+        return switch (t) {
+            case "address" -> respondCursorPart(cursorAddressPart());
+            case "function" -> respondCursorPart(cursorFunctionPart());
+            case "selection" -> respondCursorPart(cursorSelectionPart());
+            case "program" -> respondCursorPart(cursorProgramPart(programName));
+            case "all" -> {
+                CursorPart address = cursorAddressPart();
+                CursorPart function = cursorFunctionPart();
+                CursorPart selection = cursorSelectionPart();
+                CursorPart program = cursorProgramPart(programName);
+                Map<String, Object> all = new LinkedHashMap<>();
+                // Unavailable facets stay present as null + reason — omitting
+                // them made clients guess whether the key was unsupported.
+                all.put("address", address.value);
+                all.put("address_unavailable", address.unavailable);
+                all.put("function", function.value);
+                all.put("function_unavailable", function.unavailable);
+                all.put("selection", selection.value);
+                all.put("selection_unavailable", selection.unavailable);
+                all.put("program", program.value);
+                all.put("program_unavailable", program.unavailable);
+                yield Response.ok(all);
+            }
+            default -> Response.err(
+                    "Invalid type '" + type + "'; use address, function, selection, program, or all");
+        };
+    }
+
+    private static Response respondCursorPart(CursorPart part) {
+        if (part.value != null) {
+            return Response.ok(part.value);
+        }
+        return Response.err(part.unavailable != null ? part.unavailable : "Unavailable");
     }
 
     /**

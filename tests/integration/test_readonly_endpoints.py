@@ -74,9 +74,9 @@ class TestServerHealth:
 class TestProgramInfo:
     """Test read-only program information endpoints."""
 
-    def test_get_current_program_info(self, http_client):
-        """Get current program info."""
-        response = http_client.get("/get_current_program_info")
+    def test_get_ui_cursor(self, http_client):
+        """Get UI cursor / active program info."""
+        response = http_client.get("/get_ui_cursor", params={"type": "program"})
         assert response.status_code == 200
         # May return error if no program open, that's OK
         assert len(response.text) > 0
@@ -802,10 +802,10 @@ class TestBulkHashing:
 class TestCurrentSelection:
     """Test current selection/state endpoints (read-only)."""
 
-    def test_get_current_selection(self, http_client):
+    def test_get_ui_cursor_selection(self, http_client):
         """Get current cursor/selection in Ghidra."""
-        response = http_client.get("/get_current_selection")
-        # May be 404 if selection endpoint not available
+        response = http_client.get("/get_ui_cursor", params={"type": "selection"})
+        # May be 404 if selection endpoint not available / headless
         assert response.status_code in [200, 404]
 
 
