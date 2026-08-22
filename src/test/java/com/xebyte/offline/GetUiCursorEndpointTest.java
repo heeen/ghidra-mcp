@@ -84,22 +84,25 @@ public class GetUiCursorEndpointTest extends TestCase {
         return provider;
     }
 
-    public void testTypeProgramReturnsInfo() {
+    public void testTypeProgramHeadlessReportsUnavailable() {
+        // The focused program is DERIVED from the cursor, so with no GUI there is
+        // no answer. It must not fall back to the sole open program: "which
+        // program is focused" and "which program should I default to" are
+        // different questions, and answering the second while asked the first is
+        // how a caller ends up trusting the wrong program's data.
         Program a = named("alpha.dll");
         ProgramScriptService svc = new ProgramScriptService(
                 mockProvider(a, a), new NoopThreadingStrategy());
-        Response resp = svc.getUiCursor("program", "");
-        assertTrue(resp instanceof Response.Ok);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> body = (Map<String, Object>) ((Response.Ok) resp).data();
-        assertEquals("alpha.dll", body.get("name"));
+        Response resp = svc.getUiCursor("program");
+        assertTrue("headless has no focused program: " + resp, resp instanceof Response.Err);
+        assertTrue(((Response.Err) resp).message().contains("Headless"));
     }
 
     public void testTypeAddressHeadlessReportsError() {
         Program a = named("alpha.dll");
         ProgramScriptService svc = new ProgramScriptService(
                 mockProvider(a, a), new NoopThreadingStrategy());
-        Response resp = svc.getUiCursor("address", "");
+        Response resp = svc.getUiCursor("address");
         assertTrue(resp instanceof Response.Err);
         assertTrue(((Response.Err) resp).message().contains("Headless"));
     }
@@ -108,7 +111,7 @@ public class GetUiCursorEndpointTest extends TestCase {
         Program a = named("alpha.dll");
         ProgramScriptService svc = new ProgramScriptService(
                 mockProvider(a, a), new NoopThreadingStrategy());
-        Response resp = svc.getUiCursor("all", "");
+        Response resp = svc.getUiCursor("all");
         assertTrue("type=all must not fail the whole call: " + resp, resp instanceof Response.Ok);
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) ((Response.Ok) resp).data();
@@ -118,11 +121,8 @@ public class GetUiCursorEndpointTest extends TestCase {
         assertNotNull(body.get("function_unavailable"));
         assertNull(body.get("selection"));
         assertNotNull(body.get("selection_unavailable"));
-        assertNotNull(body.get("program"));
-        assertNull(body.get("program_unavailable"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> program = (Map<String, Object>) body.get("program");
-        assertEquals("alpha.dll", program.get("name"));
+        assertNull(body.get("program"));
+        assertNotNull(body.get("program_unavailable"));
     }
 
     public void testEachTypeAccepted() {
@@ -130,9 +130,9 @@ public class GetUiCursorEndpointTest extends TestCase {
         ProgramScriptService svc = new ProgramScriptService(
                 mockProvider(a, a), new NoopThreadingStrategy());
         for (String type : new String[]{"address", "function", "selection", "program", "all", ""}) {
-            Response resp = svc.getUiCursor(type, "");
+            Response resp = svc.getUiCursor(type);
             assertNotNull("type=" + type, resp);
-            if ("program".equals(type) || "all".equals(type) || type.isEmpty()) {
+            if ("all".equals(type) || type.isEmpty()) {
                 assertTrue("type=" + type + " should succeed: " + resp, resp instanceof Response.Ok);
             }
         }
