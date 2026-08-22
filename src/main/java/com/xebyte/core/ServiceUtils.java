@@ -652,31 +652,90 @@ public final class ServiceUtils {
     }
 
     /**
-     * Resolve the target program by name, or the current program if name is null/empty.
-     * Returns a ProgramOrError with either a valid Program or a Response.Err.
+     * Format the open-program list for error messages (leading space when non-empty).
+     */
+    private static String formatAvailablePrograms(ProgramProvider provider) {
+        Program[] all = provider.getAllOpenPrograms();
+        if (all == null || all.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(" Available programs: ");
+        for (int i = 0; i < all.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(all[i].getName());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Resolve the target program by name, or the sole open program when name is omitted.
+     *
+     * <p>When {@code programName} is omitted (null/blank):
+     * <ul>
+     *   <li>exactly one program open → that program (no verbosity tax on the common case)</li>
+     *   <li>more than one open → error naming every open program; with more than one
+     *       candidate, guessing is never acceptable. Measured failure mode: a
+     *       17-program survey that omitted {@code program} returned the same binary's
+     *       numbers 17 times because headless never reassigned {@code currentProgram}
+     *       after the first load.</li>
+     *   <li>zero open → {@code "No program loaded."}</li>
+     * </ul>
+     * An explicit name that misses keeps the existing not-found error.
+     *
+     * <p>{@code /switch_program} does NOT create an exemption for later calls —
+     * having switched N calls ago is exactly the stale implicit state this closes.
+     * Endpoints whose contract IS the active program use
+     * {@link #getActiveProgramOrError} instead.
      */
     public static ProgramOrError getProgramOrError(ProgramProvider provider, String programName) {
-        Program program = null;
         if (programName != null && !programName.isEmpty()) {
-            program = provider.getProgram(programName);
-        } else {
-            program = provider.getCurrentProgram();
-        }
-        if (program == null) {
-            String available = "";
-            Program[] all = provider.getAllOpenPrograms();
-            if (all != null && all.length > 0) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < all.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append(all[i].getName());
-                }
-                available = " Available programs: " + sb;
+            Program program = provider.getProgram(programName);
+            if (program == null) {
+                return new ProgramOrError(null, Response.err(
+                        "Program not found: " + programName + formatAvailablePrograms(provider)));
             }
-            String msg = programName != null && !programName.isEmpty()
-                    ? "Program not found: " + programName + available
-                    : "No program loaded." + available;
-            return new ProgramOrError(null, Response.err(msg));
+            return new ProgramOrError(program, null);
+        }
+
+        // Omitted: refuse to guess when more than one program is open.
+        Program[] all = provider.getAllOpenPrograms();
+        if (all != null && all.length > 1) {
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < all.length; i++) {
+                if (i > 0) names.append(", ");
+                names.append(all[i].getName());
+            }
+            return new ProgramOrError(null, Response.err(
+                    "Multiple programs open; 'program' is required. Open programs: " + names));
+        }
+
+        Program program = provider.getCurrentProgram();
+        if (program == null) {
+            return new ProgramOrError(null, Response.err(
+                    "No program loaded." + formatAvailablePrograms(provider)));
+        }
+        return new ProgramOrError(program, null);
+    }
+
+    /**
+     * Resolve the active (current) program without the multi-program omit rule.
+     *
+     * <p>Use ONLY for endpoints whose contract IS the active program:
+     * {@code /get_current_program_info}, {@code /get_current_address},
+     * {@code /get_current_function}, {@code /get_current_selection},
+     * {@code /list_open_programs}, {@code /switch_program}. A distinct helper
+     * (not a boolean on {@link #getProgramOrError}) keeps the exemption a
+     * greppable list rather than a flag someone can flip by accident.
+     *
+     * <p>{@code /switch_program} does NOT create an exemption for later calls —
+     * having switched N calls ago is exactly the stale implicit state
+     * {@link #getProgramOrError} closes. That is deliberate.
+     */
+    public static ProgramOrError getActiveProgramOrError(ProgramProvider provider) {
+        Program program = provider.getCurrentProgram();
+        if (program == null) {
+            return new ProgramOrError(null, Response.err(
+                    "No program loaded." + formatAvailablePrograms(provider)));
         }
         return new ProgramOrError(program, null);
     }

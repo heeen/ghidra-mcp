@@ -1140,14 +1140,16 @@ public class ProgramScriptService {
     /**
      * List all currently open programs in Ghidra.
      */
-    @McpTool(path = "/list_open_programs", description = "List all open programs. If more than one program is listed, always pass the program name explicitly in subsequent tool calls — omitting it will silently target the active program, which may not be the intended one.", category = "program", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/list_open_programs", description = "List all open programs. If more than one is listed, pass program= on subsequent tool calls — omitting it returns an error naming every open program (guessing is never acceptable with multiple candidates).", category = "program", access = ToolAccess.READ_ONLY)
     public Response listOpenPrograms() {
         Program[] programs = programProvider.getAllOpenPrograms();
         if (programs == null || programs.length == 0) {
             return Response.ok(JsonHelper.mapOf("programs", List.of(), "count", 0, "current_program", ""));
         }
 
-        Program currentProgram = programProvider.resolveProgram(null);
+        // Active program only for the is_current flag — this endpoint's
+        // contract is the open set, not a guessed target for later tools.
+        Program currentProgram = programProvider.getCurrentProgram();
 
         List<Map<String, Object>> programList = new ArrayList<>();
         for (Program prog : programs) {
@@ -1362,10 +1364,17 @@ public class ProgramScriptService {
         return getCurrentProgramInfo(null);
     }
 
-    @McpTool(path = "/get_current_program_info", description = "Get detailed info about the active program. When multiple programs are open, call this first to confirm which program will receive tool calls that omit the program argument.", category = "program", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/get_current_program_info", description = "Get detailed info about the active program. With multiple programs open, other tools require program=; this endpoint reports the active one without that argument.", category = "program", access = ToolAccess.READ_ONLY)
     public Response getCurrentProgramInfo(
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
-        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+            @Param(value = "program", description = "Optional program name; omit to use the active program (allowed even when several are open — this endpoint's contract IS the active program)", defaultValue = "") String programName) {
+        // Explicit name still resolves by name; omit uses the active program
+        // even when several are open. Do NOT route omit through getProgramOrError —
+        // that helper refuses omit when more than one program is open, and this
+        // endpoint's contract IS the active program. switch_program does not
+        // create an exemption for later non-exempt calls.
+        ServiceUtils.ProgramOrError pe = (programName != null && !programName.isEmpty())
+                ? ServiceUtils.getProgramOrError(programProvider, programName)
+                : ServiceUtils.getActiveProgramOrError(programProvider);
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 

@@ -73,11 +73,12 @@ public class CheckoutService {
     /**
      * Resolve a checkout's Program by domain path, then by name.
      *
-     * <p>Deliberately NOT {@code ProgramProvider.resolveProgram}, which falls
-     * back to the current program when the name misses. A checkout names one
-     * specific program, and reconciling a miss against whatever happens to be
-     * active would splice one program's decompilation into another program's
-     * tree. A miss must stay a miss.
+     * <p>Deliberately NOT {@code ProgramProvider.resolveProgram}: a checkout
+     * names one specific program (domain path, then name). Reconciling a miss
+     * against whatever happens to be active would splice one program's
+     * decompilation into another program's tree. A miss must stay a miss
+     * ({@code resolveProgram} already returns null on a non-blank miss; this
+     * path also skips the blank→current fallback).
      */
     private Program lookupViaProvider(Checkout checkout) {
         if (checkout == null || programProvider == null) {
