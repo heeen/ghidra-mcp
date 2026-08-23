@@ -979,9 +979,10 @@ public class DocumentationHashService {
     // -----------------------------------------------------------------------
 
     /**
-     * Get the function signature (feature vector) for a function at the given address.
+     * Get the function signature (feature vector) for cross-binary comparison.
+     * Kept for benchmarks; agents use {@code /get_function_bundle?fields=signature}
+     * for the Ghidra signature string, or this method directly for the feature vector.
      */
-    @McpTool(path = "/get_function_signature", description = "Get function signature for cross-binary comparison. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
     public Response handleGetFunctionSignature(
             @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "

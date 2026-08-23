@@ -294,7 +294,7 @@ class TestCheckoutFileRefreshRemoved(unittest.TestCase):
         def fake_get(endpoint, params=None):
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "00001000"})
-            if endpoint == "/get_function_callers":
+            if endpoint == "/get_function_bundle":
                 return json.dumps({"callers": [{"name": "C", "address": "00002000"}]})
             return json.dumps({})
 
@@ -365,7 +365,7 @@ class TestCheckoutFileRefreshRemoved(unittest.TestCase):
             gets.append({"endpoint": endpoint, "params": dict(params or {})})
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "0000aaaa"})
-            if endpoint == "/get_function_callers":
+            if endpoint == "/get_function_bundle":
                 return json.dumps({"callers": [], "total": 0})
             return json.dumps({})
 
@@ -390,9 +390,10 @@ class TestCheckoutFileRefreshRemoved(unittest.TestCase):
                 )
 
         asyncio.run(run())
-        caller_gets = [g for g in gets if g["endpoint"] == "/get_function_callers"]
+        caller_gets = [g for g in gets if g["endpoint"] == "/get_function_bundle"]
         self.assertEqual(len(caller_gets), 1)
         self.assertEqual(caller_gets[0]["params"].get("limit"), 64)
+        self.assertEqual(caller_gets[0]["params"].get("fields"), "callers")
 
     def test_blast_radius_has_no_addresses_field(self):
         blast = invalidation.BlastRadius(
@@ -417,7 +418,7 @@ class TestCheckoutFileRefreshRemoved(unittest.TestCase):
         def fake_get(endpoint, params=None):
             if endpoint == "/get_function_by_address":
                 return json.dumps({"address": "00001000"})
-            if endpoint == "/get_function_callers":
+            if endpoint == "/get_function_bundle":
                 return json.dumps({
                     "callers": [
                         {"name": "A", "address": "00002000"},

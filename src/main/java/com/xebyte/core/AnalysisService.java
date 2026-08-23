@@ -2931,7 +2931,7 @@ public class AnalysisService {
         if (!undocumentedOrdinals.isEmpty()) {
             recommendations.add("UNDOCUMENTED ORDINAL CALLS - Add inline comments for each:");
             recommendations.add("1. Found " + undocumentedOrdinals.size() + " Ordinal call(s) without comments: " + String.join(", ", undocumentedOrdinals.subList(0, Math.min(5, undocumentedOrdinals.size()))));
-            recommendations.add("2. Resolve the Ordinal via get_external_location() or list_external_locations() on the importing module");
+            recommendations.add("2. Resolve the Ordinal via get_external_location() or list_program_items(kind=external_locations) on the importing module");
             recommendations.add("3. Use set_comment(type='pre') or batch_set_comments() to add inline comment explaining the call");
             recommendations.add("4. Format: /* Ordinal_123 = StorageFunctionName - brief description */");
         }

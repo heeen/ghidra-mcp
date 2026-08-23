@@ -192,32 +192,43 @@ public class HeadlessEndpointHandler {
     // LISTING ENDPOINTS
     // ==========================================================================
 
+    public String listProgramItems(String kind, int offset, int limit, String programName) {
+        return listingService.listProgramItems(kind, offset, limit, programName).toJson();
+    }
+
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listMethods(int offset, int limit, String programName) {
-        return listingService.getAllFunctionNames(offset, limit, programName).toJson();
+        return listProgramItems("methods", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listClasses(int offset, int limit, String programName) {
-        return listingService.getAllClassNames(offset, limit, programName).toJson();
+        return listProgramItems("classes", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listSegments(int offset, int limit, String programName) {
-        return listingService.listSegments(offset, limit, programName).toJson();
+        return listProgramItems("segments", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listImports(int offset, int limit, String programName) {
-        return listingService.listImports(offset, limit, programName).toJson();
+        return listProgramItems("imports", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listExports(int offset, int limit, String programName) {
-        return listingService.listExports(offset, limit, programName).toJson();
+        return listProgramItems("exports", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listNamespaces(int offset, int limit, String programName) {
-        return listingService.listNamespaces(offset, limit, programName).toJson();
+        return listProgramItems("namespaces", offset, limit, programName);
     }
 
+    /** @deprecated legacy name — delegates to {@link #listProgramItems}. */
     public String listDataItems(int offset, int limit, String programName) {
-        return listingService.listDefinedData(offset, limit, programName).toJson();
+        return listProgramItems("data_items", offset, limit, programName);
     }
 
     public String listStrings(int offset, int limit, String filter, String programName) {

@@ -769,70 +769,15 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     // ----------------------------------------------------------------------------------
-    // Pagination-aware listing methods
+    // Pagination-aware listing (consolidated under listProgramItems)
     // ----------------------------------------------------------------------------------
 
-    private String getAllFunctionNames(int offset, int limit, String programName) {
-        return listingService.getAllFunctionNames(offset, limit, programName).toJson();
+    private String listProgramItems(String kind, int offset, int limit, String programName) {
+        return listingService.listProgramItems(kind, offset, limit, programName).toJson();
     }
 
-    // Backward compatible overload
-    private String getAllFunctionNames(int offset, int limit) {
-        return listingService.getAllFunctionNames(offset, limit, null).toJson();
-    }
-
-    private String getAllClassNames(int offset, int limit, String programName) {
-        return listingService.getAllClassNames(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String getAllClassNames(int offset, int limit) {
-        return listingService.getAllClassNames(offset, limit, null).toJson();
-    }
-
-    private String listSegments(int offset, int limit, String programName) {
-        return listingService.listSegments(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String listSegments(int offset, int limit) {
-        return listingService.listSegments(offset, limit, null).toJson();
-    }
-
-    private String listImports(int offset, int limit, String programName) {
-        return listingService.listImports(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String listImports(int offset, int limit) {
-        return listingService.listImports(offset, limit, null).toJson();
-    }
-
-    private String listExports(int offset, int limit, String programName) {
-        return listingService.listExports(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String listExports(int offset, int limit) {
-        return listingService.listExports(offset, limit, null).toJson();
-    }
-
-    private String listNamespaces(int offset, int limit, String programName) {
-        return listingService.listNamespaces(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String listNamespaces(int offset, int limit) {
-        return listingService.listNamespaces(offset, limit, null).toJson();
-    }
-
-    private String listDefinedData(int offset, int limit, String programName) {
-        return listingService.listDefinedData(offset, limit, programName).toJson();
-    }
-
-    // Backward compatible overload
-    private String listDefinedData(int offset, int limit) {
-        return listingService.listDefinedData(offset, limit, null).toJson();
+    private String listProgramItems(String kind, int offset, int limit) {
+        return listingService.listProgramItems(kind, offset, limit, null).toJson();
     }
 
     private String listDataItemsByXrefs(int offset, int limit, String format, String programName) {
@@ -3273,12 +3218,12 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * List all external locations (imports, ordinal imports, etc.)
      */
     private String listExternalLocations(int offset, int limit, String programName) {
-        return listingService.listExternalLocations(offset, limit, programName).toJson();
+        return listProgramItems("external_locations", offset, limit, programName);
     }
 
     // Backward compatibility overload
     private String listExternalLocations(int offset, int limit) {
-        return listingService.listExternalLocations(offset, limit, null).toJson();
+        return listProgramItems("external_locations", offset, limit);
     }
 
     /**
@@ -3327,10 +3272,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // ==========================================================================
     // FUZZY MATCHING & DIFF HANDLERS
     // ==========================================================================
-
-    private String handleGetFunctionSignature(String addressStr, String programName) {
-        return documentationHashService.handleGetFunctionSignature(addressStr, programName).toJson();
-    }
 
     private String handleFindSimilarFunctionsFuzzy(String addressStr, String sourceProgramName,
             String targetProgramName, double threshold, int limit) {

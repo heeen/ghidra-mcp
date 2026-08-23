@@ -543,9 +543,9 @@ public class XrefCallGraphService {
     // -----------------------------------------------------------------------
 
     /**
-     * Get all functions called by the specified function (callees)
+     * Get all functions called by the specified function (callees).
+     * Kept for internal callers; agents use {@code /get_function_bundle?fields=callees}.
      */
-    @McpTool(path = "/get_function_callees", description = "Get functions called by a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionCallees(
             @Param(value = "function", defaultValue = "",
                    aliases = {"name", "address", "function_name", "function_address"},
@@ -619,9 +619,9 @@ public class XrefCallGraphService {
     }
 
     /**
-     * Get all functions that call the specified function (callers)
+     * Get all functions that call the specified function (callers).
+     * Kept for internal callers; agents use {@code /get_function_bundle?fields=callers}.
      */
-    @McpTool(path = "/get_function_callers", description = "Get functions calling a function. Accepts function name or address.", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionCallers(
             @Param(value = "function", defaultValue = "",
                    aliases = {"name", "address", "function_name", "function_address"},

@@ -133,11 +133,14 @@ tool_cases:
     assert:
       no_error: true
 
-  - tool: get_function_labels
+  - tool: get_function_bundle
     name: readback_label
     tier: write
     snapshot: false
-    args: { name: "0x10001000" }
+    args:
+      name: "0x10001000"
+      fields: labels
+      include_call_context: false
     assert:
       contains: ["conformance_probe_label"]
 
@@ -149,10 +152,14 @@ tool_cases:
     assert:
       no_error: true
 
-  - tool: get_function_labels
+  - tool: get_function_bundle
     name: readback_label_removed
     tier: write
     snapshot: false
+    args:
+      name: "0x10001000"
+      fields: labels
+      include_call_context: false
     args: { name: "0x10001000" }
     assert:
       not_contains: ["conformance_probe_label"]
