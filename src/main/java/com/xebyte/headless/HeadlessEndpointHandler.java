@@ -1959,11 +1959,6 @@ public class HeadlessEndpointHandler {
     // ==========================================================================
     // JUMP TARGET AND LABEL ENDPOINTS
     // ==========================================================================
-
-    public String getFunctionJumpTargets(String functionAddress, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionJumpTargets(functionAddress, offset, limit, programName).toJson();
-    }
-
     public String getFunctionLabels(String functionAddress, int offset, int limit, String programName) {
         return symbolLabelService.getFunctionLabels(functionAddress, offset, limit, programName).toJson();
     }

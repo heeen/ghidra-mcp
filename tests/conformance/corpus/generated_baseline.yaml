@@ -805,18 +805,6 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: true
-- tool: get_function_jump_targets
-  tier: read
-  args:
-    name: calc_crc16
-    address: '0x10001000'
-    offset: 0
-    limit: 5
-    program: Benchmark.dll
-  assert:
-    is_error: false
-    nonempty: true
-  snapshot: true
 - tool: get_function_labels
   tier: read
   args:
@@ -1400,9 +1388,9 @@ tool_cases:
 - tool: search_instructions
   tier: read
   args:
+    function: calc_crc16
     limit: 5
     program: Benchmark.dll
-    mnemonic: ret
   assert:
     is_error: false
     nonempty: true
