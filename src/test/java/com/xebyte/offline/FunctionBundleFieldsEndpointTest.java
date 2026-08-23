@@ -70,6 +70,12 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
                 StandardCharsets.UTF_8);
         assertTrue(bundle.contains("path = \"/get_function_bundle\""));
         assertTrue(bundle.contains("fields"));
-        assertTrue(xref.contains("path = \"/get_function_jump_targets\""));
+        // jump_targets folded INTO the bundle: it is intra-function control flow
+        // like callers/callees/labels, and costs 0.6 ms warm against the bundle's
+        // 228 ms, so keeping it as a separate tool bought nothing.
+        assertFalse("standalone jump-targets tool should be gone",
+                xref.contains("path = \"/get_function_jump_targets\""));
+        assertTrue("bundle must expose jump_targets as a field",
+                bundle.contains("\"jump_targets\""));
     }
 }
