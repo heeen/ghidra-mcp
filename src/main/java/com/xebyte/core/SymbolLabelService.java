@@ -38,7 +38,7 @@ public class SymbolLabelService {
         return getFunctionLabels(functionName, offset, limit, null);
     }
 
-    @McpTool(path = "/get_function_labels", description = "Get labels within a function body. Accepts a function name OR address.", category = "symbol", access = ToolAccess.READ_ONLY)
+    /** Kept for tests; agents use {@code /get_function_bundle?fields=labels}. */
     public Response getFunctionLabels(
             @Param(value = "function", aliases = {"name", "address", "function_address", "function_name"}, paramType = "address",
                    description = "Function name or address (0x<hex> / <space>:<hex>).") String functionName,

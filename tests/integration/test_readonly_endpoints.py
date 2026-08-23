@@ -91,10 +91,13 @@ class TestProgramInfo:
         response = http_client.get("/list_open_programs")
         assert response.status_code == 200
 
-    def test_list_segments(self, http_client):
-        """List memory segments."""
-        response = http_client.get("/list_segments")
+    def test_list_program_items_segments(self, http_client):
+        """List memory segments via list_program_items."""
+        response = http_client.get("/list_program_items", params={"kind": "segments"})
         assert response.status_code == 200
+        data = response.json()
+        assert data.get("kind") == "segments"
+        assert "items" in data
 
     def test_get_entry_points(self, http_client):
         """Get program entry points."""
@@ -287,10 +290,13 @@ class TestStringsAndData:
         response = http_client.get("/list_strings", params={"limit": 20})
         assert response.status_code == 200
 
-    def test_list_data_items(self, http_client):
+    def test_list_program_items_data_items(self, http_client):
         """List data items."""
-        response = http_client.get("/list_data_items")
+        response = http_client.get("/list_program_items", params={"kind": "data_items"})
         assert response.status_code == 200
+        data = response.json()
+        assert data.get("kind") == "data_items"
+        assert "items" in data
 
     def test_list_data_items_by_xrefs(self, http_client):
         """List data items sorted by xref count."""
@@ -303,33 +309,35 @@ class TestStringsAndData:
 class TestImportsExports:
     """Test import/export listing endpoints (read-only)."""
 
-    def test_list_imports(self, http_client):
+    def test_list_program_items_imports(self, http_client):
         """List imported symbols."""
-        response = http_client.get("/list_imports")
+        response = http_client.get("/list_program_items", params={"kind": "imports"})
         assert response.status_code == 200
 
-    def test_list_exports(self, http_client):
+    def test_list_program_items_exports(self, http_client):
         """List exported symbols."""
-        response = http_client.get("/list_exports")
+        response = http_client.get("/list_program_items", params={"kind": "exports"})
         assert response.status_code == 200
 
-    def test_list_external_locations(self, http_client):
+    def test_list_program_items_external_locations(self, http_client):
         """List external locations."""
-        response = http_client.get("/list_external_locations")
+        response = http_client.get(
+            "/list_program_items", params={"kind": "external_locations"}
+        )
         assert response.status_code == 200
 
 
 class TestNamespaces:
     """Test namespace and class listing endpoints (read-only)."""
 
-    def test_list_namespaces(self, http_client):
+    def test_list_program_items_namespaces(self, http_client):
         """List namespaces."""
-        response = http_client.get("/list_namespaces")
+        response = http_client.get("/list_program_items", params={"kind": "namespaces"})
         assert response.status_code == 200
 
-    def test_list_classes(self, http_client):
+    def test_list_program_items_classes(self, http_client):
         """List classes."""
-        response = http_client.get("/list_classes")
+        response = http_client.get("/list_program_items", params={"kind": "classes"})
         assert response.status_code == 200
 
     def test_list_globals(self, http_client):
@@ -469,34 +477,40 @@ class TestFunctionAnalysis:
         )
         assert response.status_code in [200, 404]
 
-    def test_get_function_labels(self, http_client, first_function_address):
-        """Get function labels.
-
-        The declared selector is `name` (which accepts a function name OR an
-        address). `address` is a back-compat alias the resolver still honors,
-        but /mcp/schema advertises only the canonical spelling, so that is
-        what a test should exercise.
-        """
+    def test_get_function_bundle_labels(self, http_client, first_function_address):
+        """Get function labels via bundle fields=."""
         response = http_client.get(
-            "/get_function_labels", params={"name": first_function_address}
+            "/get_function_bundle",
+            params={
+                "function": first_function_address,
+                "fields": "labels",
+                "include_call_context": "false",
+            },
         )
-        # May not exist in all versions
         assert response.status_code in [200, 404]
 
-    def test_get_function_callers(self, http_client, first_function_address):
-        """Get function callers (xrefs to)."""
+    def test_get_function_bundle_callers(self, http_client, first_function_address):
+        """Get function callers via bundle fields=."""
         response = http_client.get(
-            "/get_function_callers", params={"address": first_function_address}
+            "/get_function_bundle",
+            params={
+                "function": first_function_address,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
         )
-        # May not exist in all versions
         assert response.status_code in [200, 404]
 
-    def test_get_function_callees(self, http_client, first_function_address):
-        """Get function callees (xrefs from)."""
+    def test_get_function_bundle_callees(self, http_client, first_function_address):
+        """Get function callees via bundle fields=."""
         response = http_client.get(
-            "/get_function_callees", params={"address": first_function_address}
+            "/get_function_bundle",
+            params={
+                "function": first_function_address,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
         )
-        # May not exist in all versions
         assert response.status_code in [200, 404]
 
     def test_get_function_xrefs(self, http_client, first_function_address):
@@ -510,7 +524,7 @@ class TestFunctionAnalysis:
         """Get function call graph."""
         response = http_client.get(
             "/get_function_call_graph",
-            params={"address": first_function_address, "depth": 2},
+            params={"function": first_function_address, "depth": 2},
         )
         # May not exist in all versions
         assert response.status_code in [200, 404]
@@ -642,7 +656,9 @@ class TestMemoryInspection:
     @pytest.fixture
     def sample_address(self, http_client):
         """Get a sample address from segments."""
-        response = http_client.get("/list_segments")
+        response = http_client.get(
+            "/list_program_items", params={"kind": "segments"}
+        )
         if response.status_code != 200:
             pytest.skip("Cannot get segments")
         import re

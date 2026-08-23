@@ -94,26 +94,35 @@ def first_named_function(http_client):
 @pytest.fixture
 def first_data_item(http_client):
     """Get the first defined data item."""
-    response = http_client.get("/list_data_items", params={"limit": 1})
+    response = http_client.get(
+        "/list_program_items", params={"kind": "data_items", "limit": 1}
+    )
     if response.status_code != 200:
         pytest.skip("Cannot list data items")
 
-    text = response.text
-    # Match address with or without 0x prefix
-    match = re.search(
-        r'(?:at\s+|"address"\s*:\s*"?|^)(?:0x)?([0-9a-fA-F]{6,})', text, re.MULTILINE
-    )
-    if not match:
+    payload = response.json()
+    items = payload.get("items") or []
+    if not items or not isinstance(items[0], dict):
         pytest.skip("No data items found")
-
-    return f"0x{match.group(1)}"
+    addr = items[0].get("address")
+    if not addr:
+        pytest.skip("No data items found")
+    addr_s = str(addr).strip()
+    if not addr_s.lower().startswith("0x"):
+        addr_s = f"0x{addr_s}"
+    return addr_s
 
 
 @pytest.fixture
 def first_label(http_client, first_function):
     """Get the first label in the first function."""
     response = http_client.get(
-        "/get_function_labels", params={"address": first_function["address"]}
+        "/get_function_bundle",
+        params={
+            "address": first_function["address"],
+            "fields": "labels",
+            "include_call_context": "false",
+        },
     )
     if response.status_code != 200:
         pytest.skip("Cannot get function labels")

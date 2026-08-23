@@ -475,8 +475,13 @@ class TestCheckoutRefresh:
             addr_q = fn["address"]
             cre = _get_json(
                 http_client,
-                "/get_function_callers",
-                params={"function": addr_q, "program": program, "limit": 20},
+                "/get_function_bundle",
+                params={
+                    "function": addr_q,
+                    "program": program,
+                    "fields": "callers",
+                    "include_call_context": "false",
+                },
             )
             got = cre.get("callers") or []
             if got:

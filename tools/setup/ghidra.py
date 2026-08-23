@@ -144,8 +144,7 @@ RELEASE_CONTRACT_TOOLS = SMOKE_REQUIRED_TOOLS | {
     "list_functions",
     "search_functions",
     "get_address_spaces",
-    "list_imports",
-    "list_exports",
+    "list_program_items",
     "list_strings",
     "debugger/launch",
     "debugger/status",
@@ -1238,15 +1237,13 @@ def _list_benchmark_exports(repo_root: Path, mcp_url: str) -> list[tuple[str, st
     _status, payload = _mcp_request(
         repo_root,
         mcp_url,
-        "/list_exports",
-        params={"program": DEFAULT_BENCHMARK_PROGRAM},
-        timeout=60,
+        "/list_program_items",
+        params={"program": DEFAULT_BENCHMARK_PROGRAM, "kind": "exports"},
     )
-    _ensure_mcp_ok("/list_exports", payload)
+    _ensure_mcp_ok("/list_program_items", payload)
     exports: list[tuple[str, str]] = []
     if isinstance(payload, dict):
-        # 7.0.0 response contract: {"exports": [{"name", "address"}], "count", ...}
-        for export in payload.get("exports") or []:
+        for export in payload.get("items") or []:
             if not isinstance(export, dict):
                 continue
             name = str(export.get("name") or "")
@@ -1409,8 +1406,8 @@ def run_benchmark_extended_read_test(repo_root: Path, mcp_url: str) -> None:
             {"program": DEFAULT_BENCHMARK_PROGRAM, "name_pattern": "FUN_", "limit": 10},
         ),
         ("/get_address_spaces", {"program": DEFAULT_BENCHMARK_PROGRAM}),
-        ("/list_imports", {"program": DEFAULT_BENCHMARK_PROGRAM}),
-        ("/list_exports", {"program": DEFAULT_BENCHMARK_PROGRAM}),
+        ("/list_program_items", {"program": DEFAULT_BENCHMARK_PROGRAM, "kind": "imports"}),
+        ("/list_program_items", {"program": DEFAULT_BENCHMARK_PROGRAM, "kind": "exports"}),
         ("/list_strings", {"program": DEFAULT_BENCHMARK_PROGRAM, "limit": 10}),
         ("/decompile_function", {"program": DEFAULT_BENCHMARK_PROGRAM, "address": address}),
     ]
@@ -1941,7 +1938,7 @@ def _bench_lines(parsed: object) -> list[str]:
 
 def _bench_assert_program_block(repo_root: Path, mcp_url: str, program_path: str,
                                  prog: dict, failures: list[str]) -> None:
-    """Assert binary-level fields against /get_metadata, /list_segments etc."""
+    """Assert binary-level fields against /get_metadata, /list_program_items etc."""
     p_query = {"program": program_path}
 
     _, meta = _bench_get(repo_root, mcp_url, "/get_metadata", p_query)
@@ -1969,7 +1966,9 @@ def _bench_assert_program_block(repo_root: Path, mcp_url: str, program_path: str
             failures.append(f"program.string_count_min: expected >={prog['string_count_min']}; got {n}")
 
     if "segments" in prog:
-        _, segs = _bench_get(repo_root, mcp_url, "/list_segments", p_query)
+        _, segs = _bench_get(
+            repo_root, mcp_url, "/list_program_items",
+            {**p_query, "kind": "segments"})
         seg_names = {
             item.get("name") for item in (_bench_envelope_items(segs) or [])
             if isinstance(item, dict)
@@ -2005,37 +2004,35 @@ def _bench_assert_function(repo_root: Path, mcp_url: str, program_path: str,
                 f"function@{addr}.name: expected {entry['name']!r} from "
                 f"/get_function_by_address.name; got {actual_name!r}")
 
-    # /get_function_signature returns JSON with structural fields.
-    _, sig = _bench_get(repo_root, mcp_url, "/get_function_signature", p_query)
-    if not isinstance(sig, dict):
-        failures.append(f"function@{addr}.signature: /get_function_signature did not return JSON")
-        return
+    # Structural metrics that lived on the deleted /get_function_signature are
+    # no longer asserted here; param/callee checks use /get_function_bundle.
+    bundle_query = {
+        **p_query,
+        "fields": "parameters,callees",
+        "include_call_context": "false",
+    }
+    _, bundle = _bench_get(repo_root, mcp_url, "/get_function_bundle", bundle_query)
+    bundle_fields = bundle if isinstance(bundle, dict) else {}
 
-    if "param_count" in entry and sig.get("param_count") != entry["param_count"]:
-        failures.append(f"function@{addr}.param_count: expected {entry['param_count']}; got {sig.get('param_count')}")
-    if "basic_block_count" in entry and sig.get("basic_block_count") != entry["basic_block_count"]:
-        failures.append(f"function@{addr}.basic_block_count: expected {entry['basic_block_count']}; got {sig.get('basic_block_count')}")
-    if "cyclomatic_complexity" in entry and sig.get("cyclomatic_complexity") != entry["cyclomatic_complexity"]:
-        failures.append(f"function@{addr}.cyclomatic_complexity: expected {entry['cyclomatic_complexity']}; got {sig.get('cyclomatic_complexity')}")
-    if "instruction_count_min" in entry:
-        ic = sig.get("instruction_count")
-        if not isinstance(ic, int) or ic < entry["instruction_count_min"]:
-            failures.append(f"function@{addr}.instruction_count_min: expected >={entry['instruction_count_min']}; got {ic}")
-    if "immediate_values_contains" in entry:
-        actual_imm = set(sig.get("immediate_values") or [])
-        for v in entry["immediate_values_contains"]:
-            if v not in actual_imm:
-                failures.append(f"function@{addr}.immediate_values_contains: expected {v} (0x{v:x}) in /get_function_signature.immediate_values; got {sorted(actual_imm)}")
-    if "string_constants_contains" in entry:
-        actual = set(sig.get("string_constants") or [])
-        for s in entry["string_constants_contains"]:
-            if s not in actual:
-                failures.append(f"function@{addr}.string_constants_contains: expected {s!r} in /get_function_signature.string_constants")
+    if "param_count" in entry:
+        params = bundle_fields.get("parameters")
+        actual = len(params) if isinstance(params, list) else None
+        if actual != entry["param_count"]:
+            failures.append(
+                f"function@{addr}.param_count: expected {entry['param_count']}; "
+                f"got {actual} from /get_function_bundle.parameters")
     if "callee_names_contains" in entry:
-        actual = set(sig.get("callee_names") or [])
+        callees = bundle_fields.get("callees")
+        actual = {
+            str(c.get("name"))
+            for c in (callees or [])
+            if isinstance(c, dict) and c.get("name")
+        }
         for s in entry["callee_names_contains"]:
             if s not in actual:
-                failures.append(f"function@{addr}.callee_names_contains: expected {s!r} in /get_function_signature.callee_names")
+                failures.append(
+                    f"function@{addr}.callee_names_contains: expected {s!r} in "
+                    f"/get_function_bundle.callees; got {sorted(actual)}")
     if "return_type_contains" in entry:
         signature = str(by_addr_fields.get("signature", ""))
         if entry["return_type_contains"] not in signature:

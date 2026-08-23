@@ -106,12 +106,14 @@ class TestListingEndpoints:
         assert len(response.json()["functions"]) <= 10
 
     @pytest.mark.requires_program
-    def test_list_segments(self, http_client, program_loaded):
-        """list_segments should return memory segments."""
+    def test_list_program_items_segments(self, http_client, program_loaded):
+        """list_program_items kind=segments should return memory segments."""
         if not program_loaded:
             pytest.skip("No program loaded")
 
-        response = http_client.get("/list_segments")
+        response = http_client.get(
+            "/list_program_items", params={"kind": "segments"}
+        )
         assert response.status_code == 200
         # Should contain segment info if program loaded
         if response.text.strip():

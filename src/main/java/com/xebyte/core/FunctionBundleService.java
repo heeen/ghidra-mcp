@@ -75,6 +75,12 @@ public class FunctionBundleService {
     /** Widest call-site window. Past this a reader should just read the caller's bundle. */
     private static final int MAX_CALL_CONTEXT_LINES = 21;
 
+    /** Subset keys accepted by {@code fields=}; omitted/empty means all. */
+    static final Set<String> BUNDLE_FIELDS = Set.of(
+            "signature", "classification", "return_type", "decompiled_code",
+            "plate_comment", "comments", "labels", "parameters", "locals",
+            "callers", "call_context", "callees", "xrefs", "disassembly");
+
     private final ProgramProvider programProvider;
     private final ThreadingStrategy threadingStrategy;
     private final FunctionService functionService;
@@ -87,14 +93,19 @@ public class FunctionBundleService {
     }
 
     @McpTool(path = "/get_function_bundle",
-        description = "Everything about one function in a single call and a single decompilation: "
-            + "decompiled code, signature, plate and inline comments, parameters, locals, labels, "
-            + "callers (with a window of the caller's own decompiled source around each call site, "
-            + "3 lines by default), callees, and xrefs. Unlike decompile_function, the code text "
-            + "here renders EOL comments (// style), so comments written with set_comment are "
-            + "visible in the code rather than only as an address. "
-            + "Replaces the decompile_function + get_function_variables + get_function_callers + "
-            + "get_comment + get_function_xrefs sequence. Accepts a function name or address. "
+        description = "Everything about one function in a single call: decompiled code, "
+            + "signature, plate and inline comments, parameters, locals, labels, callers "
+            + "(with a window of the caller's own decompiled source around each call site, "
+            + "3 lines by default), callees, and xrefs. Pass fields= as a comma-separated "
+            + "subset to skip work you do not need — omitted or empty returns everything. "
+            + "When the requested fields need no decompiled text (e.g. fields=callers,callees,"
+            + "signature,labels), the target function is NOT decompiled (238 ms cold / 5–10 ms "
+            + "warm per function); only decompiled_code (and call_context when enabled) pays "
+            + "that cost. Unlike decompile_function, the code text here renders EOL comments "
+            + "(// style), so comments written with set_comment are visible in the code rather "
+            + "than only as an address. Replaces decompile_function + get_function_variables + "
+            + "get_function_callers + get_comment + get_function_xrefs + get_function_callees + "
+            + "get_function_labels + get_function_signature. Accepts a function name or address. "
             + "Completeness scoring is NOT included because it costs a second decompilation — "
             + "call analyze_function_completeness for that.",
         category = "function", access = ToolAccess.READ_ONLY)
@@ -104,10 +115,16 @@ public class FunctionBundleService {
                    description = "Function name or address. Address accepts 0x<hex> or "
                                + "<space>:<hex> (e.g. mem:1000); a plain name resolves by exact "
                                + "function name.") String functionRef,
+            @Param(value = "fields", defaultValue = "",
+                   description = "Comma-separated subset: signature, classification, return_type, "
+                               + "decompiled_code, plate_comment, comments, labels, parameters, "
+                               + "locals, callers, call_context, callees, xrefs, disassembly. "
+                               + "Omit or leave empty for the full bundle.") String fieldsParam,
             @Param(value = "include_call_context", defaultValue = "true",
                    description = "Include each caller's decompiled call-site line. Costs one "
                                + "decompilation per unique caller (~43ms); set false for the "
-                               + "cheapest possible bundle.") boolean includeCallContext,
+                               + "cheapest possible bundle. Ignored unless call_context is "
+                               + "requested (explicitly or via an empty fields=).") boolean includeCallContext,
             @Param(value = "call_context_limit", defaultValue = "6",
                    description = "Maximum number of UNIQUE callers to decompile for call "
                                + "context.") int callContextLimit,
@@ -133,6 +150,16 @@ public class FunctionBundleService {
             return Response.err("name parameter required (function name or address)");
         }
 
+        Set<String> fields;
+        try {
+            fields = parseFields(fieldsParam);
+            if (fields != null && fields.isEmpty()) {
+                fields = null;
+            }
+        } catch (IllegalArgumentException e) {
+            return Response.err(e.getMessage());
+        }
+
         // Resolve before any threading hop: parseAddress reports failures through a
         // thread-local that an EDT hop would make invisible (ServiceUtils.java:668-672).
         Function func = ServiceUtils.resolveFunction(program, functionRef);
@@ -143,7 +170,7 @@ public class FunctionBundleService {
         }
 
         try {
-            return Response.ok(buildBundle(program, func, includeCallContext,
+            return Response.ok(buildBundle(program, func, fields, includeCallContext,
                 Math.max(0, callContextLimit),
                 Math.clamp(callContextLines, 1, MAX_CALL_CONTEXT_LINES), includeDisasm));
         } catch (Exception e) {
@@ -176,94 +203,149 @@ public class FunctionBundleService {
         opts.setCommentStyle(ghidra.app.decompiler.DecompileOptions.CommentStyleEnum.CPPStyle);
     }
 
+    private static Set<String> parseFields(String fieldsParam) {
+        if (fieldsParam == null || fieldsParam.isBlank()) {
+            return null;
+        }
+        Set<String> fields = new LinkedHashSet<>();
+        for (String part : fieldsParam.split(",")) {
+            String token = part.trim().toLowerCase();
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (!BUNDLE_FIELDS.contains(token)) {
+                throw new IllegalArgumentException("Unknown field: " + part.trim()
+                    + ". Valid fields: " + String.join(", ", BUNDLE_FIELDS));
+            }
+            fields.add(token);
+        }
+        return fields.isEmpty() ? null : fields;
+    }
+
+    private static boolean wantsField(Set<String> fields, String name) {
+        return fields == null || fields.contains(name);
+    }
+
     private Map<String, Object> buildBundle(Program program, Function func,
-            boolean includeCallContext, int callContextLimit, int callContextLines,
-            boolean includeDisasm) {
+            Set<String> fields, boolean includeCallContext, int callContextLimit,
+            int callContextLines, boolean includeDisasm) {
         Address entry = func.getEntryPoint();
         Map<String, Object> out = new LinkedHashMap<>();
         Map<String, Object> truncation = new LinkedHashMap<>();
 
         out.put("name", func.getName());
         out.putAll(ServiceUtils.addressToJson(entry, program));
-        out.put("program", program.getName());
-        out.put("signature", func.getSignature().toString());
-        out.put("classification", AnalysisService.classifyFunction(func, program));
 
-        String returnType = func.getReturnType().getName();
-        out.put("return_type", returnType);
-        if (returnType.startsWith("undefined")) {
-            out.put("return_type_resolved", false);
-            out.put("return_type_warning", "Return type is '" + returnType
-                + "' -- verify the return register at RET. Do not trust a decompiler 'void'.");
-        } else {
-            out.put("return_type_resolved", true);
+        boolean wantsAll = fields == null;
+        boolean needsTargetDecompile = wantsAll || wantsField(fields, "decompiled_code");
+        boolean needsCallContext = wantsField(fields, "call_context")
+            && includeCallContext && callContextLimit > 0;
+
+        if (wantsField(fields, "signature")) {
+            out.put("signature", func.getSignature().toString());
+        }
+        if (wantsField(fields, "classification")) {
+            out.put("classification", AnalysisService.classifyFunction(func, program));
+        }
+        if (wantsField(fields, "return_type")) {
+            String returnType = func.getReturnType().getName();
+            out.put("return_type", returnType);
+            if (returnType.startsWith("undefined")) {
+                out.put("return_type_resolved", false);
+                out.put("return_type_warning", "Return type is '" + returnType
+                    + "' -- verify the return register at RET. Do not trust a decompiler 'void'.");
+            } else {
+                out.put("return_type_resolved", true);
+            }
         }
 
-        // The single decompilation. Everything downstream reuses this result.
-        DecompileResults decomp = functionService.decompileFunctionNoRetry(
-            func, program, FunctionBundleService::bundleDecompilerOptions);
-        boolean decompiled = decomp != null && decomp.decompileCompleted()
-            && decomp.getDecompiledFunction() != null;
-        if (decompiled) {
-            String code = decomp.getDecompiledFunction().getC();
-            if (code != null) {
-                if (code.length() > MAX_DECOMPILED_CHARS) {
-                    out.put("decompiled_code", code.substring(0, MAX_DECOMPILED_CHARS));
-                    truncation.put("decompiled_code", true);
-                    out.put("decompiled_code_note", "Truncated at " + MAX_DECOMPILED_CHARS
-                        + " chars; call decompile_function for the full text.");
+        DecompileResults decomp = null;
+        boolean decompiled = false;
+        if (needsTargetDecompile) {
+            decomp = functionService.decompileFunctionNoRetry(
+                func, program, FunctionBundleService::bundleDecompilerOptions);
+            decompiled = decomp != null && decomp.decompileCompleted()
+                && decomp.getDecompiledFunction() != null;
+            if (wantsField(fields, "decompiled_code")) {
+                if (decompiled) {
+                    String code = decomp.getDecompiledFunction().getC();
+                    if (code != null) {
+                        if (code.length() > MAX_DECOMPILED_CHARS) {
+                            out.put("decompiled_code", code.substring(0, MAX_DECOMPILED_CHARS));
+                            truncation.put("decompiled_code", true);
+                            out.put("decompiled_code_note", "Truncated at " + MAX_DECOMPILED_CHARS
+                                + " chars; call decompile_function for the full text.");
+                        } else {
+                            out.put("decompiled_code", code);
+                        }
+                    }
                 } else {
-                    out.put("decompiled_code", code);
+                    out.put("decompiled_code", null);
+                    out.put("decompile_failed", true);
                 }
             }
-        } else {
-            out.put("decompiled_code", null);
-            out.put("decompile_failed", true);
         }
 
-        out.put("plate_comment", func.getComment());
-        // Same validator rename_function/batch_set_comments warn through, so a reader
-        // sees the plate's structural gaps without a second call — and sees them by the
-        // project's own rules rather than guessing at them.
-        List<String> plateIssues = NamingConventions.validatePlateCommentStructure(func.getComment());
-        if (!plateIssues.isEmpty()) {
-            out.put("plate_comment_issues", plateIssues);
+        if (wantsField(fields, "plate_comment")) {
+            out.put("plate_comment", func.getComment());
+            List<String> plateIssues = NamingConventions.validatePlateCommentStructure(func.getComment());
+            if (!plateIssues.isEmpty()) {
+                out.put("plate_comment_issues", plateIssues);
+            }
         }
-        out.put("comments", collectComments(program, func));
-        out.put("labels", collectLabels(program, func));
-        out.put("parameters", collectParameters(func));
-        out.put("locals", collectLocals(func, decompiled ? decomp.getHighFunction() : null));
+        if (wantsField(fields, "comments")) {
+            out.put("comments", collectComments(program, func));
+        }
+        if (wantsField(fields, "labels")) {
+            out.put("labels", collectLabels(program, func));
+        }
+        if (wantsField(fields, "parameters")) {
+            out.put("parameters", collectParameters(func));
+        }
+        if (wantsField(fields, "locals")) {
+            out.put("locals", collectLocals(func, decompiled ? decomp.getHighFunction() : null));
+        }
 
-        List<Function> callers = findCallers(program, func);
-        out.put("caller_count", callers.size());
-        out.put("callers", summarizeFunctions(program, callers, MAX_CALLERS));
-        if (callers.size() > MAX_CALLERS) truncation.put("callers", true);
+        List<Function> callers = null;
+        if (wantsField(fields, "callers") || needsCallContext) {
+            callers = findCallers(program, func);
+        }
+        if (wantsField(fields, "callers") && callers != null) {
+            out.put("caller_count", callers.size());
+            out.put("callers", summarizeFunctions(program, callers, MAX_CALLERS));
+            if (callers.size() > MAX_CALLERS) truncation.put("callers", true);
+        }
 
-        if (includeCallContext && !callers.isEmpty() && callContextLimit > 0) {
+        if (needsCallContext && callers != null && !callers.isEmpty()) {
             List<Map<String, Object>> context =
                 collectCallContext(program, entry, callers, callContextLimit, callContextLines);
             out.put("call_context", context);
             if (callers.size() > callContextLimit) truncation.put("call_context", true);
         }
 
-        List<Function> callees = calleesOf(func);
-        out.put("callee_count", callees.size());
-        out.put("callees", summarizeFunctions(program, callees, MAX_CALLEES));
-        if (callees.size() > MAX_CALLEES) truncation.put("callees", true);
+        if (wantsField(fields, "callees")) {
+            List<Function> callees = calleesOf(func);
+            out.put("callee_count", callees.size());
+            out.put("callees", summarizeFunctions(program, callees, MAX_CALLEES));
+            if (callees.size() > MAX_CALLEES) truncation.put("callees", true);
+        }
 
-        out.put("xrefs", collectXrefs(program, entry, truncation));
+        if (wantsField(fields, "xrefs")) {
+            out.put("xrefs", collectXrefs(program, entry, truncation));
+        }
 
-        if (includeDisasm) {
+        if (wantsField(fields, "disassembly") && includeDisasm) {
             out.put("disassembly", collectDisassembly(program, func, truncation));
         }
 
-        // Lets a caller detect a stale read even when a change notification was lost.
         Map<String, Object> revision = new LinkedHashMap<>();
         revision.put("modification_number", program.getModificationNumber());
         revision.put("decompiled", decompiled);
         out.put("revision", revision);
 
-        out.put("truncation", truncation);
+        if (!truncation.isEmpty()) {
+            out.put("truncation", truncation);
+        }
         return out;
     }
 
@@ -588,5 +670,10 @@ public class FunctionBundleService {
         }
         if (total > out.size()) truncation.put("disassembly", true);
         return out;
+    }
+
+    /** Whether a {@code fields=} subset pays for target decompilation. */
+    public static boolean requiresTargetDecompile(Set<String> fields) {
+        return fields == null || fields.contains("decompiled_code");
     }
 }

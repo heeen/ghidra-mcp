@@ -1,9 +1,7 @@
 """
 Phase 1: Essential Analysis Endpoints Tests
 
-Tests for the 9 Phase 1 endpoints:
-- get_function_callees
-- get_function_callers
+Tests for the 9 Phase 1 endpoints (call graph via get_function_bundle fields=):
 - get_function_variables
 - set_function_prototype
 - set_variable_type
@@ -18,34 +16,45 @@ import uuid
 
 
 class TestFunctionCallGraph:
-    """Test function callee/caller endpoints."""
+    """Test function callee/caller via get_function_bundle fields=."""
 
     @pytest.mark.requires_program
-    def test_get_function_callees(self, http_client, sample_function):
+    def test_get_function_bundle_callees(self, http_client, sample_function):
         """Test getting functions called by a function."""
         response = http_client.get(
-            "/get_function_callees", params={"name": sample_function}
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
-        # Should return list of functions or empty (valid either way)
 
     @pytest.mark.requires_program
-    def test_get_function_callees_pagination(self, http_client, sample_function):
-        """Test pagination for function callees."""
+    def test_get_function_bundle_callees_truncation(self, http_client, sample_function):
+        """Bundle callees are capped; response still succeeds."""
         response = http_client.get(
-            "/get_function_callees",
-            params={"name": sample_function, "offset": 0, "limit": 5},
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_callees_invalid_function(self, http_client):
+    def test_get_function_bundle_callees_invalid_function(self, http_client):
         """Test callees with non-existent function."""
         response = http_client.get(
-            "/get_function_callees",
-            params={"name": "NonExistentFunction_" + uuid.uuid4().hex[:8]},
+            "/get_function_bundle",
+            params={
+                "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "callees",
+                "include_call_context": "false",
+            },
         )
-        # Accept 200 with error, 404 (not found), or 500 (server error)
         assert response.status_code in [200, 404, 500]
         if response.status_code == 200:
             assert (
@@ -53,30 +62,42 @@ class TestFunctionCallGraph:
             )
 
     @pytest.mark.requires_program
-    def test_get_function_callers(self, http_client, sample_function):
+    def test_get_function_bundle_callers(self, http_client, sample_function):
         """Test getting functions that call a function."""
         response = http_client.get(
-            "/get_function_callers", params={"name": sample_function}
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_callers_pagination(self, http_client, sample_function):
-        """Test pagination for function callers."""
+    def test_get_function_bundle_callers_truncation(self, http_client, sample_function):
+        """Bundle callers are capped; response still succeeds."""
         response = http_client.get(
-            "/get_function_callers",
-            params={"name": sample_function, "offset": 0, "limit": 5},
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_callers_invalid_function(self, http_client):
+    def test_get_function_bundle_callers_invalid_function(self, http_client):
         """Test callers with non-existent function."""
         response = http_client.get(
-            "/get_function_callers",
-            params={"name": "NonExistentFunction_" + uuid.uuid4().hex[:8]},
+            "/get_function_bundle",
+            params={
+                "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "callers",
+                "include_call_context": "false",
+            },
         )
-        # Accept 200 with error, 404 (not found), or 500 (server error)
         assert response.status_code in [200, 404, 500]
         if response.status_code == 200:
             assert (
@@ -390,13 +411,23 @@ class TestPhase1Integration:
         """Test typical function analysis workflow."""
         # Get callees
         response = http_client.get(
-            "/get_function_callees", params={"name": sample_function}
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
 
         # Get callers
         response = http_client.get(
-            "/get_function_callers", params={"name": sample_function}
+            "/get_function_bundle",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
         )
         assert response.status_code == 200
 
