@@ -652,6 +652,34 @@ public final class ServiceUtils {
     }
 
     /**
+     * Which program this HTTP request actually resolved, if any.
+     *
+     * <p>HTTP threads are pooled. An uncleared value lets request N+1 inherit
+     * request N's program name and report data as belonging to a binary it never
+     * touched — the multi-program survey confusion wearing an authoritative label.
+     * {@link AnnotationScanner} clears on entry and in {@code finally}; background
+     * jobs (SweepJob, DirtyQueue) do not use this path.
+     */
+    private static final ThreadLocal<String> resolvedProgramName = new ThreadLocal<>();
+
+    /** Record the resolved program for response labeling. Call only on success. */
+    static void recordResolvedProgram(Program program) {
+        if (program != null) {
+            resolvedProgramName.set(program.getName());
+        }
+    }
+
+    /** Clear before/after each annotation-driven request (entry + finally). */
+    public static void clearResolvedProgramName() {
+        resolvedProgramName.remove();
+    }
+
+    /** Peek the name recorded for this thread, or null if none. */
+    public static String peekResolvedProgramName() {
+        return resolvedProgramName.get();
+    }
+
+    /**
      * Format the open-program list for error messages (leading space when non-empty).
      */
     private static String formatAvailablePrograms(ProgramProvider provider) {
@@ -694,6 +722,7 @@ public final class ServiceUtils {
                 return new ProgramOrError(null, Response.err(
                         "Program not found: " + programName + formatAvailablePrograms(provider)));
             }
+            recordResolvedProgram(program);
             return new ProgramOrError(program, null);
         }
 
@@ -714,6 +743,7 @@ public final class ServiceUtils {
             return new ProgramOrError(null, Response.err(
                     "No program loaded." + formatAvailablePrograms(provider)));
         }
+        recordResolvedProgram(program);
         return new ProgramOrError(program, null);
     }
 
@@ -745,6 +775,7 @@ public final class ServiceUtils {
                     : "No program loaded." + formatAvailablePrograms(provider);
             return new ProgramOrError(null, Response.err(message));
         }
+        recordResolvedProgram(program);
         return new ProgramOrError(program, null);
     }
 
