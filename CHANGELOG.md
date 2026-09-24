@@ -6,10 +6,16 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**253 tools** — 239 served by the GUI plugin, 226 by the headless server, 212
-by both. The consolidation pass below took the advertised surface from 272 to
-251; `/list_shadowed_globals` and `/batch_get_comments` landed afterwards in
-the same cycle.
+**241 endpoints**, 240 of them advertised as MCP tools — 227 served by the GUI
+plugin, 215 by the headless server, 201 by both. One endpoint,
+`/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
+tool, which is why the two numbers differ.
+
+The consolidation pass below took the advertised surface from 272 to 251;
+`/list_shadowed_globals` and `/batch_get_comments` landed afterwards in the same
+cycle. This branch consolidated further — the listing tools into
+`/list_program_items`, the four listing/search tools into `/find_functions`, and
+five ways of reading a function into `/get_functions`.
 
 > **Scope note.** Entries describing `fun-doc/` and `scripts/fid/` were
 > removed from this section on 2026-09-18. Both moved to the `d2-game-exe`
@@ -18,6 +24,501 @@ the same cycle.
 > and the entries that remain naming fun-doc are ones where its move-out is
 > the *cause* of a change here (`uv.lock`'s stale dependency group, the
 > release workflows' dangling paths, the benchmark fixture that left with it).
+
+### This branch: function resources, a decompilation checkout, and MCP protocol work
+
+Stacked on the consolidation above rather than shipped separately — same
+unreleased 7.0.0.
+
+An agent can now materialise a program's decompilation into an on-disk tree,
+already partitioned into compartments with the evidence that justified each
+one, then answer corpus questions ("which functions touch this MMIO page",
+"where does this constant appear") with one `Grep` instead of tens of
+thousands of per-function MCP round trips. `Read` / `Grep` / `Glob` are the
+client's own built-in tools, so the search costs no permission surface.
+
+### Changed — this branch
+
+- **`program` is required when more than one program is open.** Omitting it
+  used to silently answer as whichever program was "current" — a measured
+  17-program survey returned the same function count 17 times because
+  headless never reassigns `currentProgram` after the first load. Explicit
+  `program=` was already safe (unknown name → not-found listing opens). Now
+  an omitted `program` with 2+ opens errors and names every open program;
+  the single-program case is unchanged. `/switch_program` does **not**
+  exempt later calls. Active-program endpoints
+  (`/get_current_program_info`, `/get_current_*`, `/list_open_programs`,
+  `/switch_program`) keep working via `getActiveProgramOrError`. A non-blank
+  name that misses `ProgramProvider.resolveProgram` no longer falls back to
+  the current program.
+
+### Added — this branch
+
+- **`/partition_program` — structural compartments before any decompile.**
+  Cascades binary-specific strategies (qualified names in log strings, MMIO
+  page-sets, linker literal locality, address banding) and reports each
+  partition's rule plus evidence. On a Windows driver the two library
+  compartments were identifiable from referenced strings alone and were 42%
+  of the binary — an agent can rule them out from the table without
+  decompiling any of them. Read-only: does not write Ghidra's Program Tree.
+
+- **Decompilation checkout — six endpoints plus `ghidra://decompile-checkout/{id}`.**
+  `decompile_checkout_create` registers a persistent config (root, strategies,
+  exclusions, throttle) and writes `checkout.json` / `STATUS.md` without
+  sweeping; `decompile_checkout_start` enqueues the sweep and returns in milliseconds
+  with the resource URI; poll `decompile_checkout_status` (READ_ONLY — safe in plan
+  mode) or read `STATUS.md` on disk with zero Ghidra calls.
+  `decompile_checkout_configure` / `decompile_checkout_stop` / `decompile_checkout_delete` round out
+  manage / cancel / tear-down. The resource is a Markdown **template**
+  (status, config, compartments, Glob/Grep incantations); discovery comes
+  from a `checkouts` hint on `ghidra://programs`. Every `.c` file header
+  carries `uri: ghidra://function/<program>/<address>` so a Grep hit turns
+  into callers and call-site context on demand. Measured full sweeps:
+  blender ARM firmware 677 functions / 4 s / 773 KB; `synaWudfBioUsb.dll`
+  3,230 / 18–28 s / 5.6 MB; `ls` 25,231 / 669 s / 45 MB.
+
+- **Exclusions — keep the library half out of the tree.** Three kinds,
+  all evaluable per function with no extra pass: `tag:LIB_CRT` (Function
+  tags / FID), `partition:c07` (drop a whole compartment after the
+  cascade), `range:…` (entry-point containment — the only form that works
+  on a stripped binary with no tags). Excluding two library compartments
+  on the driver: 3,230 → 2,036 functions, ~7 MB → 5 MB, 28 s → 20 s.
+  Narrowing deletes the now-excluded files immediately so Grep cannot lie;
+  widening marks the checkout stale and does not auto-start a resweep.
+
+### Performance — this branch
+
+- **`batchDecompileFunctions` reuses one pooled `DecompInterface`.** The
+  previous loop constructed a fresh decompiler per function (`openProgram()`
+  alone measured 218 ms), so a "batch" of 20 was 20 × 238 ms. One pooled
+  interface is 5.7–10 ms per function. `ParallelDecompiler` was measured at
+  1.01× — throughput is `ProgramDB`-lock-bound at ~128 fn/s — and is not
+  used; the checkout sweep is one pooled decompiler, sequential, forever.
+
+---
+
+### Every tool declares `readOnlyHint` / `destructiveHint`
+
+All 240 tools now carry MCP tool annotations, sourced from a new
+`access = ToolAccess.READ_ONLY | WRITE | DESTRUCTIVE` attribute on `@McpTool`
+(and `annotations=` on the bridge's own static tools). 134 read-only, 93 write,
+24 destructive.
+
+This was not cosmetic. Clients gate behavior on `readOnlyHint`, and it was absent
+on every tool. Claude Code derives read-only-ness *solely* from that flag (absent
+⇒ false) and, in plan mode, forces a permission prompt for every MCP tool that is
+not read-only — a prompt **no allow-rule can suppress**, because the plan-mode
+gate is evaluated ahead of allow-rules and returns early. It gates parallel tool
+execution on the same flag. So every one of ~250 tools, `list_functions` and
+`get_xrefs_to` included, prompted during planning and could not run
+concurrently.
+
+`access` is declared per tool rather than inferred from the HTTP method, and the
+default (`UNSPECIFIED`) emits no hints at all. Inference would have been wrong in
+both directions: `/switch_program`, `/save_program`, `/save_all_programs` and
+`/open_program` are GETs that mutate — one of those firing unprompted mid-plan is
+exactly the failure to avoid — while five POST endpoints
+(`/get_assembly_context`, `/get_bulk_xrefs`, `/analyze_data_region`,
+`/analyze_struct_field_usage`, `/get_field_access_context`) are pure reads. The
+classification was cross-checked two ways: endpoint semantics, plus a
+transaction-marker scan of every service method body, with conflicts resolved by
+hand (`/disassemble_bytes` turned out to open a transaction and is a write).
+`ToolAccessClassificationTest` fails on any tool left unclassified, so new tools
+cannot skip it.
+
+### A failed tool call now reports `isError`
+
+Tool failures were returned as *successful* results. Every failure path — a
+transport error, a non-200 status, "no Ghidra instance connected", a `Response.Err`
+from the server — renders as an ordinary 200 body (`{"error": ...}`), and the
+bridge handed that back as a normal result with `isError` unset. Clients and agent
+loops that branch on `isError` therefore saw every call succeed, and the model had
+to infer failure from the word "error" inside the JSON.
+
+`dispatch.failure_message()` recognises the three shapes this server uses:
+`{"error": ...}`, `{"success": false, ...}` and `{"status": "rejected", ...}` — the
+last two arrive through `Response.ok`, since a refused write and a failed program
+load are reported as well-formed payloads. A top-level list, plain text, and an
+`error` nested inside a per-item entry (`/get_bulk_xrefs` reports "No instruction
+at address" that way) all stay successes, because the call itself did succeed.
+
+### Removed a fake `outputSchema` from every tool
+
+Each tool declared `outputSchema: {"result": {"type": "string"}}` and returned
+`structuredContent: {"result": "<the json>"}` — FastMCP's automatic wrapper around
+a `-> str` return. That advertises a structured contract the tool does not have:
+the one field is an opaque string, so a client reading `result` still had to parse
+the JSON itself, and per spec a declared `outputSchema` is a promise about shape.
+All tools now pass `structured_output=False`, so no schema is claimed and the
+response body is the text content it always was.
+
+Genuinely structured output is still open: it needs each endpoint's response shape
+described on the Java side, which none of them do yet. Note the mixed reality that
+makes it non-trivial — `Response.Ok` returns objects, some endpoints return
+top-level arrays, and `Response.Text` returns plain text for paginated listings, so
+one blanket schema would be another false promise.
+
+### HTTP transport: `OPTIONS` is answered, and rejected requests stop leaking sessions
+
+`OPTIONS /mcp` now returns `204` with `Allow: GET, POST, DELETE, OPTIONS`. The
+transport app routes only GET/POST/DELETE, so a bare method probe drew a `405`
+whose own `Allow` header did not even list `OPTIONS` ([#399](https://github.com/bethington/ghidra-mcp/issues/399) —
+Open WebUI probes this way before connecting). The CORS middleware added earlier
+did **not** cover this: it answers only a real browser preflight, which needs
+both `Origin` and `Access-Control-Request-Method`.
+
+The same probe also leaked server state. `StreamableHTTPSessionManager`
+registers a new session *before* the request is validated and never reaps it, so
+every rejected request left a live session behind — measured at 50 bare
+`OPTIONS` plus 50 session-less pings ⇒ 100 permanent sessions, each with its own
+task group, and a session id handed out alongside a `405` was afterwards fully
+usable. Session-less GET/POST/DELETE are now refused before the manager sees
+them (`initialize` still passes, its body replayed intact), and a handshake the
+transport goes on to reject has its session torn down — which covers a bad
+`Accept` header, an unsupported `MCP-Protocol-Version` and unparseable JSON
+without duplicating the SDK's validation. Verified end-to-end: the same 50+50
+probe sequence now creates zero sessions.
+
+### Capabilities now match what the bridge implements
+
+The handshake advertised `prompts` and `resources`, then answered `prompts/list`
+and `resources/list` with empty arrays — FastMCP registers handlers for both
+unconditionally. Clients rendered dead sections for features that do not exist
+here. Empty capabilities are still dropped; once function resources landed,
+`resources` (with `subscribe` + `listChanged`) is advertised again. `prompts`
+stays off while none are registered. `tools` (with `listChanged`) is unchanged.
+
+### Function resources (read once, invalidate on write)
+
+A single function review used to cost ~5 tool calls (`decompile_function` +
+variables + callers + comments + xrefs), and every write forced a re-read.
+Functions are now MCP resources:
+
+| URI | Role |
+| --- | --- |
+| `ghidra://programs` | Discovery root (sole `resources/list` entry) |
+| `ghidra://program/{program}/index` | Program summary |
+| `ghidra://program/{program}/functions` | `{name, address, uri}` index (capped) |
+| `ghidra://function/{program}/{address}` | Full bundle (one decompile) |
+| `ghidra://function/{program}/by-name/{name}` | Redirect to the address URI |
+| `ghidra://search/{program}/functions/{pattern}` | Name search |
+| `ghidra://program/{program}/changes` | Change token + per-transport delivery caveats |
+
+URI keys are **addresses**, never names — renaming is the common write, and a
+name-keyed URI would strand the client's cache with no rename notification in
+MCP. Clients that cache `resources/read` drop entries on
+`notifications/resources/updated`.
+
+Supporting endpoints:
+
+- **`/get_function_bundle`** — one function, one call, one decompile (also usable
+  as a plain tool).
+- **`/find_type_users`** — `DataTypeReferenceFinder` (+ optional `FieldMatcher`),
+  off the EDT, so struct edits invalidate only the affected functions.
+- **`/get_change_token`** — `program.getModificationNumber()`; the bridge polls
+  it to catch GUI edits, undo/redo and scripts the write-hook cannot see. It
+  moves per *write*, not per changed byte: re-setting an identical comment still
+  bumps it, which over-invalidates rather than serving stale text.
+
+Writes are classified into NONE / LOCAL / CALLERS / TYPE / UNBOUNDED tiers; every
+non-read-only `@McpTool` must appear in the tier table or CI fails. NONE exists for
+writes no resource body reports — `/save_program` above all, which follows nearly every
+other write and would otherwise drop the whole cache. Notifications are emitted *before*
+the write's response: streamable-HTTP closes a request's stream when its response is
+sent and drops anything addressed to it afterwards.
+`--stateless-http` refuses `resources/subscribe`; `--json-response` warns that
+notifications cannot ride the response stream.
+
+### Clearing a comment removes it instead of blanking it
+
+`set_comment` with an empty string stored an empty comment *record* rather than deleting
+the comment. `get_comment` reported `has_comment: false` and the field as `""`, so it looked
+cleared — but the record was still there, and the decompiler renders it as a bare `//` line.
+Every "clear" left a blank comment in the pseudocode, and a function cleared a few times
+accumulated them. `batch_set_comments` already normalised empty to null in four places; the
+single-write path now does the same.
+
+This is also the answer to a mystery it caused: blank `//` lines in decompiled output looked
+like a Ghidra rendering artifact and were entirely self-inflicted. A trailing newline in the
+comment text adds one too, since Ghidra emits one comment line per `\n`-separated part.
+
+### "Who are you" and "are you alive" are two questions, not three tools
+
+`check_connection`, `get_version` and `mcp/health` were three tools answering
+two questions. `get_version` and `mcp/health` both described the server;
+`check_connection` only said it was up.
+
+`/mcp/health` absorbs `get_version`: `status`, `connected`, `program`,
+`uptime_seconds`, `active_requests`, a nested `version` block (plugin, build,
+Ghidra and Java versions, `endpoint_count`), `http_pool` and `memory_mb`. It
+stops hand-building its JSON with a StringBuilder while it is there. The headless
+server's `/health` gained the same fields.
+
+`check_connection` STAYS, on both servers. Folding it in as well left no route
+common to the two — `/mcp/health` is GUI-only, `/health` is headless-only — and
+`tools/ghidra_server_health_check.py --mode doctor` needs exactly that: one probe
+that answers on either and says which one did. A cheap liveness banner is not a
+duplicate of a diagnostics endpoint returning pool stats, uptime and memory, and
+both are auth-exempt by design. Its plain-text response is the one deliberate
+exception to the JSON contract, for the same reason.
+
+`/mcp/instance_info` is deliberately untouched: it is how the bridge discovers instances by
+scanning sockets and ports, and it is intentionally absent from the schema (runtime
+introspection, not a tool an agent should call).
+
+### Bulk is a parameter, not a second tool
+
+`get_bulk_xrefs` asked the same question as `get_xrefs_to` — it called the same
+`getReferencesTo` — but as a separate POST tool with its own response shape, so a caller had
+to know two tools and two shapes to ask "who references this" about one address versus five.
+`get_xrefs_to` now takes `addresses=` (comma-separated) for the many-at-once form and returns
+a map keyed by the address you asked for; an address that does not resolve gets an empty list
+rather than failing the whole batch. This follows the one-or-many pattern
+`decompile_function(functions=…)` and `set_variables(variables=[…])` already use.
+
+`get_bulk_function_hashes` was **not** merged, despite the name. It is not the bulk form of
+`get_function_hash` — it takes `offset`/`limit`/`filter` and walks the whole program, so it is
+a paginated corpus scan (`list_function_hashes` would be the honest name) rather than "hash
+these N addresses". Folding it into a getter would have cost the whole-program capability to
+make two unrelated operations share a spelling.
+
+### One way to ask for functions — five tools become one
+
+`list_functions`, `list_functions_enhanced`, `search_functions` and
+`search_functions_enhanced` answered the same question four ways, and returned four
+different shapes doing it:
+
+| removed | envelope | row |
+| --- | --- | --- |
+| `list_functions` | `functions, count` | `{name, address}` |
+| `list_functions_enhanced` | `functions, count, offset, limit` | `{address, name, isThunk, isExternal}` |
+| `search_functions` | `functions, count, offset, limit, total` | `"FUN_006d1800 @ 006d1800"` — a *string* |
+| `search_functions_enhanced` | `total, offset, limit, **results**` | different key again |
+
+`find_functions` replaces all four: every filter optional, so with none it pages through the
+whole program. One envelope (`functions/count/offset/limit/total`), one row shape, snake_case
+flags matching the `is_thunk`/`is_external` the rest of the codebase already stores.
+
+Three defects came out with them:
+
+- **`list_functions` had no pagination at all** and returned 1.7 MB on a stripped `ls`. This
+  was an open loop in `CLAUDE.local.md`. `find_functions` pages, and `limit=0` is the
+  explicit opt-in to "give me everything".
+- **`calling_convention` was declared and never used** — a filter that silently ignored you.
+  It filters now.
+- **A tri-state `Boolean` parameter could never be unset.** `defaultValue = ""` made
+  `hasDef` true and `Boolean.valueOf("")` false, so `is_thunk` unset meant `is_thunk=false`
+  and quietly dropped all 282 thunks and 294 custom-named functions from an unfiltered
+  listing — 25,220 rows where the program has 25,514. `AnnotationScanner` now treats an
+  empty default as no default, matching what it already did for `String`.
+
+Deferring thunk classification to the returned page (it walks instructions) took an
+unfiltered listing from 2.03 s to 0.21 s.
+
+### One name for "which function"
+
+Twelve tools spelled the same parameter four different ways — `address`, `name`,
+`function_name`, `function_address` — and five carried *two* of them at once. Picking the
+wrong one costs a round trip and an error, which is the real price of the inconsistency;
+the tool count was never the problem.
+
+Every tool that identifies a function now takes **`function`**, which accepts a name or an
+entry-point address. The old spellings are `@Param` aliases, so existing callers keep
+working, and aliases are invisible in `/mcp/schema` — a client sees one parameter, not five.
+The five `name`+`address` pairs collapsed to a single parameter.
+
+A dozen more only ever parsed an address, so `function` would have been a new lie in a new
+place. They go through `ServiceUtils.resolveFunctionAddress` now — a drop-in for
+`parseAddress` at any site that then looks up a function: an address behaves exactly as
+before (an interior address stays interior, so `getFunctionAt` still rejects it) while a
+name resolves to the function's entry point. One line per site, no downstream change.
+
+Two were lying outright rather than merely inconsistent: `audit_globals_in_function` parsed
+its argument as an address *before* `resolveFunction` ran, so a name was rejected by a
+resolver that would have accepted it.
+
+### The function bundle shows EOL comments in the code
+
+`set_comment(type=eol)` and `batch_set_comments` write documentation that the decompiler
+does not render — the EOL option is off by default — so an agent could annotate a line and
+then not find its own note anywhere in the code it read back. It appeared only as an address
+in `comments[]`.
+
+`/get_function_bundle` now decompiles with `setEOLCommentIncluded(true)` and
+`CommentStyleEnum.CPPStyle`, so the code text carries `// the note` on the line above the
+statement it annotates. (Ghidra never trails a comment after code; `x = 1; // note` is not
+a shape it produces.)
+
+Scoped to this endpoint, not `createConfiguredDecompiler`, because the shared path is a
+scoring input: `analyze_function_completeness` counts comment lines and special-cases
+Ghidra's `WARNING:` banners in its `/*` branch but not its `//` one, and fun-doc's
+`port_pipeline._strip_comments` strips only `/* … */`. Both would have changed behaviour
+silently. `ServiceUtils.createConfiguredDecompiler` and
+`FunctionService.decompileFunctionNoRetry` gained an options hook so one caller can deviate
+without moving the default for the ten that share it. Verified on `ls`: the bundle renders
+the comments, `/decompile_function` still does not, and completeness scores are unchanged to
+the digit.
+
+### Variable storage says which register, not which address
+
+The bundle's locals came from the `HighFunction` symbol map and printed the raw varnode
+address: `param_9 = register:00001200:8`. That is an offset into the register address space
+— it names no register, and for a parameter the register *is* the calling convention, which
+is the one thing worth reading there. It now goes through `VariableStorage.toString()`, the
+same rendering `/get_function_variables` and this bundle's own parameters already used, so
+the same variable reads `param_9 = RDI:8` (and `param_1..8 = XMM0..7_Qa:8`, which is the
+SysV float/int split for a varargs formatter). p-code temporaries — `unique:`/hash storage,
+an SSA temp with no storage a reader can rename, retype or find in the frame — omit the
+field instead of filling it with an address that means nothing outside the decompiler.
+
+### Call context is a window, not a line
+
+`call_context` returned the single decompiled line holding the call. It now returns a
+window centred on it — `call_context_lines`, 3 by default, 1 to 21 — because the line that
+decides whether the call happens and the line that consumes its result are the ones next to
+it:
+
+```c
+36:   uStack_90 = 0;
+37:   uVar1 = FUN_006d1800();
+38:   if (uVar1 < 0x5b) {
+```
+
+Widening costs no extra decompilation; the caller is already decompiled. Indentation is
+restored from `ClangLine.getIndent()`, which `toString()` drops — without it a reader cannot
+tell whether a neighbouring line is inside the branch above it.
+
+### Resource bodies stopped shipping JSON inside JSON
+
+Resource bodies are now shaped for what reads them. A `resources/read` body travels inside
+a JSON string, so a JSON body reaches a model doubly escaped: every key re-quoted, every
+line of C as a literal `\n`. Measured on one bundle with every field present:
+
+| body | chars in transit | quote/backslash chars |
+| --- | --- | --- |
+| JSON, `indent=2` | 18,233 | 2,746 |
+| JSON, compact | 15,026 | 2,336 |
+| Markdown | 10,131 | 336 |
+
+The rendered bundle also stops repeating what the code already says. Every local the
+decompiled C declares was listed again underneath it with its type and storage — and for a
+local Ghidra named itself, the name *is* the storage: `local_f0` is `Stack[-0xf0]`, `in_AL`
+and `extraout_EAX` name their register, and `uVar7`'s register is an allocation artifact
+nobody acts on. Those rows are counted rather than listed; a local survives once somebody
+has renamed it (the offset then lives nowhere else) or when Ghidra knows it but the
+decompiler dropped it. Parameters always survive, because `param_9` does *not* say `RDI`
+and that register is the calling convention. On one real function the section went from 48
+rows to 1, and the bundle from 10,001 to 8,164 chars.
+
+So `ghidra://function/{program}/{address}` serves `text/markdown`, while the row-shaped
+index and search bodies stay JSON but compact and without the per-row `uri` — that field
+was a third of the index payload and is derivable from the `uri_template` each body now
+carries once. `ghidra://program/{program}/functions` went 234 KB → 90 KB. The **tool**
+`/get_function_bundle` still answers JSON: that is the machine contract, and it is what
+`/mcp/schema` and `tests/endpoints.json` describe.
+
+### A nested write can no longer roll back the enclosing transaction
+
+Ghidra nests transactions by counting entries on one transaction, so
+`endTransaction(id, false)` from an inner scope marks the *whole* transaction
+aborted. Measured here: a probe script that rolled back its own nested
+transaction silently threw away a rename, two comments and a struct made by the
+enclosing script transaction. Endpoints nest by design
+(`apply_function_documentation` drives rename and comment writes that each open
+one), and every script runs inside a transaction the script manager opened, so
+anything reached from `/run_ghidra_script` or `/run_script_inline` was nested by
+construction.
+
+All 28 write sites now go through `WriteTx`, which opens a transaction only when
+none is open and otherwise *joins* the ambient one, where its own commit/rollback
+is a no-op. A failed inner write leaves its partial changes for the ambient owner
+to commit or undo as a unit instead of destroying that owner's work — the same
+trade Ghidra's own `DomainObject.withTransaction` makes. `?dry_run=true` is the
+one place a rollback is the *purpose*, so it now refuses to run while another
+transaction is open rather than aborting it.
+
+### The Unix socket serves every endpoint TCP does
+
+`ServerManager` owns the Unix-socket server the bridge prefers, and two separate
+gaps left it short of the legacy TCP server by 53 tools (187 against 240).
+
+It built its own service list, which had fallen three services behind the
+plugin's, so `/emulate_function`, the 18 `/debugger/*` endpoints and
+`/prompt_policy` existed on TCP only. And the hand-coded routes — `/exit_ghidra`,
+`/tool/*`, `/get_current_address|function|selection`, `/mcp/health`,
+`/project/info` and the Ghidra-Server version-control family — were inlined into
+the TCP server's setup, even though `registerTool` has always taken a hook for
+registering them on the socket and was being passed `null`. They are now defined
+once against the transport-agnostic `HttpExchange` and registered on every running
+transport, with `ManualToolDescriptors.SHARED_ROUTES` naming the set both scanners
+advertise so the two cannot drift.
+
+GUI-mode UDS and TCP now both serve 240.
+
+### Long calls report progress
+
+Endpoint timeouts here reach 600s — `dispatch.get_timeout` scales batch renames
+and comment writes by item count — and the bridge sent nothing during the wait,
+so a client could not distinguish a long decompile from a hung session and some
+gave up on their own idle timer. An in-flight call now emits a progress
+notification every 5s carrying the elapsed time.
+
+Two details that decide whether this works at all. The notification is sent
+through the session with `related_request_id` rather than via FastMCP's
+`ctx.report_progress()`, which omits it: without that id the streamable-HTTP
+transport routes the notification to the standalone GET stream, where it is
+dropped outright for a client that only POSTs (measured — the tick fired, the
+client saw nothing). And no `total` is sent, because the server reports nothing a
+fraction could be computed from; inventing one would misreport completion.
+
+The heartbeat runs *alongside* the call, never wrapping it, so cancellation still
+reaches `run_blocking_ghidra_call` and aborts the in-flight Ghidra socket. It only
+starts when the client actually supplied a `progressToken`.
+
+### Added: `--json-response` and `--stateless-http`
+
+Two streamable-HTTP modes the SDK has always supported but the bridge never
+exposed. `--json-response` answers POSTs with a plain JSON body for clients that
+cannot read `text/event-stream`. `--stateless-http` drops session tracking
+entirely so several bridge workers can sit behind a load balancer. Both give up
+server-initiated messages, so `tools/list_changed` and progress notifications are
+not delivered — the bridge warns when `--stateless-http` is combined with
+`--lazy`, whose `load_tool_group()` depends on that notification.
+
+### Added: opt-in `tools/list` pagination
+
+`--tools-page-size N` serves the tool list in pages with a `nextCursor`. Off by
+default, and deliberately so: paging is optional in the spec and a client that
+ignores `nextCursor` would see only the first page of ~250 tools (Claude Code, for
+one, has cursor loops for `resources/list` and `skills/list` but none for
+`tools/list`). Reach for it when a client cannot take a single large response —
+159 tools measured at 98,834 bytes.
+
+The cursor is the last tool name over a name-sorted list, not an index: the tool
+list is not fixed here, since `load_tool_group` and a reconnect both rewrite it,
+and an index cursor would then skip or repeat entries. A cursor naming a tool that
+has since been unloaded resumes correctly rather than erroring.
+
+### Added: optional inbound authentication on the HTTP transports
+
+`GHIDRA_MCP_INBOUND_TOKEN=<secret>` makes the bridge require
+`Authorization: Bearer <secret>`, answering anything else with `401` and
+`WWW-Authenticate: Bearer`. There was no inbound authentication at all, so anything
+that could reach the port could drive every tool including the writes; the existing
+DNS-rebinding protection does not help, because it stops a browser being tricked
+into making the request, not a client that simply connects. Rejected requests are
+turned away before the session manager sees them, so they cannot allocate state
+either.
+
+Unauthenticated remains the default (refusing to start would break existing remote
+setups), but a non-loopback bind without a token now logs a warning. `OPTIONS` stays
+open, since a CORS preflight cannot carry credentials and the method probe reveals
+only the allowed verbs.
+
+To be precise about what this is: a static shared secret, **not** the spec's OAuth
+2.1 resource-server flow, which needs an authorization server and metadata documents.
+No `/.well-known/oauth-protected-resource` is served and no OAuth discovery is
+claimed.
 
 ### Added
 
