@@ -11,12 +11,12 @@ import java.util.regex.Pattern;
 
 /**
  * Source-level regression pinning {@link ManualToolDescriptors} in sync with
- * the actual {@code createContext}/{@code safeContext} calls in the GUI and
+ * the actual {@code createContext}/{@code server.route} calls in the GUI and
  * headless servers.
  *
  * <p>Background: {@code /mcp/schema} is generated purely from {@code @McpTool}
  * reflection. Routes registered directly via {@code createContext}/
- * {@code safeContext} (utility/server/project/tool endpoints that predate the
+ * {@code server.route} (utility/server/project/tool endpoints that predate the
  * annotation-scanner convention) were fully live and callable but invisible in
  * the schema — and therefore invisible to the Python bridge's dynamic tool
  * discovery — found via a live-schema-vs-catalog diff while investigating a
@@ -38,7 +38,7 @@ public class ManualToolDescriptorsParityTest extends TestCase {
     private static final Pattern GUI_CONTEXT = Pattern.compile(
         "(?:(?:server|httpServer)\\.createContext|reg\\.add)\\(\\s*\"([^\"]+)\"");
     private static final Pattern HEADLESS_CONTEXT = Pattern.compile(
-        "safeContext\\(\\s*\"([^\"]+)\"");
+        "server\\.route\\(\\s*\"([^\"]+)\"");
 
     /**
      * Routes registered via a literal createContext call that are
@@ -104,7 +104,7 @@ public class ManualToolDescriptorsParityTest extends TestCase {
         for (String path : headlessPaths) {
             if (EXEMPT.contains(path)) continue;
             assertTrue(
-                "Headless registers \"" + path + "\" via safeContext but "
+                "Headless registers \"" + path + "\" via server.route but "
                     + "ManualToolDescriptors has no entry for it -- the route is "
                     + "live but invisible in /mcp/schema. Add it to "
                     + "ManualToolDescriptors.buildAll().",
@@ -122,7 +122,7 @@ public class ManualToolDescriptorsParityTest extends TestCase {
         for (String path : ManualToolDescriptors.knownPaths()) {
             assertTrue(
                 "ManualToolDescriptors has an entry for \"" + path + "\" but "
-                    + "neither server registers it via createContext/safeContext "
+                    + "neither server registers it via createContext/server.route "
                     + "-- the schema would advertise a tool that 404s. Remove the "
                     + "stale entry from ManualToolDescriptors.buildAll().",
                 registered.contains(path));

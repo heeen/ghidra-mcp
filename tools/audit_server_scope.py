@@ -40,7 +40,7 @@ Derivation, mirroring what each server does at startup
    in that set is served by that server.
 2. **Hand-registered routes.** Parse each server's
    ``ManualToolDescriptors.addAll(scanner, ...)`` path list. Those routes are
-   registered directly via ``createContext``/``safeContext``.
+   registered directly via ``createContext``/``server.route``.
 
 A route's scope is the union of both mechanisms — ``/open_project`` and
 ``/server/status`` are GUI-hand-registered *and* ``@McpTool`` methods on
@@ -87,11 +87,11 @@ _ADD_ALL_RE = re.compile(
 # Literal route registration, for the "registered but not catalogued" report.
 # The GUI registers either directly as `server.createContext("/x", ...)` or,
 # for the routes it serves on every transport, through a RouteRegistrar as
-# `reg.add("/x", ...)`; headless wraps it in `safeContext("/x", ...)`.
+# `reg.add("/x", ...)`; headless registers it as `server.route("/x", ...)`.
 # Mirrors ManualToolDescriptorsParityTest's patterns -- keep the two in step,
 # or a route registered in one idiom reads here as registered nowhere.
 _LITERAL_CONTEXT_RE = re.compile(
-    r"(?:(?:server|httpServer)\.createContext|reg\.add|safeContext)\s*\(\s*\"([^\"]+)\""
+    r"(?:(?:server|httpServer)\.createContext|reg\.add|server\.route)\s*\(\s*\"([^\"]+)\""
 )
 
 # A field declaration: `private final com.xebyte.core.ListingService listingService;`
@@ -414,7 +414,7 @@ def _manual_route_constant(repo: Path, name: str) -> list[str]:
 
 
 def server_literal_contexts(repo: Path, server_rel: str) -> list[str]:
-    """Routes one server registers with a literal path via createContext/safeContext.
+    """Routes one server registers with a literal path via createContext/server.route.
 
     Not the same question as :func:`server_manual_paths`: ``addAll`` says what the
     server *publishes in /mcp/schema*, this says what it will actually *answer*.

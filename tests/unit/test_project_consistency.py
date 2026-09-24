@@ -306,7 +306,7 @@ class TestJavaArchitecture(unittest.TestCase):
                 r'(?:server\.createContext|reg\.add)\("([^"]+)"', gui_file.read_text()
             )
         )
-        headless = set(re.findall(r'safeContext\("([^"]+)"', headless_file.read_text()))
+        headless = set(re.findall(r'server\.route\("([^"]+)"', headless_file.read_text()))
         annotated = set()
         for java_file in list(CORE_SRC.glob("*Service.java")) + list((JAVA_SRC / "headless").glob("*Service.java")):
             annotated.update(
@@ -317,6 +317,9 @@ class TestJavaArchitecture(unittest.TestCase):
             "/batch_apply_documentation",
             "/mcp/health",
             "/mcp/instance_info",
+            # Served by McpHttpServer on headless; the plugin's own TCP server
+            # still registers it by hand until it moves onto McpHttpServer too.
+            "/mcp/schema",
             "/project/info",
             "/server/authenticate",
             "/tool/goto_address",
