@@ -315,7 +315,7 @@ public class DocumentationHashService {
         return getFunctionDocumentation(functionAddress, null);
     }
 
-    @McpTool(path = "/get_function_documentation", description = "Export all documentation for a function. Prefer ghidra://function/{program}/{address} (or /get_function_bundle) when you want decompile + docs + callers in one cacheable read. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/get_function_documentation", description = "Export all documentation for a function. Prefer ghidra://function/{program}/{address} (or /get_functions) when you want decompile + docs + callers in one cacheable read. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
     public Response getFunctionDocumentation(
             @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
@@ -980,7 +980,7 @@ public class DocumentationHashService {
 
     /**
      * Get the function signature (feature vector) for cross-binary comparison.
-     * Kept for benchmarks; agents use {@code /get_function_bundle?fields=signature}
+     * Kept for benchmarks; agents use {@code /get_functions?fields=signature}
      * for the Ghidra signature string, or this method directly for the feature vector.
      */
     public Response handleGetFunctionSignature(

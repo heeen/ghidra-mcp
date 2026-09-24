@@ -220,9 +220,9 @@ class TestResourceHandlers(unittest.TestCase):
             new=AsyncMock(side_effect=fake_read),
         ):
             body = json.loads(_run(function_by_name_resource("ls", "_DT_INIT")))
-        self.assertEqual(captured["endpoint"], "/get_function_by_address")
+        self.assertEqual(captured["endpoint"], "/get_functions")
         self.assertEqual(captured["params"]["address"], "_DT_INIT")
-        self.assertNotIn("name", captured["params"])
+        self.assertEqual(captured["params"]["fields"], "entry_point,signature")
         self.assertTrue(body["resolved"])
         self.assertEqual(body["canonical_uri"], "ghidra://function/ls/001f4000")
 

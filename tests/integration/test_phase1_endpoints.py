@@ -1,7 +1,7 @@
 """
 Phase 1: Essential Analysis Endpoints Tests
 
-Tests for the 9 Phase 1 endpoints (call graph via get_function_bundle fields=):
+Tests for the 9 Phase 1 endpoints (call graph via get_functions fields=):
 - get_function_variables
 - set_function_prototype
 - set_variable_type
@@ -16,13 +16,13 @@ import uuid
 
 
 class TestFunctionCallGraph:
-    """Test function callee/caller via get_function_bundle fields=."""
+    """Test function callee/caller via get_functions fields=."""
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callees(self, http_client, sample_function):
+    def test_get_functions_callees(self, http_client, sample_function):
         """Test getting functions called by a function."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callees",
@@ -32,10 +32,10 @@ class TestFunctionCallGraph:
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callees_truncation(self, http_client, sample_function):
+    def test_get_functions_callees_truncation(self, http_client, sample_function):
         """Bundle callees are capped; response still succeeds."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callees",
@@ -45,10 +45,10 @@ class TestFunctionCallGraph:
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callees_invalid_function(self, http_client):
+    def test_get_functions_callees_invalid_function(self, http_client):
         """Test callees with non-existent function."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
                 "fields": "callees",
@@ -62,10 +62,10 @@ class TestFunctionCallGraph:
             )
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callers(self, http_client, sample_function):
+    def test_get_functions_callers(self, http_client, sample_function):
         """Test getting functions that call a function."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callers",
@@ -75,10 +75,10 @@ class TestFunctionCallGraph:
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callers_truncation(self, http_client, sample_function):
+    def test_get_functions_callers_truncation(self, http_client, sample_function):
         """Bundle callers are capped; response still succeeds."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callers",
@@ -88,10 +88,10 @@ class TestFunctionCallGraph:
         assert response.status_code == 200
 
     @pytest.mark.requires_program
-    def test_get_function_bundle_callers_invalid_function(self, http_client):
+    def test_get_functions_callers_invalid_function(self, http_client):
         """Test callers with non-existent function."""
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
                 "fields": "callers",
@@ -106,27 +106,29 @@ class TestFunctionCallGraph:
 
 
 class TestFunctionVariables:
-    """Test function variable endpoints."""
+    """Test function variable reads via get_functions fields=."""
 
     @pytest.mark.requires_program
-    def test_get_function_variables(self, http_client, sample_function):
+    def test_get_functions_variables(self, http_client, sample_function):
         """Test getting function variables."""
         response = http_client.get(
-            "/get_function_variables", params={"function_name": sample_function}
+            "/get_functions",
+            params={"function_name": sample_function, "fields": "parameters,locals"},
         )
         assert response.status_code == 200
-        # Should return JSON with parameters and locals
         text = response.text
         assert "parameters" in text or "error" in text.lower()
 
     @pytest.mark.requires_program
-    def test_get_function_variables_invalid_function(self, http_client):
+    def test_get_functions_variables_invalid_function(self, http_client):
         """Test variables with non-existent function."""
         response = http_client.get(
-            "/get_function_variables",
-            params={"function_name": "NonExistentFunction_" + uuid.uuid4().hex[:8]},
+            "/get_functions",
+            params={
+                "function_name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "parameters,locals",
+            },
         )
-        # Accept 200 with error, 404 (not found), or 500 (server error)
         assert response.status_code in [200, 404, 500]
         if response.status_code == 200:
             assert "error" in response.text.lower()
@@ -411,7 +413,7 @@ class TestPhase1Integration:
         """Test typical function analysis workflow."""
         # Get callees
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callees",
@@ -422,7 +424,7 @@ class TestPhase1Integration:
 
         # Get callers
         response = http_client.get(
-            "/get_function_bundle",
+            "/get_functions",
             params={
                 "name": sample_function,
                 "fields": "callers",
@@ -433,7 +435,8 @@ class TestPhase1Integration:
 
         # Get variables
         response = http_client.get(
-            "/get_function_variables", params={"function_name": sample_function}
+            "/get_functions",
+            params={"function_name": sample_function, "fields": "parameters,locals"},
         )
         assert response.status_code == 200
 

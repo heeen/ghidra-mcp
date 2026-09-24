@@ -383,9 +383,9 @@ public class XrefCallGraphService {
     }
 
     /**
-     * Get all references to a specific function by name
+     * Get all references to a specific function by name.
+     * Agent-visible surface is {@code /get_functions?fields=xrefs}.
      */
-    @McpTool(path = "/get_function_xrefs", description = "Get cross-references to a function. Accepts function name or address (pass address as 'address' param, or as 'name').", category = "xref", access = ToolAccess.READ_ONLY)
     public Response getFunctionXrefs(
             @Param(value = "function", defaultValue = "",
                    aliases = {"name", "address", "function_name", "function_address"},
@@ -445,7 +445,7 @@ public class XrefCallGraphService {
 
     /**
      * Get all functions called by the specified function (callees).
-     * Kept for internal callers; agents use {@code /get_function_bundle?fields=callees}.
+     * Kept for internal callers; agents use {@code /get_functions?fields=callees}.
      */
     public Response getFunctionCallees(
             @Param(value = "function", defaultValue = "",
@@ -521,7 +521,7 @@ public class XrefCallGraphService {
 
     /**
      * Get all functions that call the specified function (callers).
-     * Kept for internal callers; agents use {@code /get_function_bundle?fields=callers}.
+     * Kept for internal callers; agents use {@code /get_functions?fields=callers}.
      */
     public Response getFunctionCallers(
             @Param(value = "function", defaultValue = "",

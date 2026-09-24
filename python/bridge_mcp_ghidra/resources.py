@@ -290,13 +290,13 @@ async def function_bundle_resource(program: str, address: str) -> str:
 
     A resource body travels inside a JSON string, so JSON here would reach the
     model doubly escaped: every key re-quoted, every line of C as a literal
-    \\n. The tool /get_function_bundle still answers JSON for anything that
+    \\n. The tool /get_functions still answers JSON for anything that
     parses it.
     """
     program_name, addr = unquote(program), unquote(address)
     uri = canonical_function_uri(program_name, addr)
     subscriptions.note_resource_read(uri)
-    raw = await _read_async("/get_function_bundle", name=addr, program=program_name)
+    raw = await _read_async("/get_functions", name=addr, program=program_name)
     payload = json.loads(raw)
     if isinstance(payload, dict):
         # Stamp the cache key into the body so a client that only kept the text
@@ -318,10 +318,12 @@ async def function_by_name_resource(program: str, name: str) -> str:
     subscriptions.note_resource_read(
         f"ghidra://function/{quote(program_name, safe='')}/by-name/{quote(function_name, safe='')}"
     )
-    # /get_function_by_address's sole locator param is `address`, but
-    # ServiceUtils.resolveFunction accepts a function name there too.
+    # ServiceUtils.resolveFunction accepts a function name in the function= param.
     raw = await _read_async(
-        "/get_function_by_address", address=function_name, program=program_name
+        "/get_functions",
+        address=function_name,
+        program=program_name,
+        fields="entry_point,signature",
     )
     payload = json.loads(raw)
     address = payload.get("address") if isinstance(payload, dict) else None

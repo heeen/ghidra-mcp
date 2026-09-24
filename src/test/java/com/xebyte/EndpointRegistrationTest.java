@@ -111,7 +111,7 @@ public class EndpointRegistrationTest extends TestCase {
         Map<String, String> searchEndpoints = new HashMap<>();
         searchEndpoints.put("searchFunctions", "Search functions by name");
         searchEndpoints.put("decompile", "Decompile function");
-        searchEndpoints.put("get_function_by_address", "Get function by address");
+        searchEndpoints.put("get_functions", "Get function(s) by name or address");
         searchEndpoints.put("disassemble_function", "Disassemble function");
 
         for (Map.Entry<String, String> entry : searchEndpoints.entrySet()) {
@@ -222,7 +222,7 @@ public class EndpointRegistrationTest extends TestCase {
             "list_functions", "methods", "classes", "segments", "imports", "exports",
             "namespaces", "data", "strings", "searchFunctions", "decompile",
             "renameFunction", "renameData", "xrefs_to", "xrefs_from", "function_xrefs",
-            "function_labels", "get_function_by_address", "get_ui_cursor",
+            "function_labels", "get_functions", "get_ui_cursor",
             "disassemble_function", "set_comment",
             "rename_function", "set_function_prototype",
             "set_variable_type",
