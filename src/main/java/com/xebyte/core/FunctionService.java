@@ -155,8 +155,9 @@ public class FunctionService {
     /**
      * Decompile a function at the given address.
      * If programName is provided, uses that program instead of the current one.
+     * Agent-visible surface is {@code /get_functions?fields=decompiled_code}; kept as an
+     * internal/benchmark helper.
      */
-    @McpTool(path = "/decompile_function", description = "Decompile ONE function (address) OR MANY (functions=comma-separated names/addresses) to pseudocode. Prefer the MCP resource ghidra://function/{program}/{address} (or /get_function_bundle) when you also need callers/comments/xrefs — one read replaces this plus several follow-ups. On programs with multiple address spaces, prefix addresses with the space name (mem:1000). Replaces batch_decompile.", category = "function", access = ToolAccess.READ_ONLY)
     public Response decompileFunctionByAddress(
             @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", defaultValue = "",
                    description = "Function address or name (single mode). 0x<hex> or <space>:<hex>. Omit when using functions=.") String addressStr,
@@ -769,8 +770,8 @@ public class FunctionService {
 
     /**
      * Get function by address.
+     * Agent-visible surface is {@code /get_functions?fields=signature,entry_point,body_start,body_end}.
      */
-    @McpTool(path = "/get_function_by_address", description = "Get function info at a specific address. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "function", access = ToolAccess.READ_ONLY)
     public Response getFunctionByAddress(
             @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
@@ -1727,7 +1728,7 @@ public class FunctionService {
                                 .append("' from '").append(oldType).append("' to '")
                                 .append(dataType.getName()).append("'")
                                 .append(". WARNING: Type changes trigger re-decompilation which may create new SSA variables. ")
-                                .append("Call get_function_variables after all type changes to discover any new variables.");
+                                .append("Call get_functions(fields=parameters,locals) after all type changes to discover any new variables.");
                     } else {
                         // Provide detailed error message including storage location
                         String storageInfo = "unknown";
@@ -2738,8 +2739,8 @@ public class FunctionService {
 
     /**
      * Get detailed information about a function's variables (parameters and locals).
+     * Agent-visible surface is {@code /get_functions?fields=parameters,locals}.
      */
-    @McpTool(path = "/get_function_variables", description = "List all variables in a function. Accepts function_name (by name) or address (by address). If both are given, address takes precedence. Useful when the function was recently renamed — use address to avoid name-lookup race conditions.", category = "function", access = ToolAccess.READ_ONLY)
     public Response getFunctionVariables(
             @Param(value = "function_name", description = "Function name (ignored if address is provided)", defaultValue = "") String functionName,
             @Param(value = "address", description = "Function address (hex, e.g. 6fc583f0). If provided, overrides function_name lookup.", defaultValue = "") String address,
@@ -4364,7 +4365,7 @@ public class FunctionService {
                             if (requestedNew == null || requestedNew.isEmpty() || requestedNew.equals(oldName)) continue;
                             if (!renamedHere.contains(oldName)) {
                                 errors.add("Rename spec for '" + oldName + "' matched no high-level or storage variable; "
-                                        + "name unchanged. Re-fetch with get_function_variables before retrying.");
+                                        + "name unchanged. Re-fetch with get_functions(fields=parameters,locals) before retrying.");
                                 failed.incrementAndGet();
                             }
                         }

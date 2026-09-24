@@ -475,7 +475,7 @@ class TestCheckoutRefresh:
             addr_q = fn["address"]
             cre = _get_json(
                 http_client,
-                "/get_function_bundle",
+                "/get_functions",
                 params={
                     "function": addr_q,
                     "program": program,

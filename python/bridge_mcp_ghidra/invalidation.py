@@ -5,7 +5,7 @@ and emit ``resources/updated`` (and ``resources/list_changed`` when a listing
 row's label moved). Read-only tools return immediately.
 
 Tier resolution runs in Ghidra, not in the agent: LOCAL resolves the write's own
-target, CALLERS adds ``/get_function_bundle?fields=callers``, TYPE asks ``/find_type_users``
+target, CALLERS adds ``/get_functions?fields=callers``, TYPE asks ``/find_type_users``
 (``DataTypeReferenceFinder``, off the EDT) and degrades to the program's known
 URIs if that errors or times out. UNBOUNDED always degrades, plus list_changed.
 NONE is for writes no resource body reports — saving above all, which happens
@@ -457,14 +457,14 @@ async def _caller_entries(program: str | None, kwargs: dict) -> list[dict]:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
                 dispatch.dispatch_get(
-                    "/get_function_bundle",
+                    "/get_functions",
                     params={**params, "fields": "callers", "include_call_context": "false"},
                 )
             )
         )
         payload = json.loads(raw)
     except Exception as e:
-        logger.debug("get_function_bundle(callers) for invalidation failed: %s", e)
+        logger.debug("get_functions(callers) for invalidation failed: %s", e)
         return []
     callers = payload.get("callers", []) if isinstance(payload, dict) else []
     if not isinstance(callers, list):
@@ -543,16 +543,14 @@ async def _resolve_target_address(program: str | None, kwargs: dict) -> str | No
     locator = direct or name
     if not locator:
         return None
-    # Already looks like an address and get_function_by_address accepts names
-    # too, so one call covers both. Prefer the resolved entry point so a
-    # mid-function comment address still maps to the function's canonical URI.
-    params: dict[str, Any] = {"address": locator}
+    # resolveFunction accepts names; fields=entry_point keeps this cheap (no decompile).
+    params: dict[str, Any] = {"address": locator, "fields": "entry_point"}
     if program:
         params["program"] = program
     try:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
-                dispatch.dispatch_get("/get_function_by_address", params=params)
+                dispatch.dispatch_get("/get_functions", params=params)
             )
         )
         payload = json.loads(raw)

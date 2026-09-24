@@ -12,7 +12,7 @@ present, counting the bytes as they reach the model:
 56% of the payload for the same facts, and 8x fewer escapes, because the code
 sits in a fence with one level of escaping rather than two.
 
-The **tool** ``/get_function_bundle`` still answers JSON — that is the machine
+The **tool** ``/get_functions`` still answers JSON — that is the machine
 contract, it is in ``/mcp/schema`` and ``tests/endpoints.json``, and anything
 parsing it keeps working. This rendering is only for the resource read, whose
 sole consumer is a model reading prose.
@@ -163,7 +163,7 @@ def _named_addresses(title: str, rows, count=None) -> list[str]:
 
 
 def function_bundle_markdown(bundle: dict) -> str:
-    """Render ``/get_function_bundle``'s JSON as Markdown."""
+    """Render ``/get_functions``'s JSON as Markdown."""
     out = _kv_line(bundle)
 
     code = bundle.get("decompiled_code")

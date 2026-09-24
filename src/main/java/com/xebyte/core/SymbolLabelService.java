@@ -38,7 +38,7 @@ public class SymbolLabelService {
         return getFunctionLabels(functionName, offset, limit, null);
     }
 
-    /** Kept for tests; agents use {@code /get_function_bundle?fields=labels}. */
+    /** Kept for tests; agents use {@code /get_functions?fields=labels}. */
     public Response getFunctionLabels(
             @Param(value = "function", aliases = {"name", "address", "function_address", "function_name"}, paramType = "address",
                    description = "Function name or address (0x<hex> / <space>:<hex>).") String functionName,

@@ -17,7 +17,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * {@code fields=} on {@code /get_function_bundle}: subset reads must not pay
+ * {@code fields=} on {@code /get_functions}: subset reads must not pay
  * for a decompile when they only need listing-level facts.
  */
 public class FunctionBundleFieldsEndpointTest extends TestCase {
@@ -28,6 +28,8 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
                 Set.of("decompiled_code")));
         assertFalse(FunctionBundleService.requiresTargetDecompile(
                 Set.of("callers", "callees", "signature", "labels")));
+        assertFalse(FunctionBundleService.requiresTargetDecompile(
+                Set.of("entry_point", "body_start", "body_end")));
     }
 
     public void testUnknownFieldErrorsWithValidList() {
@@ -36,7 +38,7 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
         when(provider.getCurrentProgram()).thenReturn(program);
         FunctionBundleService svc = new FunctionBundleService(
                 provider, new NoopThreadingStrategy(), mock(FunctionService.class));
-        Response r = svc.getFunctionBundle("401000", "callers,nope", false, 0, 3, false, "");
+        Response r = svc.getFunctions("401000", "", "callers,nope", false, 0, 3, false, "");
         assertTrue(r instanceof Response.Err);
         assertTrue(((Response.Err) r).message().contains("Unknown field"));
         assertTrue(((Response.Err) r).message().contains("callers"));
@@ -44,6 +46,9 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
 
     public void testRemovedEndpointsGoneFromSourceAndCatalog() throws IOException {
         String catalog = Files.readString(Paths.get("tests/endpoints.json"), StandardCharsets.UTF_8);
+        String functionSvc = Files.readString(
+                Paths.get("src/main/java/com/xebyte/core/FunctionService.java"),
+                StandardCharsets.UTF_8);
         String xref = Files.readString(
                 Paths.get("src/main/java/com/xebyte/core/XrefCallGraphService.java"),
                 StandardCharsets.UTF_8);
@@ -57,9 +62,15 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
                 "/get_function_callees",
                 "/get_function_callers",
                 "/get_function_labels",
-                "/get_function_signature" }) {
+                "/get_function_signature",
+                "/get_function_by_address",
+                "/get_function_variables",
+                "/get_function_xrefs",
+                "/decompile_function",
+                "/get_function_bundle" }) {
             assertFalse("must not register " + gone,
-                    xref.contains("path = \"" + gone + "\"")
+                    functionSvc.contains("path = \"" + gone + "\"")
+                            || xref.contains("path = \"" + gone + "\"")
                             || symbol.contains("path = \"" + gone + "\"")
                             || docs.contains("path = \"" + gone + "\""));
             assertFalse("catalog must not list " + gone,
@@ -68,11 +79,9 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
         String bundle = Files.readString(
                 Paths.get("src/main/java/com/xebyte/core/FunctionBundleService.java"),
                 StandardCharsets.UTF_8);
-        assertTrue(bundle.contains("path = \"/get_function_bundle\""));
+        assertTrue(bundle.contains("path = \"/get_functions\""));
         assertTrue(bundle.contains("fields"));
-        // jump_targets folded INTO the bundle: it is intra-function control flow
-        // like callers/callees/labels, and costs 0.6 ms warm against the bundle's
-        // 228 ms, so keeping it as a separate tool bought nothing.
+        assertTrue(bundle.contains("functions"));
         assertFalse("standalone jump-targets tool should be gone",
                 xref.contains("path = \"/get_function_jump_targets\""));
         assertTrue("bundle must expose jump_targets as a field",

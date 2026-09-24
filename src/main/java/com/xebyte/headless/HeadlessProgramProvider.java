@@ -664,16 +664,15 @@ public class HeadlessProgramProvider implements ProgramProvider {
             // Runs on shutdown (SIGTERM from systemd included) and on project
             // switch; release() alone would silently discard every unsaved edit.
             // Saving lands in the local working copy only -- checkin stays explicit.
+            // Not gated on Program.canSave(): that is false for a program upgraded
+            // on open (its DBHandle cannot update in place), which DomainFile.save()
+            // handles fine -- the same call /save_program makes.
             if (program.isChanged()) {
-                if (program.canSave()) {
-                    try {
-                        program.save("saved on close", monitor);
-                    } catch (Exception e) {
-                        Msg.error(this, "Unsaved changes LOST in " + program.getName() + ": " + e.getMessage());
-                    }
-                } else {
-                    Msg.error(this, "Unsaved changes LOST in " + program.getName()
-                            + ": opened read-only (check it out to keep edits)");
+                try {
+                    program.getDomainFile().save(monitor);
+                    Msg.info(this, "Saved " + program.getName() + " on close");
+                } catch (Exception e) {
+                    Msg.error(this, "Unsaved changes LOST in " + program.getName() + ": " + e);
                 }
             }
             try {

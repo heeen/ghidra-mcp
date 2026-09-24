@@ -72,12 +72,15 @@ public class FunctionBundleService {
     private static final int MAX_XREFS = 100;
     private static final int MAX_DISASM = 200;
     private static final int MAX_DECOMPILED_CHARS = 120_000;
+    /** Bulk cap matches {@code decompile_function(functions=)} — one decompile budget per entry. */
+    private static final int MAX_FUNCTIONS = 20;
     /** Widest call-site window. Past this a reader should just read the caller's bundle. */
     private static final int MAX_CALL_CONTEXT_LINES = 21;
 
     /** Subset keys accepted by {@code fields=}; omitted/empty means all. */
     static final Set<String> BUNDLE_FIELDS = Set.of(
-            "signature", "classification", "return_type", "decompiled_code",
+            "signature", "classification", "return_type", "entry_point",
+            "body_start", "body_end", "decompiled_code",
             "plate_comment", "comments", "labels", "parameters", "locals",
             "callers", "call_context", "callees", "xrefs", "disassembly",
             "jump_targets");
@@ -93,33 +96,35 @@ public class FunctionBundleService {
         this.functionService = functionService;
     }
 
-    @McpTool(path = "/get_function_bundle",
-        description = "Everything about one function in a single call: decompiled code, "
-            + "signature, plate and inline comments, parameters, locals, labels, callers "
-            + "(with a window of the caller's own decompiled source around each call site, "
-            + "3 lines by default), callees, and xrefs. Pass fields= as a comma-separated "
-            + "subset to skip work you do not need — omitted or empty returns everything. "
-            + "When the requested fields need no decompiled text (e.g. fields=callers,callees,"
-            + "signature,labels), the target function is NOT decompiled (238 ms cold / 5–10 ms "
-            + "warm per function); only decompiled_code (and call_context when enabled) pays "
-            + "that cost. Unlike decompile_function, the code text here renders EOL comments "
-            + "(// style), so comments written with set_comment are visible in the code rather "
-            + "than only as an address. Replaces decompile_function + get_function_variables + "
-            + "get_function_callers + get_comment + get_function_xrefs + get_function_callees + "
-            + "get_function_labels + get_function_signature. Accepts a function name or address. "
-            + "Completeness scoring is NOT included because it costs a second decompilation — "
-            + "call analyze_function_completeness for that.",
+    @McpTool(path = "/get_functions",
+        description = "Everything about one or many functions in a single call. Pass "
+            + "functions= as a comma-separated list of names or addresses for bulk mode "
+            + "(up to 20); omit it and pass function=/name=/address= for one. Pass fields= "
+            + "as a comma-separated subset to skip work you do not need — omitted or empty "
+            + "returns everything. When the requested fields need no decompiled text (e.g. "
+            + "fields=callers,callees,signature,labels,entry_point), the target function is "
+            + "NOT decompiled (238 ms cold / 5–10 ms warm per function); only decompiled_code "
+            + "(and call_context when enabled) pays that cost. Decompiled text renders EOL "
+            + "comments (// style), so comments written with set_comment are visible in the "
+            + "code. Replaces get_function_by_address, get_function_variables, "
+            + "get_function_xrefs, decompile_function, get_function_bundle, and the former "
+            + "get_function_callers/callees/labels/signature tools. Completeness scoring is "
+            + "NOT included — call analyze_function_completeness for that.",
         category = "function", access = ToolAccess.READ_ONLY)
-    public Response getFunctionBundle(
-            @Param(value = "function", paramType = "address",
+    public Response getFunctions(
+            @Param(value = "function", paramType = "address", defaultValue = "",
                    aliases = {"name", "address", "function_address", "function_name"},
-                   description = "Function name or address. Address accepts 0x<hex> or "
-                               + "<space>:<hex> (e.g. mem:1000); a plain name resolves by exact "
-                               + "function name.") String functionRef,
+                   description = "Single mode: function name or address (0x<hex> or "
+                               + "<space>:<hex>). Ignored when functions= is set.") String functionRef,
+            @Param(value = "functions", defaultValue = "",
+                   description = "Bulk mode: comma-separated function references (names or "
+                               + "addresses). When set, function= is ignored. Returns a map "
+                               + "keyed by the reference asked for.") String functionsParam,
             @Param(value = "fields", defaultValue = "",
                    description = "Comma-separated subset: signature, classification, return_type, "
-                               + "decompiled_code, plate_comment, comments, labels, parameters, "
-                               + "locals, callers, call_context, callees, xrefs, disassembly. "
+                               + "entry_point, body_start, body_end, decompiled_code, "
+                               + "plate_comment, comments, labels, parameters, locals, callers, "
+                               + "call_context, callees, xrefs, disassembly, jump_targets. "
                                + "Omit or leave empty for the full bundle.") String fieldsParam,
             @Param(value = "include_call_context", defaultValue = "true",
                    description = "Include each caller's decompiled call-site line. Costs one "
@@ -147,10 +152,6 @@ public class FunctionBundleService {
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 
-        if (functionRef == null || functionRef.isEmpty()) {
-            return Response.err("name parameter required (function name or address)");
-        }
-
         Set<String> fields;
         try {
             fields = parseFields(fieldsParam);
@@ -161,8 +162,19 @@ public class FunctionBundleService {
             return Response.err(e.getMessage());
         }
 
-        // Resolve before any threading hop: parseAddress reports failures through a
-        // thread-local that an EDT hop would make invisible (ServiceUtils.java:668-672).
+        final int ctxLimit = Math.max(0, callContextLimit);
+        final int ctxLines = Math.clamp(callContextLines, 1, MAX_CALL_CONTEXT_LINES);
+        final Set<String> resolvedFields = fields;
+
+        if (functionsParam != null && !functionsParam.isBlank()) {
+            return getFunctionsBulk(program, functionsParam, resolvedFields, includeCallContext,
+                ctxLimit, ctxLines, includeDisasm);
+        }
+
+        if (functionRef == null || functionRef.isEmpty()) {
+            return Response.err("function name or address required (or pass functions= for bulk)");
+        }
+
         Function func = ServiceUtils.resolveFunction(program, functionRef);
         if (func == null) {
             String parseError = ServiceUtils.getLastParseError();
@@ -171,13 +183,73 @@ public class FunctionBundleService {
         }
 
         try {
-            return Response.ok(buildBundle(program, func, fields, includeCallContext,
-                Math.max(0, callContextLimit),
-                Math.clamp(callContextLines, 1, MAX_CALL_CONTEXT_LINES), includeDisasm));
+            return Response.ok(buildBundle(program, func, resolvedFields, includeCallContext,
+                ctxLimit, ctxLines, includeDisasm));
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             return Response.err("Failed to build bundle for " + func.getName() + ": " + msg);
         }
+    }
+
+    /** Internal/tests: single-function entry with the pre-consolidation name. */
+    public Response getFunctionBundle(String functionRef, String fieldsParam,
+            boolean includeCallContext, int callContextLimit, int callContextLines,
+            boolean includeDisasm, String programName) {
+        return getFunctions(functionRef, "", fieldsParam, includeCallContext, callContextLimit,
+            callContextLines, includeDisasm, programName);
+    }
+
+    private Response getFunctionsBulk(Program program, String functionsParam, Set<String> fields,
+            boolean includeCallContext, int callContextLimit, int callContextLines,
+            boolean includeDisasm) {
+        String[] refs = functionsParam.split(",");
+        Map<String, Object> out = new LinkedHashMap<>();
+        Map<String, Object> functions = new LinkedHashMap<>();
+        int requested = 0;
+        int resolved = 0;
+
+        for (String raw : refs) {
+            if (requested >= MAX_FUNCTIONS) {
+                break;
+            }
+            String funcRef = raw.trim();
+            if (funcRef.isEmpty()) {
+                continue;
+            }
+            requested++;
+            Function func = ServiceUtils.resolveFunction(program, funcRef);
+            if (func == null) {
+                String parseError = ServiceUtils.getLastParseError();
+                Map<String, Object> err = new LinkedHashMap<>();
+                err.put("error", "Function not found: " + funcRef
+                    + (parseError != null && !parseError.isEmpty() ? " (" + parseError + ")" : ""));
+                functions.put(funcRef, err);
+                continue;
+            }
+            try {
+                functions.put(funcRef, buildBundle(program, func, fields, includeCallContext,
+                    callContextLimit, callContextLines, includeDisasm));
+                resolved++;
+            } catch (Exception e) {
+                String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+                Map<String, Object> err = new LinkedHashMap<>();
+                err.put("error", "Failed to build bundle for " + func.getName() + ": " + msg);
+                functions.put(funcRef, err);
+            }
+        }
+
+        if (requested == 0) {
+            return Response.err("functions parameter is required for bulk mode");
+        }
+
+        out.put("functions", functions);
+        out.put("count", resolved);
+        out.put("requested", requested);
+        if (refs.length > MAX_FUNCTIONS || requested > MAX_FUNCTIONS) {
+            out.put("truncated", true);
+            out.put("max_functions", MAX_FUNCTIONS);
+        }
+        return Response.ok(out);
     }
 
     /**
@@ -303,6 +375,15 @@ public class FunctionBundleService {
                 out.put("return_type_resolved", true);
             }
         }
+        if (wantsField(fields, "entry_point")) {
+            out.put("entry_point", entry.toString(false));
+        }
+        if (wantsField(fields, "body_start")) {
+            out.put("body_start", func.getBody().getMinAddress().toString(false));
+        }
+        if (wantsField(fields, "body_end")) {
+            out.put("body_end", func.getBody().getMaxAddress().toString(false));
+        }
 
         DecompileResults decomp = null;
         boolean decompiled = false;
@@ -319,7 +400,7 @@ public class FunctionBundleService {
                             out.put("decompiled_code", code.substring(0, MAX_DECOMPILED_CHARS));
                             truncation.put("decompiled_code", true);
                             out.put("decompiled_code_note", "Truncated at " + MAX_DECOMPILED_CHARS
-                                + " chars; call decompile_function for the full text.");
+                                + " chars; call get_functions with fields=decompiled_code for more.");
                         } else {
                             out.put("decompiled_code", code);
                         }
