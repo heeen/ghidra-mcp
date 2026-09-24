@@ -139,12 +139,9 @@ public class GetUiCursorEndpointTest extends TestCase {
     }
 
     public void testRemovedEndpointsGoneFromSourceAndCatalog() throws IOException {
-        String plugin = Files.readString(
-                Paths.get("src/main/java/com/xebyte/GhidraMCPPlugin.java"), StandardCharsets.UTF_8);
-        String catalog = Files.readString(Paths.get("tests/endpoints.json"), StandardCharsets.UTF_8);
-        String service = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/ProgramScriptService.java"),
-                StandardCharsets.UTF_8);
+        String plugin = ProjectSource.readMainSource("GhidraMCPPlugin.java");
+        String catalog = ProjectSource.readProjectFile("tests/endpoints.json");
+        String service = ProjectSource.readMainSource("core", "ProgramScriptService.java");
         for (String gone : new String[]{
                 "/get_current_address",
                 "/get_current_function",

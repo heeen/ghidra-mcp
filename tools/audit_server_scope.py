@@ -64,6 +64,7 @@ from pathlib import Path
 GUI_SERVER = "src/main/java/com/xebyte/GhidraMCPPlugin.java"
 HEADLESS_SERVER = "src/main/java/com/xebyte/headless/GhidraMCPHeadlessServer.java"
 HEADLESS_HANDLER = "src/main/java/com/xebyte/headless/HeadlessEndpointHandler.java"
+MANUAL_DESCRIPTORS = "src/main/java/com/xebyte/core/ManualToolDescriptors.java"
 
 #: Scope values written into ``tests/endpoints.json``. Ordered so the emitted
 #: array is stable regardless of discovery order.
@@ -84,10 +85,13 @@ _ADD_ALL_RE = re.compile(
 )
 
 # Literal route registration, for the "registered but not catalogued" report.
-# The GUI uses `server.createContext("/x", ...)`; headless wraps it in
-# `safeContext("/x", ...)`. Mirrors ManualToolDescriptorsParityTest's patterns.
+# The GUI registers either directly as `server.createContext("/x", ...)` or,
+# for the routes it serves on every transport, through a RouteRegistrar as
+# `reg.add("/x", ...)`; headless wraps it in `safeContext("/x", ...)`.
+# Mirrors ManualToolDescriptorsParityTest's patterns -- keep the two in step,
+# or a route registered in one idiom reads here as registered nowhere.
 _LITERAL_CONTEXT_RE = re.compile(
-    r"(?:(?:server|httpServer)\.createContext|safeContext)\s*\(\s*\"([^\"]+)\""
+    r"(?:(?:server|httpServer)\.createContext|reg\.add|safeContext)\s*\(\s*\"([^\"]+)\""
 )
 
 # A field declaration: `private final com.xebyte.core.ListingService listingService;`
@@ -377,12 +381,36 @@ def server_manual_paths(repo: Path, server_rel: str) -> list[str]:
     if m is None:
         return []
     body, _ = _balanced(text, m.end() - 1)
-    # First argument is the scanner; the rest are string literals.
-    return [
-        a[1:-1]
-        for a in _split_args(body)[1:]
+    # First argument is the scanner; the rest are either string literals or a
+    # single named constant. The GUI passes ManualToolDescriptors.SHARED_ROUTES
+    # (one list, shared by the TCP and UDS scanners) rather than repeating the
+    # paths at each call site, so resolve that constant instead of reading it as
+    # "no routes registered" -- which silently drops every hand-coded GUI route
+    # out of the derivation.
+    args = _split_args(body)[1:]
+    literals = [
+        a[1:-1] for a in args
         if len(a) >= 2 and a.startswith('"') and a.endswith('"')
     ]
+    if literals:
+        return literals
+    for a in args:
+        const = a.rsplit(".", 1)[-1]
+        if const.isupper() or "_" in const:
+            resolved = _manual_route_constant(repo, const)
+            if resolved:
+                return resolved
+    return []
+
+
+def _manual_route_constant(repo: Path, name: str) -> list[str]:
+    """Read a ``List.of("/a", "/b", ...)`` constant out of ManualToolDescriptors."""
+    text = _strip_comments((repo / MANUAL_DESCRIPTORS).read_text(encoding="utf-8"))
+    m = re.search(rf"\b{re.escape(name)}\s*=\s*List\.of\s*\(", text)
+    if m is None:
+        return []
+    body, _ = _balanced(text, m.end() - 1)
+    return re.findall(r'"([^"]+)"', body)
 
 
 def server_literal_contexts(repo: Path, server_rel: str) -> list[str]:

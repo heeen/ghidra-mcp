@@ -287,7 +287,10 @@ def test_the_asymmetry_is_wiring_not_per_tool_annotation(live):
     headless = set(live["headless_service_classes"])
     assert gui - headless == {"DebuggerService", "PromptPolicyService"}
     assert headless - gui == {"HeadlessManagementService"}
-    assert len(gui & headless) == 11
+    # 16: the 11 that predate this branch plus FunctionBundle, TypeReference,
+    # ChangeToken, Partition and Checkout, all of which take a ThreadingStrategy
+    # and are therefore wired into both servers.
+    assert len(gui & headless) == 16
 
 
 # --------------------------------------------------------------------------

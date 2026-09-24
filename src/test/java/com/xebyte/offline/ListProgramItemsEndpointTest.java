@@ -161,10 +161,8 @@ public class ListProgramItemsEndpointTest extends TestCase {
     }
 
     public void testRemovedEndpointsGoneFromSourceAndCatalog() throws IOException {
-        String listing = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/ListingService.java"),
-                StandardCharsets.UTF_8);
-        String catalog = Files.readString(Paths.get("tests/endpoints.json"), StandardCharsets.UTF_8);
+        String listing = ProjectSource.readMainSource("core", "ListingService.java");
+        String catalog = ProjectSource.readProjectFile("tests/endpoints.json");
         for (String gone : new String[] {
                 "/list_classes",
                 "/list_methods",

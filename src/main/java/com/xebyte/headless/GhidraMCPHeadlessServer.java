@@ -383,6 +383,13 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // INFRASTRUCTURE ENDPOINTS (not in service layer)
         // ==========================================================================
 
+        // Liveness banner, served by BOTH servers so the doctor has one route
+        // that identifies which of them answered. /health is headless-only and
+        // /mcp/health is GUI-only, so neither can play this role.
+        safeContext("/check_connection", exchange -> {
+            sendResponse(exchange, "Connection OK - GhidraMCP Headless Server v" + VERSION);
+        });
+
         safeContext("/health", exchange -> {
             sendResponse(exchange, endpointHandler.getHealth());
         });
@@ -430,7 +437,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // GhidraMCPPlugin; see ManualToolDescriptors for the shared metadata
         // source. Found via a live-schema-vs-catalog diff (v6.0.0).
         com.xebyte.core.ManualToolDescriptors.addAll(scanner,
-            "/configure_analyzer",
+            "/check_connection", "/configure_analyzer",
             "/delete_project", "/exit_ghidra", "/health",
             "/list_projects", "/mcp/schema",
             "/server/admin/set_permissions", "/server/admin/terminate_all_checkouts",

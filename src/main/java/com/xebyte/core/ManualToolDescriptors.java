@@ -53,6 +53,7 @@ public final class ManualToolDescriptors {
      */
     public static final List<String> SHARED_ROUTES = List.of(
         "/batch_apply_documentation",
+        "/check_connection",
         "/exit_ghidra",
         "/mcp/health",
         "/mcp/schema",
@@ -144,6 +145,11 @@ public final class ManualToolDescriptors {
             "goto", "True navigates the CodeBrowser to address before anything else. Must be a JSON boolean: any other type is read as FALSE. Default false.",
             "score", "True (the default) appends a compact completeness score. Must be a JSON boolean: any other type falls back to the default and is read as TRUE, so the string false does not switch it off.",
             "program", "Accepted but not read by this route: every step runs against the active program. Use the individual tools when you need to target a specific one.");
+        add(m, "/check_connection", "GET", "utility",
+            "Liveness probe: is the server up, and which one is it. Deliberately not\n"
+            + " /mcp/health, which returns pool/uptime/memory diagnostics; this one\n"
+            + " stays cheap and is served by the GUI and headless servers alike.",
+            ToolAccess.READ_ONLY);
         add(m, "/configure_analyzer", "POST", "analysis", "Configure an analysis plugin", ToolAccess.WRITE,
             "name", "Analyzer name exactly as Ghidra registers it, e.g. Decompiler Parameter ID.",
             "enabled", "True enables the analyzer, false disables it. Omitting the key entirely leaves the current setting alone.",

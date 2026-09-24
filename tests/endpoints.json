@@ -1,12 +1,13 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 253,
+  "total_endpoints": 241,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
     "datatype": "Struct/enum/union CRUD, apply data types, type conflicts, validation",
     "debugger": "Ghidra TraceRmi debugger control (GUI only)",
+    "decompile-checkout": "Decompilation checkout: a browsable on-disk tree of a program's decompiled functions that keeps itself current as the program changes",
     "documentation": "Function hashing, cross-binary documentation transfer, undocumented discovery",
     "emulation": "P-code emulation (run functions with controlled inputs)",
     "function": "Decompile, disassemble, rename, prototype, variables, create/delete functions",
@@ -169,7 +170,11 @@
       "method": "GET",
       "category": "analysis",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -183,7 +188,11 @@
       "method": "GET",
       "category": "analysis",
       "params": [
+        "function",
         "name",
+        "address",
+        "function_address",
+        "function_name",
         "include_xrefs",
         "include_callees",
         "include_callers",
@@ -203,7 +212,11 @@
       "method": "GET",
       "category": "analysis",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "compact",
         "addresses",
         "program"
@@ -299,7 +312,11 @@
       "method": "POST",
       "category": "documentation",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program",
         "version_override",
         "dry_run"
@@ -359,7 +376,11 @@
       "method": "GET",
       "category": "datatype",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -411,6 +432,8 @@
       "method": "POST",
       "category": "function",
       "params": [
+        "function",
+        "address",
         "function_address",
         "function_name",
         "parameter_renames",
@@ -496,7 +519,7 @@
         "gui",
         "headless"
       ],
-      "description": "Health check endpoint"
+      "description": "Liveness probe: is the server up, and which one is it. Deliberately not\n /mcp/health, which returns pool/uptime/memory diagnostics; this one\n stays cheap and is served by the GUI and headless servers alike."
     },
     {
       "path": "/checkin_program",
@@ -532,7 +555,11 @@
       "method": "POST",
       "category": "comment",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "clear_plate",
         "clear_pre",
         "clear_eol",
@@ -1082,20 +1109,134 @@
       "description": "List all open debug traces"
     },
     {
-      "path": "/decompile_function",
-      "method": "GET",
-      "category": "function",
+      "path": "/decompile_checkout_configure",
+      "method": "POST",
+      "category": "decompile-checkout",
       "params": [
-        "address",
-        "functions",
-        "program",
-        "timeout"
+        "checkout",
+        "root",
+        "strategies",
+        "band_size",
+        "max_file_bytes",
+        "exclusions",
+        "include_only",
+        "throttle_percent",
+        "disassemble_missing"
       ],
       "servers": [
         "gui",
         "headless"
       ],
-      "description": "Decompile function"
+      "description": "Change a checkout's configuration: exclusions (tag: / partition: / range:), enabled strategies, band size, max file bytes, throttle. Exclusions are how you keep library code out of the tree — on a driver DLL, excluding two CRT compartments took it from 3,230 functions to 2,036. Classifies the change and acts on it: narrowing deletes now-out-of-scope bodies immediately (leaving them would be a lie a Grep would still hit); widening marks STALE with pending_functions; repartitioning sets requires_full_resweep. Never starts a sweep."
+    },
+    {
+      "path": "/decompile_checkout_create",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "program",
+        "root",
+        "strategies",
+        "band_size",
+        "max_file_bytes",
+        "exclusions",
+        "include_only",
+        "throttle_percent",
+        "disassemble_missing"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Create a decompilation checkout: a program's decompiled C materialised as a file tree you can Grep and Glob. Use this when you need corpus-wide search — 'which functions reference this string, constant or peripheral' — which is impractical one function at a time. Registers the checkout and writes checkout.json / STATUS.md; does NOT sweep (call decompile_checkout_start). Adopts an existing tree at the derived root, reconciling swept_at_modification_number against the live program. Unrelated to Ghidra version-control checkouts (/server/version_control/*)."
+    },
+    {
+      "path": "/decompile_checkout_delete",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "checkout",
+        "delete_files"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Deregister a checkout; with delete_files=true also remove its on-disk tree (containment-checked). The program itself is untouched — this only removes generated files."
+    },
+    {
+      "path": "/decompile_checkout_pin_module",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "function",
+        "address",
+        "name",
+        "function_address",
+        "function_name",
+        "module",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Pin a function to a checkout compartment forever. Use this when you have learned the real module boundary — e.g. after reading evidence that a function belongs with driver code despite the cascade placing it in an address band — and you want that placement to stick across resweeps, checkout delete/recreate, and every other tool. Stored as a program property map (CheckoutModule) at the function entry, not in checkout config. Empty module string unpins. Does not rewrite the tree by itself — the next sweep (or reconcile) honours the pin ahead of the whole partitioner cascade."
+    },
+    {
+      "path": "/decompile_checkout_refresh",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "checkout",
+        "addresses",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Reconcile a checkout tree with the live program. Three primitives cover every change: replace (re-decompile a function still in both), insert (place a new function by pin or address containment, split the file if over budget), remove (drop a deleted function's block and its file if emptied). Pass addresses to target a set; omit them for a full index-driven pass that compares address sets and input fingerprints and decompiles only mismatches. There is no mark_stale — the reconciler is closed under every program change. Filesystem-only: does not mutate program state. Bridge-only — the agent never calls this; the bridge invokes it after writes so the tree stays current without agent reasoning.",
+      "internal": true
+    },
+    {
+      "path": "/decompile_checkout_start",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "checkout"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Enqueue the sweep that fills a checkout's tree, then poll decompile_checkout_status. Returns in milliseconds with phase queued and the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for a 3,200-function driver DLL, ~11 min for a 25,000-function static binary."
+    },
+    {
+      "path": "/decompile_checkout_status",
+      "method": "GET",
+      "category": "decompile-checkout",
+      "params": [
+        "checkout"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Status, config and root path of a decompilation checkout — poll this after decompile_checkout_start, then Grep the reported root. READ_ONLY, so it is safe to call while planning. Reports phase, progress, and freshness against the live program. Never errors when the program is closed or the root is missing — reports program:\"closed\" / root_present:false instead, because that is exactly when you are asking. With no selector, lists every checkout plus adoptable trees found on disk."
+    },
+    {
+      "path": "/decompile_checkout_stop",
+      "method": "POST",
+      "category": "decompile-checkout",
+      "params": [
+        "checkout"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Cancel a queued or running sweep. Idempotent — stopping an idle or complete checkout is success, not an error. The partial tree is left in place and STATUS.md records state: cancelled, so whatever was already written stays safe to Grep."
     },
     {
       "path": "/delete_bookmark",
@@ -1145,7 +1286,11 @@
       "method": "POST",
       "category": "function",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -1321,7 +1466,11 @@
       "method": "POST",
       "category": "emulation",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "registers",
         "memory",
         "max_steps",
@@ -1437,6 +1586,33 @@
       "description": "Find dead code"
     },
     {
+      "path": "/find_functions",
+      "method": "GET",
+      "category": "listing",
+      "params": [
+        "name_pattern",
+        "pattern",
+        "query",
+        "name",
+        "regex",
+        "min_xrefs",
+        "max_xrefs",
+        "calling_convention",
+        "has_custom_name",
+        "is_thunk",
+        "is_external",
+        "sort_by",
+        "offset",
+        "limit",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Find functions: every filter is optional, so with none it lists the whole program a page at a time. Filter by name (substring or regex=true), xref count, calling convention, whether the name is user-given, thunk or external; sort by address, name or xref_count. Replaces list_functions, list_functions_enhanced, search_functions and search_functions_enhanced, which returned four different shapes for the same question."
+    },
+    {
       "path": "/find_next_undefined_function",
       "method": "GET",
       "category": "analysis",
@@ -1473,7 +1649,11 @@
       "method": "GET",
       "category": "documentation",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "source_program",
         "target_program",
         "threshold",
@@ -1484,6 +1664,26 @@
         "headless"
       ],
       "description": "Cross-binary fuzzy function matching. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution."
+    },
+    {
+      "path": "/find_type_users",
+      "method": "GET",
+      "category": "datatype",
+      "params": [
+        "type_name",
+        "name",
+        "data_type",
+        "datatype",
+        "field",
+        "field_name",
+        "timeout_seconds",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Functions whose decompilation references a data type (or one of its fields). Used by resource invalidation after struct/enum edits so only the affected function URIs are refreshed. Runs off the EDT with a hard timeout; a timeout returns the partial set with timed_out=true rather than failing."
     },
     {
       "path": "/find_undocumented_by_string",
@@ -1504,7 +1704,11 @@
       "method": "GET",
       "category": "function",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -1558,18 +1762,17 @@
       "description": "Get bulk function hashes"
     },
     {
-      "path": "/get_bulk_xrefs",
-      "method": "POST",
-      "category": "xref",
+      "path": "/get_change_token",
+      "method": "GET",
+      "category": "program",
       "params": [
-        "addresses",
         "program"
       ],
       "servers": [
         "gui",
         "headless"
       ],
-      "description": "Get xrefs for multiple addresses"
+      "description": "Return program.getModificationNumber() — a cheap monotonic token that moves on real DB changes (rename, comment, struct edit, undo/redo, GUI writes, scripts) and never on a read. Used by the bridge to invalidate cached function resources after out-of-band edits."
     },
     {
       "path": "/get_comment",
@@ -1584,51 +1787,6 @@
         "headless"
       ],
       "description": "Get listing comments (plate/pre/eol/post/repeatable) at ANY address, including data addresses (works on functions and data globals alike). Returns each comment kind plus a convenience `comment` (first non-empty) and `has_comment` flag."
-    },
-    {
-      "path": "/get_current_address",
-      "method": "GET",
-      "category": "getter",
-      "params": [],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get cursor address (GUI only)"
-    },
-    {
-      "path": "/get_current_function",
-      "method": "GET",
-      "category": "getter",
-      "params": [],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get function at cursor (GUI only)"
-    },
-    {
-      "path": "/get_current_program_info",
-      "method": "GET",
-      "category": "program",
-      "params": [
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get current program info"
-    },
-    {
-      "path": "/get_current_selection",
-      "method": "GET",
-      "category": "getter",
-      "params": [],
-      "servers": [
-        "gui"
-      ],
-      "description": "Get highlighted address ranges in the CodeBrowser listing (GUI only). Returns {program, is_empty, ranges:[{start,end,length}], min_address, max_address, num_addresses} or an empty-selection payload when nothing is highlighted."
     },
     {
       "path": "/get_entry_points",
@@ -1704,26 +1862,15 @@
       "description": "Get full call graph"
     },
     {
-      "path": "/get_function_by_address",
-      "method": "GET",
-      "category": "function",
-      "params": [
-        "address",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get function at address"
-    },
-    {
       "path": "/get_function_call_graph",
       "method": "GET",
       "category": "xref",
       "params": [
+        "function",
         "name",
         "address",
+        "function_name",
+        "function_address",
         "depth",
         "direction",
         "program"
@@ -1733,40 +1880,6 @@
         "headless"
       ],
       "description": "Get call graph"
-    },
-    {
-      "path": "/get_function_callees",
-      "method": "GET",
-      "category": "xref",
-      "params": [
-        "name",
-        "address",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get functions called"
-    },
-    {
-      "path": "/get_function_callers",
-      "method": "GET",
-      "category": "xref",
-      "params": [
-        "name",
-        "address",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get calling functions"
     },
     {
       "path": "/get_function_count",
@@ -1786,7 +1899,11 @@
       "method": "GET",
       "category": "documentation",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -1800,7 +1917,11 @@
       "method": "GET",
       "category": "documentation",
       "params": [
+        "function",
         "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -1810,44 +1931,15 @@
       "description": "Get function hash"
     },
     {
-      "path": "/get_function_jump_targets",
-      "method": "GET",
-      "category": "xref",
-      "params": [
-        "name",
-        "address",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get jump targets"
-    },
-    {
-      "path": "/get_function_labels",
-      "method": "GET",
-      "category": "symbol",
-      "params": [
-        "name",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get labels in function"
-    },
-    {
       "path": "/get_function_pcode",
       "method": "GET",
       "category": "analysis",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "granularity",
         "program"
       ],
@@ -1856,20 +1948,6 @@
         "headless"
       ],
       "description": "Dump raw P-code for a function (issue #192). Returns low (basic-iter) and high (HighFunction) P-code with basic blocks and varnodes. Granularity controls output: 'basic' = basic-block iter only (less memory), 'high' = HighFunction graph (default; includes both BB iter and op-iter). For P-code emulators / ML pipelines / alternative decompilers."
-    },
-    {
-      "path": "/get_function_signature",
-      "method": "GET",
-      "category": "documentation",
-      "params": [
-        "address",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get function feature signature"
     },
     {
       "path": "/get_function_tags",
@@ -1886,38 +1964,29 @@
       "description": "List all tags assigned to a specific function. Accepts either a function address or a function name."
     },
     {
-      "path": "/get_function_variables",
+      "path": "/get_functions",
       "method": "GET",
       "category": "function",
       "params": [
-        "function_name",
-        "address",
-        "program",
-        "limit",
-        "filter"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List all variables in a function. Accepts function_name or address (address takes precedence). Use address to avoid name-lookup issues after a recent rename."
-    },
-    {
-      "path": "/get_function_xrefs",
-      "method": "GET",
-      "category": "xref",
-      "params": [
+        "function",
         "name",
         "address",
-        "offset",
-        "limit",
+        "function_address",
+        "function_name",
+        "functions",
+        "fields",
+        "include_call_context",
+        "call_context_limit",
+        "call_context_lines",
+        "call_context_window",
+        "include_disasm",
         "program"
       ],
       "servers": [
         "gui",
         "headless"
       ],
-      "description": "Get function cross-references"
+      "description": "Everything about one or many functions in a single call. Pass functions= as a comma-separated list of names or addresses for bulk mode (up to 20); omit it and pass function=/name=/address= for one. Pass fields= as a comma-separated subset to skip work you do not need — omitted or empty returns everything. When the requested fields need no decompiled text (e.g. fields=callers,callees,signature,labels,entry_point), the target function is NOT decompiled (238 ms cold / 5–10 ms warm per function); only decompiled_code (and call_context when enabled) pays that cost. Decompiled text renders EOL comments (// style), so comments written with set_comment are visible in the code. Replaces get_function_by_address, get_function_variables, get_function_xrefs, decompile_function, get_function_bundle, and the former get_function_callers/callees/labels/signature tools. Completeness scoring is NOT included — call analyze_function_completeness for that."
     },
     {
       "path": "/get_language_metadata",
@@ -2015,6 +2084,19 @@
       "description": "Get data type size and info"
     },
     {
+      "path": "/get_ui_cursor",
+      "method": "GET",
+      "category": "getter",
+      "params": [
+        "type"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "What the analyst is looking at right now: cursor address, the function under it, the listing selection, and the focused program — one call instead of four. type=address|function|selection|program|all (default all). Takes NO program parameter: the focused program is an answer this reports, not an input. Headless has no analyst and no cursor, so every facet reports null with a reason there — use the program parameter on a data endpoint instead. Replaces get_current_address, get_current_function, get_current_selection and get_current_program_info."
+    },
+    {
       "path": "/get_valid_data_types",
       "method": "GET",
       "category": "datatype",
@@ -2027,17 +2109,6 @@
         "headless"
       ],
       "description": "Get valid data type names"
-    },
-    {
-      "path": "/get_version",
-      "method": "GET",
-      "category": "utility",
-      "params": [],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get plugin version"
     },
     {
       "path": "/get_xrefs_from",
@@ -2061,6 +2132,7 @@
       "category": "xref",
       "params": [
         "address",
+        "addresses",
         "offset",
         "limit",
         "program"
@@ -2202,36 +2274,6 @@
       "description": "List the member functions of a C++ class. A function counts as a member if it lives in the class's namespace (e.g. after set_function_this_type re-parents it) OR its implicit 'this' parameter types as '<class> *'. Each result reports how it matched (namespace / this_type / both). Replaces the manual 'search __thiscall functions then read each signature' workflow."
     },
     {
-      "path": "/list_classes",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List namespace/class names"
-    },
-    {
-      "path": "/list_data_items",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List defined data"
-    },
-    {
       "path": "/list_data_items_by_xrefs",
       "method": "GET",
       "category": "listing",
@@ -2283,36 +2325,6 @@
       "description": "List data types"
     },
     {
-      "path": "/list_exports",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List exported symbols"
-    },
-    {
-      "path": "/list_external_locations",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List external locations"
-    },
-    {
       "path": "/list_function_tags",
       "method": "GET",
       "category": "function",
@@ -2326,34 +2338,6 @@
         "headless"
       ],
       "description": "List all program-wide function tag definitions with their use counts."
-    },
-    {
-      "path": "/list_functions",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List functions with addresses"
-    },
-    {
-      "path": "/list_functions_enhanced",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List functions with metadata"
     },
     {
       "path": "/list_globals",
@@ -2374,51 +2358,6 @@
         "headless"
       ],
       "description": "List global variables"
-    },
-    {
-      "path": "/list_imports",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List imported symbols"
-    },
-    {
-      "path": "/list_methods",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List all function names with pagination"
-    },
-    {
-      "path": "/list_namespaces",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List all namespaces"
     },
     {
       "path": "/list_open_programs",
@@ -2443,6 +2382,22 @@
         "headless"
       ],
       "description": "List program option groups (e.g. 'Program Information', 'Analyzers', 'Decompiler'). Each group holds typed keyâ†’value settings; use get_program_options to read a group's entries."
+    },
+    {
+      "path": "/list_program_items",
+      "method": "GET",
+      "category": "listing",
+      "params": [
+        "kind",
+        "offset",
+        "limit",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "List one kind of program inventory with pagination. Replaces list_classes, list_methods, list_namespaces, list_imports, list_exports, list_segments, list_data_items and list_external_locations — one envelope ({kind, items, count, total, limit, offset}), item shape varies by kind: classes|methods|namespaces → string names; imports|exports → {address, name}; segments → {name, start, end, size, readable, writable, executable, initialized}; data_items → {address, block, label, size, type}; external_locations → {name, library, address, original_imported_name?}. Unknown kind is an error listing the valid values."
     },
     {
       "path": "/list_project_files",
@@ -2512,21 +2467,6 @@
         "headless"
       ],
       "description": "List available Ghidra scripts"
-    },
-    {
-      "path": "/list_segments",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List memory segments"
     },
     {
       "path": "/list_shadowed_globals",
@@ -2728,6 +2668,22 @@
       "description": "Open an existing Ghidra project (.gpr file or directory). GUI mode adds optional `headless` (default true) to suppress auto-launching CodeBrowser, and optional `program` to auto-launch CodeBrowser for a specific file when headless=false. Headless server ignores the extra params."
     },
     {
+      "path": "/partition_program",
+      "method": "GET",
+      "category": "analysis",
+      "params": [
+        "band_size",
+        "min_size",
+        "strategies",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Group a program's functions into compartments so you can decide which regions to ignore before reading any of them — on a driver DLL the two library compartments were 42% of the binary and identifiable from their referenced strings alone. Uses a cascade of structural strategies (class names in log strings, peripheral register pages, linker literal locality, address banding); each reports whether it applied and why, and every partition carries the evidence that formed it. Slugs are machine-generated and assert nothing about content. Read-only: reports the partitioning, does not write the Program Tree. Runs off the EDT; costs one pass over every instruction."
+    },
+    {
       "path": "/project/info",
       "method": "GET",
       "category": "project",
@@ -2895,6 +2851,9 @@
       "category": "function",
       "params": [
         "old_name",
+        "function_address",
+        "function",
+        "oldName",
         "new_name",
         "program",
         "strict_mode"
@@ -2911,6 +2870,8 @@
       "category": "symbol",
       "params": [
         "target",
+        "address",
+        "function_address",
         "new_name",
         "kind",
         "old_name",
@@ -2927,7 +2888,11 @@
       "method": "POST",
       "category": "function",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "variable_renames",
         "force_individual",
         "program"
@@ -3085,22 +3050,6 @@
       "description": "Search data types"
     },
     {
-      "path": "/search_functions",
-      "method": "GET",
-      "category": "listing",
-      "params": [
-        "name_pattern",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Search functions by name"
-    },
-    {
       "path": "/search_functions_by_tag",
       "method": "GET",
       "category": "function",
@@ -3115,30 +3064,6 @@
         "headless"
       ],
       "description": "List all functions that have a specified tag attached. Returns name + entry address."
-    },
-    {
-      "path": "/search_functions_enhanced",
-      "method": "GET",
-      "category": "analysis",
-      "params": [
-        "name_pattern",
-        "min_xrefs",
-        "max_xrefs",
-        "calling_convention",
-        "has_custom_name",
-        "is_thunk",
-        "is_external",
-        "regex",
-        "sort_by",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Advanced function search"
     },
     {
       "path": "/search_instructions",
@@ -3249,6 +3174,7 @@
       "method": "GET",
       "category": "server",
       "params": [
+        "repo",
         "path"
       ],
       "servers": [
@@ -3455,6 +3381,7 @@
       "params": [
         "function_address",
         "no_return",
+        "noReturn",
         "program"
       ],
       "servers": [
@@ -3501,6 +3428,7 @@
       "params": [
         "function_address",
         "this_type",
+        "thisType",
         "program"
       ],
       "servers": [
@@ -3581,7 +3509,11 @@
       "method": "POST",
       "category": "function",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "variable_name",
         "storage",
         "program"
@@ -3599,6 +3531,7 @@
       "params": [
         "function_address",
         "variable_name",
+        "parameter_name",
         "new_type",
         "program"
       ],
@@ -3613,7 +3546,11 @@
       "method": "POST",
       "category": "function",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "variables",
         "program"
       ],
@@ -3705,7 +3642,11 @@
       "method": "GET",
       "category": "datatype",
       "params": [
+        "function",
+        "address",
+        "name",
         "function_address",
+        "function_name",
         "prototype",
         "calling_convention",
         "program"
