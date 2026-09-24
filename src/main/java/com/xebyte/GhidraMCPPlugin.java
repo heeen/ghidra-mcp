@@ -369,7 +369,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         if (udsEnabled) {
             try {
                 ServerManager.getInstance().registerTool(tool,
-                    uds -> registerHandCodedRoutes(uds::createContext));
+                    http -> registerHandCodedRoutes(http::route));
                 udsOk = true;
                 Msg.info(this, "GhidraMCP UDS server active at " + ServerManager.getInstance().getSocketPath());
             } catch (IOException e) {
@@ -517,7 +517,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 if (uds && !ServerManager.getInstance().isRunning()) {
                     try {
                         ServerManager.getInstance().registerTool(tool,
-                            udsServer -> registerHandCodedRoutes(udsServer::createContext));
+                            http -> registerHandCodedRoutes(http::route));
                         started.append("UDS: ").append(ServerManager.getInstance().getSocketPath());
                     } catch (IOException e) {
                         Msg.showError(getClass(), null, "GhidraMCP", "Failed to start UDS server: " + e.getMessage());
