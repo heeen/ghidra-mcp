@@ -45,19 +45,11 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
     }
 
     public void testRemovedEndpointsGoneFromSourceAndCatalog() throws IOException {
-        String catalog = Files.readString(Paths.get("tests/endpoints.json"), StandardCharsets.UTF_8);
-        String functionSvc = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/FunctionService.java"),
-                StandardCharsets.UTF_8);
-        String xref = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/XrefCallGraphService.java"),
-                StandardCharsets.UTF_8);
-        String symbol = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/SymbolLabelService.java"),
-                StandardCharsets.UTF_8);
-        String docs = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/DocumentationHashService.java"),
-                StandardCharsets.UTF_8);
+        String catalog = ProjectSource.readProjectFile("tests/endpoints.json");
+        String functionSvc = ProjectSource.readMainSource("core", "FunctionService.java");
+        String xref = ProjectSource.readMainSource("core", "XrefCallGraphService.java");
+        String symbol = ProjectSource.readMainSource("core", "SymbolLabelService.java");
+        String docs = ProjectSource.readMainSource("core", "DocumentationHashService.java");
         for (String gone : new String[] {
                 "/get_function_callees",
                 "/get_function_callers",
@@ -76,9 +68,7 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
             assertFalse("catalog must not list " + gone,
                     catalog.contains("\"path\": \"" + gone + "\""));
         }
-        String bundle = Files.readString(
-                Paths.get("src/main/java/com/xebyte/core/FunctionBundleService.java"),
-                StandardCharsets.UTF_8);
+        String bundle = ProjectSource.readMainSource("core", "FunctionBundleService.java");
         assertTrue(bundle.contains("path = \"/get_functions\""));
         assertTrue(bundle.contains("fields"));
         assertTrue(bundle.contains("functions"));

@@ -185,7 +185,7 @@ class VersionInfo {
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 239 endpoints for reverse engineering automation. " +
+                  "Provides 227 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -1702,6 +1702,15 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return "/mcp/health".equals(path) || "/check_connection".equals(path);
     }
 
+    /** Liveness banner: is the plugin up, and what is it looking at. */
+    private String checkConnection() {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Connected: GhidraMCP plugin running, but no program loaded";
+        }
+        return "Connected: GhidraMCP plugin running with program '" + program.getName() + "'";
+    }
+
     /**
      * Register the hand-coded routes — the utility / GUI-state / Ghidra-Server
      * endpoints that predate the {@code @McpTool} convention and have no service
@@ -1724,6 +1733,14 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // memory. Used by the dashboard to show a "server is struggling" badge
         // and by regression tests to assert healthy baselines.
         // ==========================================================================
+        // Liveness, deliberately separate from /mcp/health's diagnostics: this is
+        // the probe `tools/ghidra_server_health_check.py` uses to identify which
+        // server answered, and both servers must serve it. Folding it into the
+        // diagnostics route in 7.0 left the doctor with no route common to both.
+        reg.add("/check_connection", safeHandler(exchange -> {
+            sendResponse(exchange, checkConnection());
+        }));
+
         reg.add("/mcp/health", safeHandler(exchange -> {
             int active = activeRequests.get();
             long uptimeSec = (System.currentTimeMillis() - serverStartMillis) / 1000L;

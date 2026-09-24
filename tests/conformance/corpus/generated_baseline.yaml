@@ -1388,8 +1388,8 @@ tool_cases:
 - tool: search_instructions
   tier: read
   args:
-    function: calc_crc16
     limit: 5
+    mnemonic: ret
     program: Benchmark.dll
   assert:
     is_error: false

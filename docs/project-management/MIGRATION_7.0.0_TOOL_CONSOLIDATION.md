@@ -35,7 +35,7 @@ call site is rewritten.
 | `batch_remove_function_tags(assignments)` | `remove_function_tag` (+ `assignments[]`) | `remove_function_tag(assignments=[...])` |
 | `batch_create_labels(labels)` | `create_label` (+ `labels[]`) | `create_label(labels=[...])` |
 | `batch_delete_labels(labels)` | `delete_label` (+ `labels[]`) | `delete_label(labels=[...])` |
-| `batch_decompile(functions)` | `decompile_function` (+ `functions=`) | `decompile_function(functions="a,b,c")` |
+| `batch_decompile(functions)` | `get_functions` (+ `functions=`, `fields=decompiled_code`) | `get_functions(functions="a,b,c", fields="decompiled_code")` |
 | `batch_analyze_completeness(addresses)` | `analyze_function_completeness` (+ `addresses[]`) | `analyze_function_completeness(addresses=[...])` |
 | `rename_variable(...)` | `rename_variables` (already many; also accepts one) | `rename_variables(function_address, variable_renames=[{old,new}])` |
 | `batch_set_variable_types(function_address, variable_types)` | `set_variables` | `set_variables(function_address, variables=[{name,type}])` |
