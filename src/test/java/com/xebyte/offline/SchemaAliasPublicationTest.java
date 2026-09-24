@@ -55,20 +55,21 @@ public class SchemaAliasPublicationTest extends TestCase {
     // ------------------------------------------------------------------
 
     /**
-     * The motivating case: {@code /get_function_labels} declares
-     * {@code aliases = {"function", "address", "function_address"}} on its
-     * {@code name} parameter. Before the fix the schema showed only {@code name},
-     * so {@code address=} looked like an unknown parameter.
+     * The motivating case was {@code /get_function_labels}, whose {@code name}
+     * parameter declared aliases the schema then dropped, so {@code address=}
+     * looked like an unknown parameter. That endpoint has since been folded into
+     * {@code /get_functions}; the contract it proved is unchanged, so the test
+     * now rides the selector that replaced it.
      */
-    public void testGetFunctionLabelsPublishesItsAliases() {
-        AnnotationScanner.ParamDescriptor p = findParam("/get_function_labels", "name");
-        assertNotNull("/get_function_labels has no 'name' parameter", p);
+    public void testFunctionSelectorPublishesItsAliases() {
+        AnnotationScanner.ParamDescriptor p = findParam("/get_functions", "function");
+        assertNotNull("/get_functions has no 'function' parameter", p);
         assertEquals("declared aliases must be published verbatim, in declaration order",
-            List.of("function", "address", "function_address"), p.aliases());
+            List.of("name", "address", "function_address", "function_name"), p.aliases());
 
         String json = p.toJson();
         assertTrue("ParamDescriptor.toJson must emit an aliases array; got: " + json,
-            json.contains("\"aliases\": [\"function\", \"address\", \"function_address\"]"));
+            json.contains("\"aliases\": [\"name\", \"address\", \"function_address\", \"function_name\"]"));
     }
 
     /**
