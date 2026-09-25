@@ -190,7 +190,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     // Static singleton: one TCP server shared across all tool windows (fixes #35).
     // Serves this plugin's own FrontEnd-mode services; the socket is ServerManager's.
-    private static McpHttpServer server;
     private static final long serverStartMillis = System.currentTimeMillis();
     private static int instanceCount = 0;
     // Live plugin instances. The TCP server's route lambdas capture the
@@ -354,53 +353,47 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         migrateLegacyNamingOption(options);
         refreshNamingPolicyFromOptions();
 
-        boolean udsEnabled = options.getBoolean(UDS_ENABLED_OPTION, DEFAULT_UDS_ENABLED);
-        boolean tcpEnabled = options.getBoolean(TCP_ENABLED_OPTION, DEFAULT_TCP_ENABLED);
-
-        // Start UDS if enabled
-        boolean udsOk = false;
-        if (udsEnabled) {
+        // One server, both transports. Each is attempted independently inside
+        // McpHttpServer, so a Unix socket that cannot bind still leaves TCP up --
+        // that is the safety net this used to arrange by starting two servers.
+        ServerManager mgr = ServerManager.getInstance();
+        if (mgr.isRunning()) {
+            // Another tool window already brought it up; this one only joins the
+            // tool map so deregistration counts it. The running server keeps the
+            // scanner it was started with.
+            Msg.info(this, "GhidraMCP server already running — sharing with this tool window.");
             try {
-                ServerManager.getInstance().registerTool(tool, buildScanner(), this::registerHandCodedRoutes);
-                udsOk = true;
-                Msg.info(this, "GhidraMCP UDS server active at " + ServerManager.getInstance().getSocketPath());
+                mgr.registerTool(tool, buildScanner(), this::registerHandCodedRoutes, transportConfig());
             } catch (IOException e) {
-                Msg.warn(this, "Failed to start UDS server: " + e.getMessage());
+                Msg.warn(this, "Failed to register tool with the running server: " + e.getMessage());
             }
-        }
-
-        // Start TCP if enabled, or as safety net if nothing else is running
-        if (tcpEnabled || (!udsOk && !tcpEnabled)) {
-            if (server != null && isServerRunning()) {
-                Msg.info(this, "GhidraMCP TCP server already running — sharing with this tool window.");
-            } else {
-                try {
-                    startServer();
-                    ownsServer = true;
-                    // Surface the ACTUAL bound port (may differ from the
-                    // configured port when port-range fallback fired -- see
-                    // Copilot review on #175). Falls back to configured port
-                    // if for some reason the bound-port wasn't recorded.
-                    int actualPort = ServerManager.getInstance().getBoundTcpPort();
-                    int configuredPort = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
-                    int displayedPort = actualPort > 0 ? actualPort : configuredPort;
-                    String portStr = displayedPort == configuredPort
-                        ? String.valueOf(displayedPort)
-                        : (displayedPort + " (fallback; configured " + configuredPort + " was in use)");
-                    if (!tcpEnabled) {
-                        Msg.warn(this, "GhidraMCP: UDS failed or disabled — started TCP on port " + portStr + " as safety net.");
-                    } else {
-                        Msg.info(this, "GhidraMCP TCP server active on port " + portStr);
-                    }
-                } catch (IOException e) {
-                    Msg.error(this, "Failed to start TCP server: " + e.getMessage(), e);
-                    if (!udsOk) {
-                        Msg.showError(this, null, "GhidraMCP Server Error",
-                            "Failed to start MCP server.\n\n" +
-                            "No transports are running.\n\n" +
-                            "Error: " + e.getMessage());
-                    }
+        } else {
+            McpHttpServer.Config config = transportConfig();
+            try {
+                mgr.registerTool(tool, buildScanner(), this::registerHandCodedRoutes, config);
+                ownsServer = true;
+                java.nio.file.Path sock = mgr.getSocketPath();
+                if (sock != null) {
+                    Msg.info(this, "GhidraMCP UDS server active at " + sock);
                 }
+                int actualPort = mgr.getBoundTcpPort();
+                if (actualPort > 0) {
+                    // The bound port is not always the configured one: port-range
+                    // fallback fires whenever another instance holds it (#175).
+                    String portStr = actualPort == config.port()
+                        ? String.valueOf(actualPort)
+                        : (actualPort + " (fallback; configured " + config.port() + " was in use)");
+                    Msg.info(this, "GhidraMCP TCP server active on port " + portStr);
+                }
+                if (config.uds() && sock == null) {
+                    Msg.warn(this, "GhidraMCP: the Unix socket did not bind; TCP only.");
+                }
+            } catch (IOException e) {
+                Msg.error(this, "Failed to start MCP server: " + e.getMessage(), e);
+                Msg.showError(this, null, "GhidraMCP Server Error",
+                    "Failed to start MCP server.\n\n" +
+                    "No transports are running.\n\n" +
+                    "Error: " + e.getMessage());
             }
         }
 
@@ -408,7 +401,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     private boolean isServerRunning() {
-        return server != null;
+        return ServerManager.getInstance().isRunning();
     }
 
     private void refreshNamingPolicyFromOptions() {
@@ -473,12 +466,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     private void stopServer() {
-        if (server != null) {
-            server.stop();
-            server = null;
-            // No stale port in /mcp/instance_info once the listener is gone (#196).
-            ServerManager.getInstance().setBoundTcpPort(-1);
-        }
+        ServerManager.getInstance().stopUdsServer();
     }
 
     private void updateMenuActionStates() {
@@ -492,28 +480,23 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         startServerAction = new DockingAction("Start Server", getName()) {
             @Override
             public void actionPerformed(ActionContext context) {
-                Options opts = tool.getOptions(OPTION_CATEGORY_NAME);
-                refreshNamingPolicyFromOptions();
-                boolean uds = opts.getBoolean(UDS_ENABLED_OPTION, DEFAULT_UDS_ENABLED);
-                boolean tcp = opts.getBoolean(TCP_ENABLED_OPTION, DEFAULT_TCP_ENABLED);
                 StringBuilder started = new StringBuilder();
-                if (uds && !ServerManager.getInstance().isRunning()) {
-                    try {
-                        ServerManager.getInstance().registerTool(tool, buildScanner(),
-                                GhidraMCPPlugin.this::registerHandCodedRoutes);
-                        started.append("UDS: ").append(ServerManager.getInstance().getSocketPath());
-                    } catch (IOException e) {
-                        Msg.showError(getClass(), null, "GhidraMCP", "Failed to start UDS server: " + e.getMessage());
-                    }
-                }
-                if (tcp && !isServerRunning()) {
+                ServerManager mgr = ServerManager.getInstance();
+                if (!mgr.isRunning()) {
                     try {
                         startServer();
                         ownsServer = true;
-                        if (started.length() > 0) started.append("\n");
-                        started.append("TCP: port ").append(server.tcpPort());
+                        java.nio.file.Path sock = mgr.getSocketPath();
+                        if (sock != null) {
+                            started.append("UDS: ").append(sock);
+                        }
+                        int boundPort = mgr.getBoundTcpPort();
+                        if (boundPort > 0) {
+                            if (started.length() > 0) started.append("\n");
+                            started.append("TCP: port ").append(boundPort);
+                        }
                     } catch (IOException e) {
-                        Msg.showError(getClass(), null, "GhidraMCP", "Failed to start TCP server: " + e.getMessage());
+                        Msg.showError(getClass(), null, "GhidraMCP", "Failed to start MCP server: " + e.getMessage());
                     }
                 }
                 updateMenuActionStates();
@@ -554,8 +537,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 String udsStatus = udsRunning
                     ? "Running (" + ServerManager.getInstance().getSocketPath() + ")"
                     : "Disabled";
-                String tcpStatus = isServerRunning()
-                    ? "Running (port " + server.tcpPort() + ")"
+                int statusPort = ServerManager.getInstance().getBoundTcpPort();
+                String tcpStatus = statusPort > 0
+                    ? "Running (port " + statusPort + ")"
                     : "Disabled";
                 String message = "GhidraMCP Server Status\n\n" +
                     "UDS: " + udsStatus + "\n" +
@@ -600,25 +584,37 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return scanner;
     }
 
-    private void startServer() throws IOException {
+    /**
+     * The transports this tool asks for, from its options.
+     *
+     * <p>Several Ghidra instances are the common case (#175), so TCP falls back
+     * through the next ports and the bridge learns the bound one from
+     * /mcp/instance_info.
+     */
+    private McpHttpServer.Config transportConfig() {
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
-        refreshNamingPolicyFromOptions();
+        boolean uds = options.getBoolean(UDS_ENABLED_OPTION, DEFAULT_UDS_ENABLED);
+        boolean tcp = options.getBoolean(TCP_ENABLED_OPTION, DEFAULT_TCP_ENABLED);
+        // Neither enabled would leave the plugin installed and unreachable, with
+        // nothing in the UI saying so. TCP is the one that reports a port.
+        if (!uds && !tcp) {
+            tcp = true;
+        }
         int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
+        return new McpHttpServer.Config(uds, tcp, "127.0.0.1", port,
+            TCP_PORT_FALLBACK_RANGE, ServerManager.GUI_WORKERS);
+    }
 
-        // Plugin reload: drop the previous listener before binding again.
-        stopServer();
-
-        AnnotationScanner scanner = buildScanner();
-
-        McpHttpServer http = new McpHttpServer(ServerManager.getInstance()::buildInstanceInfo);
-        http.endpoints(scanner);
-        registerHandCodedRoutes(http);
-        // Several Ghidra instances are the common case (#175): fall back through the
-        // next ports; the bridge learns the bound one from /mcp/instance_info.
-        http.start(new McpHttpServer.Config(false, true, "127.0.0.1", port,
-            TCP_PORT_FALLBACK_RANGE, ServerManager.GUI_WORKERS));
-        server = http;
-        ServerManager.getInstance().setBoundTcpPort(http.tcpPort());
+    /** Start (or restart) the one server, serving this tool's services. */
+    private void startServer() throws IOException {
+        refreshNamingPolicyFromOptions();
+        ServerManager mgr = ServerManager.getInstance();
+        if (mgr.isRunning()) {
+            mgr.rebind(buildScanner(), this::registerHandCodedRoutes);
+        } else {
+            mgr.registerTool(tool, buildScanner(), this::registerHandCodedRoutes,
+                transportConfig());
+        }
     }
 
     // ----------------------------------------------------------------------------------
@@ -3824,23 +3820,32 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             // The TCP routes (createContext lambdas) captured THIS
             // instance's services. With this PluginTool now disposed,
             // every subsequent HTTP request would execute against stale
-            // services. Hand the server to a surviving instance by
-            // restarting it so the routes re-bind to live services.
+            // services. Hand the server to a surviving instance by rebinding it
+            // to that instance's scanner.
+            //
+            // This now covers BOTH transports. It used to restart only the
+            // plugin's own TCP listener, because the Unix socket was served by
+            // ServerManager's separate service set, which read through a
+            // provider backed by the live tool map and so had nothing stale to
+            // hand over. With one service set there is exactly one thing tied
+            // to this window's lifetime, and both listeners serve from it.
             Msg.info(this, "GhidraMCP: owning tool window closed with "
                 + instanceCount + " other window(s) still active — handing "
-                + "TCP server ownership to a survivor.");
-            stopServer();
+                + "the server to a survivor.");
             ownsServer = false;
             GhidraMCPPlugin survivor = liveInstances.isEmpty() ? null : liveInstances.get(0);
             if (survivor != null) {
                 try {
-                    survivor.startServer();
+                    ServerManager.getInstance().rebind(survivor.buildScanner(),
+                        survivor::registerHandCodedRoutes);
                     survivor.ownsServer = true;
                 } catch (IOException e) {
-                    Msg.error(this, "GhidraMCP: failed to restart TCP server "
-                        + "on surviving tool window: " + e.getMessage()
+                    Msg.error(this, "GhidraMCP: failed to hand the server to a "
+                        + "surviving tool window: " + e.getMessage()
                         + " — use Tools > GhidraMCP > Start Server.");
                 }
+            } else {
+                stopServer();
             }
         } else {
             Msg.info(this, "GhidraMCP: " + instanceCount

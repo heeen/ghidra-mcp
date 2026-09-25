@@ -29,18 +29,38 @@ public class ServerManager {
     public static final int GUI_WORKERS = 3;
 
     private McpHttpServer server;
-    // Bound TCP port for the legacy HTTP transport when the plugin picked
-    // a port-range fallback (issue #175). -1 means "TCP not running or
-    // port unknown". Surfaced via /mcp/instance_info so the bridge can
-    // connect to the actual bound port without hard-coding 8089.
-    private volatile int boundTcpPort = -1;
+    /** What the caller last started with, so a survivor can take the server over. */
+    private AnnotationScanner lastScanner;
+    private java.util.function.Consumer<McpHttpServer> lastGuiEndpoints;
+    private McpHttpServer.Config lastConfig;
 
-    public void setBoundTcpPort(int port) {
-        this.boundTcpPort = port;
+    /**
+     * The port the TCP listener actually bound, or -1 when it is not running.
+     *
+     * <p>Read from the listener rather than tracked in a field: with port-range
+     * fallback (#175) the bound port is not the configured one, and a field only
+     * tells the truth for as long as everyone remembers to update it.
+     */
+    public int getBoundTcpPort() {
+        return server != null ? server.tcpPort() : -1;
     }
 
-    public int getBoundTcpPort() {
-        return boundTcpPort;
+    /**
+     * Rebind the server to a different caller's scanner.
+     *
+     * <p>The routes close over the services of whichever plugin instance
+     * supplied the scanner. When that tool window is disposed those services go
+     * stale, so a surviving window hands its own over. McpHttpServer refuses a
+     * duplicate route by design, so this is a stop and a fresh start, not a swap.
+     */
+    public synchronized void rebind(AnnotationScanner scanner,
+            java.util.function.Consumer<McpHttpServer> guiEndpoints) throws IOException {
+        if (server == null || lastConfig == null) {
+            return;
+        }
+        McpHttpServer.Config config = lastConfig;
+        stopServer();
+        startServer(scanner, guiEndpoints, config);
     }
 
     private ServerManager() {}
@@ -56,14 +76,15 @@ public class ServerManager {
      * One service set, one provider, one answer.
      */
     public synchronized void registerTool(PluginTool tool, AnnotationScanner scanner,
-            java.util.function.Consumer<McpHttpServer> guiEndpoints) throws IOException {
+            java.util.function.Consumer<McpHttpServer> guiEndpoints,
+            McpHttpServer.Config config) throws IOException {
         String toolId = String.valueOf(System.identityHashCode(tool));
         tools.put(toolId, tool);
         activeToolId.compareAndSet(null, toolId);
         Msg.info(this, "Registered tool " + toolId + " (total: " + tools.size() + ")");
 
         if (server == null) {
-            startServer(scanner, guiEndpoints);
+            startServer(scanner, guiEndpoints, config);
         }
     }
 
@@ -105,7 +126,11 @@ public class ServerManager {
     }
 
     private void startServer(AnnotationScanner scanner,
-            java.util.function.Consumer<McpHttpServer> guiEndpoints) throws IOException {
+            java.util.function.Consumer<McpHttpServer> guiEndpoints,
+            McpHttpServer.Config config) throws IOException {
+        lastScanner = scanner;
+        lastGuiEndpoints = guiEndpoints;
+        lastConfig = config;
         server = new McpHttpServer(this::buildInstanceInfo);
         server.endpoints(scanner);
         // Advertise the plugin's hand-coded routes too -- a route missing from the
@@ -115,7 +140,7 @@ public class ServerManager {
             ManualToolDescriptors.addAll(scanner, ManualToolDescriptors.SHARED_ROUTES);
             guiEndpoints.accept(server);
         }
-        server.start(new McpHttpServer.Config(true, false, null, 0, 0, GUI_WORKERS));
+        server.start(config);
     }
 
     public Map<String, Object> buildInstanceInfo() {
@@ -141,8 +166,6 @@ public class ServerManager {
             }
         }
         Map<String, Object> info = instanceInfo(proj, openNames);
-        // The TCP listener is the plugin's own McpHttpServer, not this one.
-        info.put("tcp_port", boundTcpPort);
         info.put("tools", tools.size());
         return info;
     }

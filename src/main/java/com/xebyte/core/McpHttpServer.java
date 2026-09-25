@@ -96,7 +96,7 @@ public final class McpHttpServer {
         }
         routes.put("/mcp/instance_info", exchange -> {
             Map<String, Object> info = new LinkedHashMap<>(instanceInfo.get());
-            info.putIfAbsent("tcp_port", tcpPort);
+            info.put("tcp_port", tcpPort);
             sendJson(exchange, Response.ok(info).toJson());
         });
         AtomicInteger threadNo = new AtomicInteger(1);
@@ -105,16 +105,33 @@ public final class McpHttpServer {
             t.setDaemon(true);
             return t;
         });
-        try {
-            if (config.uds()) {
+        // Each requested transport is attempted independently: a Unix socket that
+        // cannot bind (stale socket dir, hostile /tmp) must not take TCP down with
+        // it, because TCP is the fallback the GUI relies on to stay reachable.
+        // Only when nothing at all came up is this a failure.
+        IOException udsFailure = null;
+        IOException tcpFailure = null;
+        if (config.uds()) {
+            try {
                 startUds();
+            } catch (IOException | RuntimeException e) {
+                udsFailure = e instanceof IOException io ? io : new IOException(e);
+                Msg.warn(this, "UDS listener did not start: " + e.getMessage());
             }
-            if (config.tcp()) {
+        }
+        if (config.tcp()) {
+            try {
                 startTcp(config);
+            } catch (IOException | RuntimeException e) {
+                tcpFailure = e instanceof IOException io ? io : new IOException(e);
+                Msg.warn(this, "TCP listener did not start: " + e.getMessage());
             }
-        } catch (IOException | RuntimeException e) {
+        }
+        if (uds == null && tcp == null) {
             stop();
-            throw e;
+            IOException first = udsFailure != null ? udsFailure : tcpFailure;
+            throw first != null ? first
+                    : new IOException("No transport was requested");
         }
     }
 
