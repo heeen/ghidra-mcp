@@ -93,20 +93,14 @@ public class ProgramScriptService {
     }
 
     /**
-     * Retrieve the PluginTool from the ProgramProvider if it is a GuiProgramProvider/FrontEndProgramProvider.
-     * Returns null when running headless.
+     * The PluginTool this provider works through; null when running headless.
+     *
+     * <p>A seed, not the answer: callers needing a CodeViewer or a
+     * ProgramManager walk the project's running tools from here, which is why
+     * the FrontEnd tool serves even though it carries neither.
      */
     private PluginTool getToolFromProvider() {
-        if (programProvider instanceof GuiProgramProvider gpp) {
-            return gpp.getTool();
-        }
-        if (programProvider instanceof FrontEndProgramProvider fpp) {
-            return fpp.getTool();
-        }
-        if (programProvider instanceof MultiToolProgramProvider mtp) {
-            return mtp.getActiveTool();
-        }
-        return null;
+        return programProvider.getTool();
     }
 
     private boolean runAutoAnalysisAndPersistFlags(Program program, boolean force) {
@@ -1251,10 +1245,7 @@ public class ProgramScriptService {
             return Response.err("Failed to close program: " + error.get());
         }
 
-        boolean releasedCache = false;
-        if (programProvider instanceof FrontEndProgramProvider fpp) {
-            releasedCache = fpp.releaseCachedProgram(search);
-        }
+        boolean releasedCache = programProvider.releaseCachedProgram(search);
 
         return Response.ok(JsonHelper.mapOf(
             "success", true,
@@ -1999,8 +1990,7 @@ public class ProgramScriptService {
     }
 
     private void closeOpenProgramForFile(PluginTool tool, String filePath) {
-        if (programProvider instanceof MultiToolProgramProvider mtp) {
-            mtp.closeProgramByPath(filePath);
+        if (programProvider.closeProgramByPath(filePath)) {
             return;
         }
         if (tool == null) {
@@ -2471,11 +2461,9 @@ public class ProgramScriptService {
             }
         }
 
-        if (programProvider instanceof MultiToolProgramProvider mtp) {
-            ProgramManager pm = mtp.findProgramManager();
-            if (pm != null && !managers.contains(pm)) {
-                managers.add(pm);
-            }
+        ProgramManager providerPm = programProvider.findProgramManager();
+        if (providerPm != null && !managers.contains(providerPm)) {
+            managers.add(providerPm);
         }
         return managers;
     }
@@ -2490,10 +2478,8 @@ public class ProgramScriptService {
         ProgramManager pm = tool.getService(ProgramManager.class);
         if (pm != null) return pm;
 
-        if (programProvider instanceof MultiToolProgramProvider mtp) {
-            pm = mtp.findProgramManager();
-            if (pm != null) return pm;
-        }
+        pm = programProvider.findProgramManager();
+        if (pm != null) return pm;
 
         ghidra.framework.model.Project project = tool.getProject();
         if (project == null) return null;

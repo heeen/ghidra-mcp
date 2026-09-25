@@ -112,7 +112,7 @@ public class ServerManager {
     }
 
     public PluginTool getActiveTool() {
-        return programProvider != null ? programProvider.getActiveTool() : null;
+        return programProvider != null ? programProvider.getTool() : null;
     }
 
     public MultiToolProgramProvider getProgramProvider() { return programProvider; }

@@ -41,7 +41,7 @@ public class MultiToolProgramProvider implements ProgramProvider {
         }
 
         // Also check running tools via ToolManager (discovers CodeBrowser instances)
-        PluginTool anyTool = getActiveTool();
+        PluginTool anyTool = getTool();
         if (anyTool != null) {
             try {
                 ghidra.framework.model.Project proj = anyTool.getProject();
@@ -150,6 +150,7 @@ public class MultiToolProgramProvider implements ProgramProvider {
     /**
      * Find a ProgramManager from any registered or running tool.
      */
+    @Override
     public ProgramManager findProgramManager() {
         List<ProgramManager> managers = findAllProgramManagers();
         return managers.isEmpty() ? null : managers.get(0);
@@ -158,6 +159,7 @@ public class MultiToolProgramProvider implements ProgramProvider {
     /**
      * Close every open instance of the program at the given project path.
      */
+    @Override
     public boolean closeProgramByPath(String path) {
         boolean closed = false;
         if (path == null || path.trim().isEmpty()) {
@@ -184,7 +186,8 @@ public class MultiToolProgramProvider implements ProgramProvider {
     /**
      * Get the currently active PluginTool.
      */
-    public PluginTool getActiveTool() {
+    @Override
+    public PluginTool getTool() {
         String id = activeToolId.get();
         if (id != null) {
             PluginTool t = tools.get(id);

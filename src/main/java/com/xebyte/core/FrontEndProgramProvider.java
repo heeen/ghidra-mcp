@@ -667,6 +667,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
      * @param nameOrPath Program name or project path
      * @return true if a cached program reference was released
      */
+    @Override
     public boolean releaseCachedProgram(String nameOrPath) {
         if (nameOrPath == null || nameOrPath.trim().isEmpty()) {
             return false;
@@ -720,6 +721,7 @@ public class FrontEndProgramProvider implements ProgramProvider {
      *
      * @return The PluginTool
      */
+    @Override
     public PluginTool getTool() {
         return tool;
     }
