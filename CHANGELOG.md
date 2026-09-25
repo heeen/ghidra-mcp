@@ -51,6 +51,28 @@ client's own built-in tools, so the search costs no permission surface.
   `/switch_program`) keep working via `getActiveProgramOrError`. A non-blank
   name that misses `ProgramProvider.resolveProgram` no longer falls back to
   the current program.
+- **Headless serves the Unix socket; TCP is opt-in.** It always listens on
+  `$XDG_RUNTIME_DIR/ghidra-mcp/ghidra-<pid>.sock`, where the bridge discovers
+  instances, and on TCP only with `--port` / `--bind` (or
+  `GHIDRA_MCP_BIND_ADDRESS`, which the Docker entrypoint passes). Before, a
+  headless instance was TCP-only, so `list_instances` never showed it and
+  `connect_instance` refused whenever a GUI instance with another project was
+  running — several headless servers (one per project) were unreachable by
+  name.
+- **One HTTP server implementation, `McpHttpServer`.** The GUI socket, the
+  GUI's TCP server and the headless server each had their own dispatch loop,
+  schema and instance-info routes, request guard and error handling. They now
+  share one: bearer auth on every transport, the cross-origin check on TCP,
+  the body bound, generic errors, slow-request logging, port fallback. A
+  route registered twice fails at startup. The GUI's socket now uses the same
+  3-thread pool as its TCP server instead of an unbounded one. The unused
+  `ServerTransport` / `TcpTransport` / `ServerLifecycle` classes are gone.
+- **Stopping headless no longer loses edits.** Unsaved programs are saved to
+  the local project (the working copy, for a shared project) when the server
+  shuts down or switches project. Registering the shutdown hook at
+  `ShutdownPriority.FIRST` does not work: Ghidra's `ShutdownHook.compareTo`
+  subtracts priorities, `Integer.MIN_VALUE` overflows, and FIRST runs after
+  the database disposers.
 
 ### Added — this branch
 
