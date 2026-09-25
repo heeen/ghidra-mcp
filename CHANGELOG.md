@@ -30,6 +30,54 @@ five ways of reading a function into `/get_functions`.
 Stacked on the consolidation above rather than shipped separately — same
 unreleased 7.0.0.
 
+#### One GUI provider, one service set, one server
+
+The GUI answered the same question two ways depending on which transport
+carried it. `ServerManager` built a `MultiToolProgramProvider` and its own copy
+of all eighteen services for the Unix socket; `GhidraMCPPlugin` built a second
+set over `FrontEndProgramProvider` for TCP. The providers did not agree on what
+"open" means:
+
+| | sees |
+| --- | --- |
+| `MultiToolProgramProvider` | only programs a CodeBrowser already has open |
+| `FrontEndProgramProvider` | those, plus its LRU cache, plus opening from the project on demand |
+
+So `get_metadata(program=ls)` returned `Program not found: ls` over UDS and the
+real metadata over TCP, for a program sitting in the project tree. Measured on a
+live GUI before the change. The bridge prefers UDS, so this is the side users
+met. The two halves were built five months apart (`c7cd536` moved the plugin to
+FrontEnd, `9def7ac` added UDS and its second service set) and never reconciled.
+
+`FrontEndProgramProvider` was already the superset, so it absorbed the two
+side-effecting operations `MultiTool` carried —`findProgramManager()` and
+`closeProgramByPath()` — both of which fall out of the `ToolManager` walk it
+already did. `MultiToolProgramProvider` and the long-dead `GuiProgramProvider`
+are deleted, and `ServerManager` now serves the scanner the plugin hands it.
+
+Services no longer ask what kind of provider they have. Seven `instanceof`
+downcasts in `ProgramScriptService` became four default methods on
+`ProgramProvider` (`getTool`, `findProgramManager`, `closeProgramByPath`,
+`releaseCachedProgram`), so headless inherits "cannot" without a branch.
+`getActiveTool()` went with them: nothing needed an "active CodeBrowser" as a
+distinct idea, because every caller either just needs a tool that has a project
+or already walks `ToolManager.getRunningTools()` from whatever tool it is given.
+
+There is also one server now instead of two. `McpHttpServer` opens each
+requested transport independently, so a Unix socket that cannot bind no longer
+takes TCP down with it — the safety net the plugin used to arrange by starting a
+second server — and only a start where nothing came up is an error. The bound
+TCP port is read from the listener rather than tracked in a `volatile int` that
+two places had to keep in sync, which is what left a stale port in
+`/mcp/instance_info` after a stop (#196).
+
+One consequence worth naming: routes close over the services of whichever plugin
+instance supplied the scanner, so closing that tool window leaves them stale.
+The old split was accidentally immune on the UDS side, because those services
+read through a provider backed by the live tool map. Consolidating removed that
+immunity, so the dispose handoff now rebinds the whole server to a surviving
+window rather than only restarting the plugin's TCP listener.
+
 An agent can now materialise a program's decompilation into an on-disk tree,
 already partitioned into compartments with the evidence that justified each
 one, then answer corpus questions ("which functions touch this MMIO page",

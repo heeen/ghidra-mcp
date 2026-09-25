@@ -2500,10 +2500,9 @@ public class ProgramScriptService {
     /**
      * Find an existing ProgramManager or launch a new CodeBrowser to get one.
      *
-     * <p>Resolution order matters for window hygiene: when GhidraMCPPlugin lives
-     * in the FrontEnd tool, the FrontEnd has no ProgramManager and the
-     * MultiToolProgramProvider check is only relevant to that provider — never
-     * the case under FrontEndProgramProvider. Without scanning running tools
+     * <p>Resolution order matters for window hygiene: GhidraMCPPlugin lives in
+     * the FrontEnd tool, which has no ProgramManager of its own, so the answer
+     * always comes from a running CodeBrowser. Without scanning running tools
      * first, every /open_program and /import_file call would fall through to
      * ws.runTool and accumulate a fresh CodeBrowser per call. The scan reuses
      * any existing CodeBrowser so additional programs open as tabs in it.
