@@ -33,8 +33,12 @@ public final class McpHttpServer {
      * @param uds       serve on {@code <socket dir>/ghidra-<pid>.sock}
      * @param tcp       serve on {@code bindAddress:port}
      * @param portRange ports to try from {@code port} upward when it is taken (1 = exact)
+     * @param workers   request threads, shared by both listeners. Small in the GUI:
+     *                  most handlers queue on the single Swing thread, and a deeper
+     *                  queue there trips Ghidra's own 20 s Swing.runNow deadlock timeouts.
      */
-    public record Config(boolean uds, boolean tcp, String bindAddress, int port, int portRange) {}
+    public record Config(boolean uds, boolean tcp, String bindAddress, int port, int portRange,
+            int workers) {}
 
     /** Liveness probes stay token-less. Exact match: a prefix would let traversal inherit it. */
     private static final Set<String> AUTH_EXEMPT = Set.of("/mcp/health", "/health", "/check_connection");
@@ -44,11 +48,16 @@ public final class McpHttpServer {
     private final Supplier<Map<String, Object>> instanceInfo;
     private final AtomicInteger activeRequests = new AtomicInteger();
     private AnnotationScanner scanner;
+    private java.util.concurrent.ThreadPoolExecutor executor;
     private UdsHttpServer uds;
     private com.sun.net.httpserver.HttpServer tcp;
     private volatile int tcpPort = -1;
 
-    /** @param instanceInfo the {@code /mcp/instance_info} payload; {@code tcp_port} is added here */
+    /**
+     * @param instanceInfo the {@code /mcp/instance_info} payload. {@code tcp_port} is this
+     *                     server's own unless the supplier sets it -- the GUI's socket and
+     *                     TCP are separate servers, and both must advertise the TCP port.
+     */
     public McpHttpServer(Supplier<Map<String, Object>> instanceInfo) {
         this.instanceInfo = instanceInfo;
     }
@@ -90,6 +99,12 @@ public final class McpHttpServer {
             info.putIfAbsent("tcp_port", tcpPort);
             sendJson(exchange, Response.ok(info).toJson());
         });
+        AtomicInteger threadNo = new AtomicInteger(1);
+        executor = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(config.workers(), r -> {
+            Thread t = new Thread(r, "GhidraMCP-HTTP-" + threadNo.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        });
         try {
             if (config.uds()) {
                 startUds();
@@ -114,6 +129,18 @@ public final class McpHttpServer {
             uds.stop();
             uds = null;
         }
+        if (executor != null) {
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            executor = null;
+        }
     }
 
     public boolean isRunning() { return uds != null || tcp != null; }
@@ -127,6 +154,20 @@ public final class McpHttpServer {
 
     public int routeCount() { return routes.size(); }
 
+    /** Request-pool figures for a health endpoint; empty while stopped. */
+    public Map<String, Object> poolStats() {
+        var pool = executor;
+        if (pool == null) {
+            return Map.of();
+        }
+        return JsonHelper.mapOf(
+                "configured_size", pool.getCorePoolSize(),
+                "current_size", pool.getPoolSize(),
+                "largest_size", pool.getLargestPoolSize(),
+                "queue_size", pool.getQueue().size(),
+                "completed_tasks", pool.getCompletedTaskCount());
+    }
+
     // ------------------------------------------------------------------ listeners
 
     private void startUds() throws IOException {
@@ -138,7 +179,7 @@ public final class McpHttpServer {
         Files.createDirectories(socketDir);
         hardenSocketDir(socketDir);
         cleanStaleSockets(socketDir);
-        uds = new UdsHttpServer(socketDir.resolve("ghidra-" + ProcessHandle.current().pid() + ".sock"));
+        uds = new UdsHttpServer(socketDir.resolve("ghidra-" + ProcessHandle.current().pid() + ".sock"), executor);
         // A browser cannot open a Unix socket, so no cross-origin guard here.
         routes.forEach((path, handler) -> uds.createContext(path, guard(handler, false)));
         uds.start();
@@ -173,11 +214,7 @@ public final class McpHttpServer {
             UdsHttpServer.Handler guarded = guard(handler, true);
             tcp.createContext(path, sun -> guarded.handle(new SunHttpExchangeAdapter(sun)));
         });
-        tcp.setExecutor(Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "GhidraMCP-TCP-Worker");
-            t.setDaemon(true);
-            return t;
-        }));
+        tcp.setExecutor(executor);
         tcp.start();
         Msg.info(this, "GhidraMCP TCP server listening on " + config.bindAddress() + ":" + tcpPort);
     }
