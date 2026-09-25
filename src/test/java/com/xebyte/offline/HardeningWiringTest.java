@@ -30,16 +30,9 @@ public class HardeningWiringTest extends TestCase {
         return ProjectSource.readMainSource(parts);
     }
 
-    /** The TCP request wrapper must invoke the cross-origin guard. */
-    public void testTcpSafeHandlerCallsCrossOriginGuard() throws IOException {
-        String src = read("GhidraMCPPlugin.java");
-        assertTrue("safeHandler must call rejectCrossOriginRequest",
-                src.contains("rejectCrossOriginRequest("));
-    }
-
     /**
      * McpHttpServer's guard -- which every route on every transport of both the
-     * headless server and the GUI's UDS side goes through -- must apply the
+     * headless server and the GUI plugin goes through -- must apply the
      * cross-origin guard (on TCP) and the bearer token before the handler runs.
      */
     public void testMcpHttpServerGuardsEveryRoute() throws IOException {
@@ -152,9 +145,10 @@ public class HardeningWiringTest extends TestCase {
     public void testRequestBodiesAreBounded() throws IOException {
         assertTrue("JsonHelper.parseBody must bound the read via readNBytes",
                 read("core", "JsonHelper.java").contains("readNBytes"));
-        assertTrue("TCP parsePostParams must bound the read",
-                read("GhidraMCPPlugin.java").contains("readNBytes")
-                        && read("GhidraMCPPlugin.java").contains("exceedsMaxBody"));
+        assertTrue("GUI parsePostParams must bound the read",
+                read("GhidraMCPPlugin.java").contains("readNBytes"));
+        assertTrue("McpHttpServer must reject an oversized Content-Length (413)",
+                read("core", "McpHttpServer.java").contains("exceedsMaxBody"));
         assertTrue("UDS must reject oversized Content-Length (413)",
                 read("core", "UdsHttpServer.java").contains("MAX_REQUEST_BODY_BYTES"));
     }
@@ -165,9 +159,6 @@ public class HardeningWiringTest extends TestCase {
      * validation messages are unaffected.
      */
     public void testTopLevelErrorsAreGeneric() throws IOException {
-        String plugin = read("GhidraMCPPlugin.java");
-        assertTrue("safeHandler catch must return a generic message",
-                plugin.contains("Internal server error. See the Ghidra application log"));
         assertTrue("McpHttpServer guard catch must return a generic message",
                 read("core", "McpHttpServer.java")
                         .contains("Internal server error. See the Ghidra application log"));

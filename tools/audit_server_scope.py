@@ -85,13 +85,11 @@ _ADD_ALL_RE = re.compile(
 )
 
 # Literal route registration, for the "registered but not catalogued" report.
-# The GUI registers either directly as `server.createContext("/x", ...)` or,
-# for the routes it serves on every transport, through a RouteRegistrar as
-# `reg.add("/x", ...)`; headless registers it as `server.route("/x", ...)`.
+# Both servers register hand-coded routes on McpHttpServer as `http.route("/x", ...)`.
 # Mirrors ManualToolDescriptorsParityTest's patterns -- keep the two in step,
 # or a route registered in one idiom reads here as registered nowhere.
 _LITERAL_CONTEXT_RE = re.compile(
-    r"(?:(?:server|httpServer)\.createContext|reg\.add|server\.route)\s*\(\s*\"([^\"]+)\""
+    r"http\.route\s*\(\s*\"([^\"]+)\""
 )
 
 # A field declaration: `private final com.xebyte.core.ListingService listingService;`
@@ -414,7 +412,7 @@ def _manual_route_constant(repo: Path, name: str) -> list[str]:
 
 
 def server_literal_contexts(repo: Path, server_rel: str) -> list[str]:
-    """Routes one server registers with a literal path via createContext/server.route.
+    """Routes one server registers with a literal path via http.route.
 
     Not the same question as :func:`server_manual_paths`: ``addAll`` says what the
     server *publishes in /mcp/schema*, this says what it will actually *answer*.

@@ -56,7 +56,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     private static final int DEFAULT_PORT = 8089;
     private static final String DEFAULT_BIND_ADDRESS = "127.0.0.1";
 
-    private McpHttpServer server;
+    private McpHttpServer http;
     private HeadlessProgramProvider programProvider;
     private DirectThreadingStrategy threadingStrategy;
     private int port = DEFAULT_PORT;
@@ -370,12 +370,12 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     }
 
     private void startServer() throws IOException {
-        server = new McpHttpServer(this::instanceInfo);
+        http = new McpHttpServer(this::instanceInfo);
         registerEndpoints();
-        server.start(new McpHttpServer.Config(true, tcp, bindAddress, port, 1));
+        http.start(new McpHttpServer.Config(true, tcp, bindAddress, port, 1, 10));
         running = true;
-        System.out.println("Serving on " + server.socketPath()
-                + (tcp ? " and " + bindAddress + ":" + server.tcpPort() : ""));
+        System.out.println("Serving on " + http.socketPath()
+                + (tcp ? " and " + bindAddress + ":" + http.tcpPort() : ""));
         if (com.xebyte.core.SecurityConfig.getInstance().isAuthEnabled()) {
             System.out.println("Auth: enabled (GHIDRA_MCP_AUTH_TOKEN)");
         }
@@ -397,11 +397,11 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // Liveness banner, served by BOTH servers so the doctor has one route
         // that identifies which of them answered. /health is headless-only and
         // /mcp/health is GUI-only, so neither can play this role.
-        server.route("/check_connection", exchange -> {
+        http.route("/check_connection", exchange -> {
             sendResponse(exchange, "Connection OK - GhidraMCP Headless Server v" + VERSION);
         });
 
-        server.route("/health", exchange -> {
+        http.route("/health", exchange -> {
             sendResponse(exchange, endpointHandler.getHealth());
         });
 
@@ -422,9 +422,9 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             endpointHandler.getPartitionService(),
             endpointHandler.getCheckoutService());
 
-        server.endpoints(scanner);
+        http.endpoints(scanner);
 
-        // These routes are registered below via their own server.route(...) calls
+        // These routes are registered below via their own http.route(...) calls
         // (utility/server/project endpoints that predate the @McpTool convention),
         // so they are already live and callable. Without this they stayed
         // invisible in /mcp/schema -- and therefore invisible to the Python
@@ -456,12 +456,12 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // --- Project Lifecycle --- (/create_project registered via HeadlessManagementService)
 
-        server.route("/delete_project", exchange -> {
+        http.route("/delete_project", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             sendResponse(exchange, endpointHandler.deleteProject(params.get("projectPath")));
         });
 
-        server.route("/list_projects", exchange -> {
+        http.route("/list_projects", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             sendResponse(exchange, endpointHandler.listProjects(params.get("searchDir")));
         });
@@ -479,21 +479,21 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // --- Server Endpoints ---
 
-        server.route("/server/connect", exchange -> {
+        http.route("/server/connect", exchange -> {
             sendResponse(exchange, serverManager.connect());
         });
 
         // /server/status registered via HeadlessManagementService
 
-        server.route("/server/repositories", exchange -> {
+        http.route("/server/repositories", exchange -> {
             sendResponse(exchange, serverManager.listRepositories());
         });
 
-        server.route("/server/disconnect", exchange -> {
+        http.route("/server/disconnect", exchange -> {
             sendResponse(exchange, serverManager.disconnect());
         });
 
-        server.route("/server/repository/files", exchange -> {
+        http.route("/server/repository/files", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String repo = params.get("repo");
             String path = params.get("path");
@@ -501,56 +501,56 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             sendResponse(exchange, serverManager.listRepositoryFiles(repo, path));
         });
 
-        server.route("/server/repository/file", exchange -> {
+        http.route("/server/repository/file", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             String repo = params.get("repo");
             String path = params.get("path");
             sendResponse(exchange, serverManager.getFileInfo(repo, path));
         });
 
-        server.route("/server/repository/create", exchange -> {
+        http.route("/server/repository/create", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             sendResponse(exchange, serverManager.createRepository(params.get("name")));
         });
 
         // --- Version Control ---
 
-        server.route("/server/version_control/checkout", exchange -> {
+        http.route("/server/version_control/checkout", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             sendResponse(exchange, serverManager.checkoutFile(params.get("repo"), params.get("path")));
         });
 
-        server.route("/server/version_control/checkin", exchange -> {
+        http.route("/server/version_control/checkin", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             boolean keepCheckedOut = parseBooleanOrDefault(params.get("keepCheckedOut"), false);
             sendResponse(exchange, serverManager.checkinFile(
                 params.get("repo"), params.get("path"), params.get("comment"), keepCheckedOut));
         });
 
-        server.route("/server/version_control/undo_checkout", exchange -> {
+        http.route("/server/version_control/undo_checkout", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             sendResponse(exchange, serverManager.undoCheckout(params.get("repo"), params.get("path")));
         });
 
-        server.route("/server/version_control/add", exchange -> {
+        http.route("/server/version_control/add", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             sendResponse(exchange, serverManager.addToVersionControl(
                 params.get("repo"), params.get("path"), params.get("comment")));
         });
 
-        server.route("/server/version_history", exchange -> {
+        http.route("/server/version_history", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             sendResponse(exchange, serverManager.getVersionHistory(params.get("repo"), params.get("path")));
         });
 
-        server.route("/server/checkouts", exchange -> {
+        http.route("/server/checkouts", exchange -> {
             Map<String, String> params = parseQueryParams(exchange);
             sendResponse(exchange, serverManager.getCheckouts(params.get("repo"), params.get("path")));
         });
 
         // --- Admin ---
 
-        server.route("/server/admin/terminate_checkout", exchange -> {
+        http.route("/server/admin/terminate_checkout", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String checkoutIdParam = params.getOrDefault("checkoutId", params.getOrDefault("checkout_id", "0"));
             long checkoutId = Long.parseLong(checkoutIdParam);
@@ -558,7 +558,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
                 params.get("repo"), params.get("path"), checkoutId));
         });
 
-        server.route("/server/admin/terminate_all_checkouts", exchange -> {
+        http.route("/server/admin/terminate_all_checkouts", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String folderPath = params.get("path");
             if (folderPath == null) folderPath = "/";
@@ -566,11 +566,11 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
                 params.get("repo"), folderPath));
         });
 
-        server.route("/server/admin/users", exchange -> {
+        http.route("/server/admin/users", exchange -> {
             sendResponse(exchange, serverManager.listServerUsers());
         });
 
-        server.route("/server/admin/set_permissions", exchange -> {
+        http.route("/server/admin/set_permissions", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             int accessLevel = parseIntOrDefault(params.get("accessLevel"), 1);
             sendResponse(exchange, serverManager.setUserPermissions(
@@ -579,7 +579,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // --- Analysis Control ---
 
-        server.route("/configure_analyzer", exchange -> {
+        http.route("/configure_analyzer", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             Boolean enabled = params.containsKey("enabled") ?
                 parseBooleanOrDefault(params.get("enabled"), true) : null;
@@ -589,7 +589,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // --- Exit ---
 
-        server.route("/exit_ghidra", exchange -> {
+        http.route("/exit_ghidra", exchange -> {
             sendResponse(exchange, endpointHandler.exitServer());
         });
 
@@ -610,10 +610,10 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
             notifyAll();
         }
 
-        if (server != null) {
+        if (http != null) {
             System.out.println("Stopping HTTP server...");
-            server.stop();
-            server = null;
+            http.stop();
+            http = null;
         }
 
         if (serverManager != null && serverManager.isConnected()) {

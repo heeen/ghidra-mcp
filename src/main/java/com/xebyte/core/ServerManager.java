@@ -25,6 +25,9 @@ public class ServerManager {
 
     private final Map<String, PluginTool> tools = new ConcurrentHashMap<>();
     private final AtomicReference<String> activeToolId = new AtomicReference<>();
+    /** Request threads for GUI transports; see {@link McpHttpServer.Config#workers()}. */
+    public static final int GUI_WORKERS = 3;
+
     private MultiToolProgramProvider programProvider;
     private McpHttpServer server;
     // Bound TCP port for the legacy HTTP transport when the plugin picked
@@ -136,10 +139,10 @@ public class ServerManager {
             ManualToolDescriptors.addAll(scanner, ManualToolDescriptors.SHARED_ROUTES);
             guiEndpoints.accept(server);
         }
-        server.start(new McpHttpServer.Config(true, false, null, 0, 0));
+        server.start(new McpHttpServer.Config(true, false, null, 0, 0, GUI_WORKERS));
     }
 
-    Map<String, Object> buildInstanceInfo() {
+    public Map<String, Object> buildInstanceInfo() {
         PluginTool activeTool = getActiveTool();
         ghidra.framework.model.Project proj = activeTool != null ? activeTool.getProject() : null;
 
@@ -162,15 +165,10 @@ public class ServerManager {
             }
         }
         Map<String, Object> info = instanceInfo(proj, openNames);
-        // The plugin's own TCP listener, until it moves onto McpHttpServer.
+        // The TCP listener is the plugin's own McpHttpServer, not this one.
         info.put("tcp_port", boundTcpPort);
         info.put("tools", tools.size());
         return info;
-    }
-
-    /** For the plugin's own TCP listener, until it moves onto McpHttpServer. */
-    public String buildInstanceInfoJson() {
-        return Response.ok(buildInstanceInfo()).toJson();
     }
 
     /**

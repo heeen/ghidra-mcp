@@ -15,8 +15,6 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.net.UnixDomainSocketAddress;
 
 /**
@@ -39,12 +37,14 @@ public class UdsHttpServer {
 
     private final Path socketPath;
     private ServerSocketChannel serverChannel;
-    private ExecutorService executor;
+    private final ExecutorService executor;
     private final Map<String, Handler> contexts = new ConcurrentHashMap<>();
     private volatile boolean running;
 
-    public UdsHttpServer(Path socketPath) {
+    /** @param executor runs the connections; owned (and shut down) by the caller */
+    public UdsHttpServer(Path socketPath, ExecutorService executor) {
         this.socketPath = socketPath;
+        this.executor = executor;
     }
 
     public void createContext(String path, Handler handler) {
@@ -81,12 +81,6 @@ public class UdsHttpServer {
             }
         }
 
-        executor = Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "GhidraMCP-UDS-Worker");
-            t.setDaemon(true);
-            return t;
-        });
-
         running = true;
 
         Thread acceptThread = new Thread(this::acceptLoop, "GhidraMCP-UDS-Accept");
@@ -104,17 +98,6 @@ public class UdsHttpServer {
             }
         } catch (IOException e) {
             Msg.warn(this, "Error closing server channel: " + e.getMessage());
-        }
-        if (executor != null) {
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
         }
         try {
             Files.deleteIfExists(socketPath);
