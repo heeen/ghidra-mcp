@@ -361,7 +361,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         boolean udsOk = false;
         if (udsEnabled) {
             try {
-                ServerManager.getInstance().registerTool(tool, this::registerHandCodedRoutes);
+                ServerManager.getInstance().registerTool(tool, buildScanner(), this::registerHandCodedRoutes);
                 udsOk = true;
                 Msg.info(this, "GhidraMCP UDS server active at " + ServerManager.getInstance().getSocketPath());
             } catch (IOException e) {
@@ -499,7 +499,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 StringBuilder started = new StringBuilder();
                 if (uds && !ServerManager.getInstance().isRunning()) {
                     try {
-                        ServerManager.getInstance().registerTool(tool, GhidraMCPPlugin.this::registerHandCodedRoutes);
+                        ServerManager.getInstance().registerTool(tool, buildScanner(),
+                                GhidraMCPPlugin.this::registerHandCodedRoutes);
                         started.append("UDS: ").append(ServerManager.getInstance().getSocketPath());
                     } catch (IOException e) {
                         Msg.showError(getClass(), null, "GhidraMCP", "Failed to start UDS server: " + e.getMessage());
@@ -575,14 +576,14 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         updateMenuActionStates();
     }
 
-    private void startServer() throws IOException {
-        Options options = tool.getOptions(OPTION_CATEGORY_NAME);
-        refreshNamingPolicyFromOptions();
-        int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
-
-        // Plugin reload: drop the previous listener before binding again.
-        stopServer();
-
+    /**
+     * The scanner both transports serve from.
+     *
+     * <p>One scanner over one service set over one ProgramProvider. ServerManager
+     * used to build a second of each for the Unix socket, which is why a program
+     * the plugin could open on demand read as "not found" over UDS.
+     */
+    private AnnotationScanner buildScanner() {
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
             listingService, functionService, commentService, symbolLabelService,
             xrefCallGraphService, dataTypeService, analysisService,
@@ -596,6 +597,18 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             scanner, com.xebyte.core.ManualToolDescriptors.SHARED_ROUTES);
         // /get_version's endpoint_count must match what /mcp/schema serves.
         VersionInfo.setEndpointCount(scanner.getDescriptors().size());
+        return scanner;
+    }
+
+    private void startServer() throws IOException {
+        Options options = tool.getOptions(OPTION_CATEGORY_NAME);
+        refreshNamingPolicyFromOptions();
+        int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
+
+        // Plugin reload: drop the previous listener before binding again.
+        stopServer();
+
+        AnnotationScanner scanner = buildScanner();
 
         McpHttpServer http = new McpHttpServer(ServerManager.getInstance()::buildInstanceInfo);
         http.endpoints(scanner);

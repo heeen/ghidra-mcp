@@ -28,7 +28,6 @@ public class ServerManager {
     /** Request threads for GUI transports; see {@link McpHttpServer.Config#workers()}. */
     public static final int GUI_WORKERS = 3;
 
-    private MultiToolProgramProvider programProvider;
     private McpHttpServer server;
     // Bound TCP port for the legacy HTTP transport when the plugin picked
     // a port-range fallback (issue #175). -1 means "TCP not running or
@@ -46,52 +45,24 @@ public class ServerManager {
 
     private ServerManager() {}
 
-    public synchronized void registerTool(PluginTool tool,
+    /**
+     * Register a CodeBrowser/FrontEnd tool and, on the first one, start the server.
+     *
+     * <p>The scanner comes from the caller. This used to build a second, parallel
+     * set of every service over a second ProgramProvider, so the same request
+     * answered differently depending on which transport carried it: the provider
+     * here saw only programs a CodeBrowser already had open, while the plugin's
+     * saw those plus its cache plus anything it could open from the project.
+     * One service set, one provider, one answer.
+     */
+    public synchronized void registerTool(PluginTool tool, AnnotationScanner scanner,
             java.util.function.Consumer<McpHttpServer> guiEndpoints) throws IOException {
         String toolId = String.valueOf(System.identityHashCode(tool));
         tools.put(toolId, tool);
         activeToolId.compareAndSet(null, toolId);
         Msg.info(this, "Registered tool " + toolId + " (total: " + tools.size() + ")");
 
-
         if (server == null) {
-            programProvider = new MultiToolProgramProvider(tools, activeToolId);
-            com.xebyte.core.ThreadingStrategy ts = new com.xebyte.core.SwingThreadingStrategy();
-
-            ListingService listingService = new ListingService(programProvider);
-            CommentService commentService = new CommentService(programProvider, ts);
-            SymbolLabelService symbolLabelService = new SymbolLabelService(programProvider, ts);
-            FunctionService functionService = new FunctionService(programProvider, ts);
-            XrefCallGraphService xrefCallGraphService = new XrefCallGraphService(programProvider, ts);
-            DataTypeService dataTypeService = new DataTypeService(programProvider, ts);
-            DocumentationHashService documentationHashService = new DocumentationHashService(programProvider, ts, new BinaryComparisonService());
-            documentationHashService.setFunctionService(functionService);
-            AnalysisService analysisService = new AnalysisService(programProvider, ts, functionService);
-            MalwareSecurityService malwareSecurityService = new MalwareSecurityService(programProvider, ts);
-            ProgramScriptService programScriptService = new ProgramScriptService(programProvider, ts);
-            FunctionBundleService functionBundleService = new FunctionBundleService(programProvider, ts, functionService);
-            TypeReferenceService typeReferenceService = new TypeReferenceService(programProvider);
-            ChangeTokenService changeTokenService = new ChangeTokenService(programProvider);
-            PartitionService partitionService = new PartitionService(programProvider);
-            CheckoutService checkoutService = new CheckoutService(programProvider);
-            // These three existed only on GhidraMCPPlugin's own legacy server, which
-            // nothing starts by default — so P-code emulation, the debugger and the
-            // modal-prompt policy were unreachable over UDS *and* over the TCP port
-            // this manager binds, i.e. on both transports the bridge uses. Measured:
-            // 21 of the 67 catalog endpoints missing from a live GUI instance.
-            // DebuggerService needs a PluginTool for TraceRmi; the tool that first
-            // registered is the same one the plugin would have handed it.
-            EmulationService emulationService = new EmulationService(programProvider, ts);
-            DebuggerService debuggerService = new DebuggerService(programProvider, ts, tool);
-            PromptPolicyService promptPolicyService = new PromptPolicyService();
-
-            AnnotationScanner scanner = new AnnotationScanner(programProvider, ts,
-                listingService, functionService, commentService, symbolLabelService,
-                xrefCallGraphService, dataTypeService, analysisService,
-                documentationHashService, malwareSecurityService, programScriptService,
-                functionBundleService, typeReferenceService, changeTokenService, partitionService,
-                checkoutService, emulationService, debuggerService, promptPolicyService);
-
             startServer(scanner, guiEndpoints);
         }
     }
@@ -111,11 +82,16 @@ public class ServerManager {
         }
     }
 
+    /** The tool that registered first, or any remaining one. */
     public PluginTool getActiveTool() {
-        return programProvider != null ? programProvider.getTool() : null;
+        String id = activeToolId.get();
+        if (id != null) {
+            PluginTool t = tools.get(id);
+            if (t != null) return t;
+        }
+        var iter = tools.values().iterator();
+        return iter.hasNext() ? iter.next() : null;
     }
-
-    public MultiToolProgramProvider getProgramProvider() { return programProvider; }
 
     public boolean isRunning() { return server != null; }
 
