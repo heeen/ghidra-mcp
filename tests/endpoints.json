@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 238,
+  "total_endpoints": 237,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -519,7 +519,7 @@
         "gui",
         "headless"
       ],
-      "description": "Liveness probe: is the server up, and which one is it. Deliberately not\n /mcp/health, which returns pool/uptime/memory diagnostics; this one\n stays cheap and is served by the GUI and headless servers alike."
+      "description": "Liveness probe: {status, server_kind (gui/headless), version, program}. Cheap and token-less, unlike the fuller /mcp/health; both servers answer it identically."
     },
     {
       "path": "/checkin_program",
@@ -2147,16 +2147,6 @@
       "description": "Get references to address"
     },
     {
-      "path": "/health",
-      "method": "GET",
-      "category": "utility",
-      "params": [],
-      "servers": [
-        "headless"
-      ],
-      "description": "Health check endpoint for headless server"
-    },
-    {
       "path": "/import_data_types",
       "method": "POST",
       "category": "datatype",
@@ -2509,9 +2499,10 @@
       "category": "utility",
       "params": [],
       "servers": [
-        "gui"
+        "gui",
+        "headless"
       ],
-      "description": "HTTP server health: pool stats, uptime, memory, active request count"
+      "description": "Server health: kind (gui/headless), build, current program, uptime, HTTP pool, memory, endpoint count"
     },
     {
       "path": "/mcp/schema",

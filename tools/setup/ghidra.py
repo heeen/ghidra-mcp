@@ -952,14 +952,14 @@ def wait_for_mcp(
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
     while time.monotonic() < deadline:
-        for path in ("/mcp/health", "/health", "/check_connection"):
-            try:
-                status, _payload = _mcp_request(repo_root, mcp_url, path, timeout=5)
-                if status == 200:
-                    print(f"MCP ready at {mcp_url} ({path}).")
-                    return
-            except Exception as exc:
-                last_error = exc
+        # Both servers serve /mcp/health; headless used to answer only /health.
+        try:
+            status, _payload = _mcp_request(repo_root, mcp_url, "/mcp/health", timeout=5)
+            if status == 200:
+                print(f"MCP ready at {mcp_url}.")
+                return
+        except Exception as exc:
+            last_error = exc
         time.sleep(2)
     raise RuntimeError(f"MCP did not become ready at {mcp_url}: {last_error}")
 

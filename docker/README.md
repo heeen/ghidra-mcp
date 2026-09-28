@@ -151,8 +151,8 @@ The headless server exposes the same REST API as the GUI plugin. Currently imple
 
 ### Health & Metadata
 
-- `GET /check_connection` - Health check
-- `GET /get_version` - Server version
+- `GET /check_connection` - Liveness: `{status, server_kind, version, program}`
+- `GET /mcp/health` - Build, uptime, HTTP pool, memory, endpoint count
 - `GET /get_metadata` - Program metadata
 
 ### Listing

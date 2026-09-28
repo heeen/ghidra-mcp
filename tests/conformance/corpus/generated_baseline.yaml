@@ -917,12 +917,6 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: true
-- tool: get_version
-  tier: read
-  assert:
-    is_error: false
-    nonempty: true
-  snapshot: true
 - tool: get_xrefs_from
   tier: read
   args:

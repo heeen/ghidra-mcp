@@ -22,13 +22,13 @@
 >
 > If Ghidra MCP saves you time, consider [sponsoring the project](https://github.com/sponsors/bethington). One-time and recurring support both help fund compatibility updates, production hardening, docs, and new tooling.
 
-A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **237 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
+A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **236 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
 
 ## Why Ghidra MCP?
 
 Most Ghidra MCP implementations give you a handful of read-only tools and call it a day. This project is different — it was built by a reverse engineer who uses it daily on real binaries, not as a demo.
 
-- **237 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
+- **236 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
 - **Battle-tested AI workflows** — Proven documentation workflows (V5) refined across hundreds of functions. Includes step-by-step prompts, Hungarian notation reference, batch processing guides, and orphaned code discovery.
 - **Production-grade reliability** — Atomic transactions, batch operations (93% API call reduction), configurable timeouts, and graceful error handling. No silent failures.
 - **Cross-binary documentation transfer** — SHA-256 function hash matching propagates documentation across binary versions automatically. Document once, apply everywhere.
@@ -59,7 +59,7 @@ v5.0 moves conventions from "things to remember" into the tool layer, where they
 ### Core MCP Integration
 
 - **Full MCP Compatibility** — Complete implementation of Model Context Protocol
-- **237 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
+- **236 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
 - **Production-Ready Reliability** — Atomic transactions, batch operations, configurable timeouts
 - **Real-time Analysis** — Live integration with Ghidra's analysis engine
 
@@ -444,7 +444,7 @@ uv run bridge-mcp-ghidra --transport sse --mcp-host 127.0.0.1 --mcp-port 8081
 
 #### Lazy tool loading is the default (issue #440)
 
-Advertising all 238 endpoints in a single `tools/list` is over a hard limit for
+Advertising all 237 endpoints in a single `tools/list` is over a hard limit for
 at least one major provider. Gemini compiles function declarations into a
 constrained-decoding state machine and rejects the whole request before any tool
 is ever called:
@@ -616,10 +616,10 @@ Screenshots of every step: [docs/INSTALL_GUI.md](docs/INSTALL_GUI.md).
 ```bash
 # Quick health check
 curl http://127.0.0.1:8089/check_connection
-# Expected: "Connected: GhidraMCP plugin running with program '<name>'"
+# Expected: {"status": "ok", "server_kind": "gui", "version": "7.0.0", "program": "<name>"}
 
-# Get version info
-curl http://127.0.0.1:8089/get_version
+# Build, uptime, HTTP pool and endpoint count
+curl http://127.0.0.1:8089/mcp/health
 ```
 
 ## Support This Project
@@ -819,7 +819,7 @@ that repo, and make sure you install into and run from the same interpreter.
 
 **Solution:**
 
-1. Verify endpoint exists: `curl http://127.0.0.1:8089/get_version`
+1. Verify endpoint exists: `curl http://127.0.0.1:8089/mcp/schema`
 2. Check for typos in endpoint name
 3. Ensure you're using correct HTTP method (GET vs POST)
 
@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 237 tools fully implemented (the whole catalog; the GUI plugin serves 229 of them and the headless server 213)
+- **MCP Tools**: 236 tools fully implemented (the whole catalog; the GUI plugin serves 229 of them and the headless server 213)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -871,9 +871,9 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 <!-- BEGIN GENERATED API REFERENCE (tools/gen_readme_api_reference.py) -->
 
-237 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
+236 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-203 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (25) or **(headless only)** (9) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+204 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (24) or **(headless only)** (8) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -1103,9 +1103,8 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 ### Health, Schema & Tool Control
 
-- `check_connection` - Liveness probe: is the server up, and which one is it
-- `health` - Health check endpoint for headless server **(headless only)**
-- `mcp_health` - HTTP server health: pool stats, uptime, memory, active request count **(GUI only)**
+- `check_connection` - Liveness probe: {status, server_kind (gui/headless), version, program}
+- `mcp_health` - Server health: kind (gui/headless), build, current program, uptime, HTTP pool, memory, endpoint count
 - `mcp_schema` - Machine-readable API schema with endpoint metadata
 - `tool_goto_address` - Navigate CodeBrowser listing and decompiler to a specific address **(GUI only)**
 - `tool_launch_codebrowser` - Open a file in CodeBrowser, launching a new one if needed **(GUI only)**
@@ -1205,7 +1204,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ### Components
 
-- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (238 catalog entries)
+- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (237 catalog entries)
 - **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (229 endpoints)
 - **GhidraMCPHeadlessServer** — Standalone headless server — 213 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
@@ -1287,7 +1286,7 @@ python -m tools.setup --help
 ```text
 ghidra-mcp/
 ├── pyproject.toml           # uv project (ghidra-mcp-bridge wheel + dependency groups)
-├── python/bridge_mcp_ghidra/ # MCP server package (Python, 238 catalog entries)
+├── python/bridge_mcp_ghidra/ # MCP server package (Python, 237 catalog entries)
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
 │       ├── GhidraMCPPlugin.java         # GUI plugin (229 endpoints)
@@ -1412,7 +1411,7 @@ docker-compose up -d ghidra-mcp
 
 # Test connection
 curl http://localhost:8089/check_connection
-# Connection OK - GhidraMCP Headless Server v7.0.0
+# {"status": "ok", "server_kind": "headless", "version": "7.0.0", "program": null}
 ```
 
 ### Headless API Workflow
@@ -1483,7 +1482,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | Metric | Value |
 | -------- | ------- |
 | **Version** | 7.0.0 |
-| **MCP Tools** | 238 fully implemented |
+| **MCP Tools** | 237 fully implemented |
 | **GUI Endpoints** | 229 (GhidraMCPPlugin) |
 | **Headless Endpoints** | 213 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |

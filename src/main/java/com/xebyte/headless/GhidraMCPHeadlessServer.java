@@ -24,6 +24,7 @@ import com.xebyte.core.JsonHelper;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.SecurityConfig;
 import com.xebyte.core.ThreadingStrategy;
+import com.xebyte.core.VersionInfo;
 import ghidra.GhidraApplicationLayout;
 import ghidra.GhidraLaunchable;
 import ghidra.app.script.GhidraScriptUtil;
@@ -54,7 +55,6 @@ import java.util.*;
  */
 public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
-    private static final String VERSION = "7.0.0-headless";
     private static final int DEFAULT_PORT = 8089;
     private static final String DEFAULT_BIND_ADDRESS = "127.0.0.1";
 
@@ -122,7 +122,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         ghidra.framework.ShutdownHookRegistry.addShutdownHook(this::stop,
                 ghidra.framework.ShutdownPriority.DISPOSE_DATABASES.before());
 
-        System.out.println("GhidraMCP Headless Server v" + VERSION + " running");
+        System.out.println("GhidraMCP Headless Server v" + VersionInfo.getVersion() + " running");
         System.out.println("Press Ctrl+C to stop");
 
         // Block main thread
@@ -172,7 +172,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
                     break;
                 case "--version":
                 case "-v":
-                    System.out.println("GhidraMCP Headless Server v" + VERSION);
+                    System.out.println("GhidraMCP Headless Server v" + VersionInfo.getVersion());
                     System.exit(0);
                     break;
             }
@@ -180,7 +180,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     }
 
     private void printUsage() {
-        System.out.println("GhidraMCP Headless Server v" + VERSION);
+        System.out.println("GhidraMCP Headless Server v" + VersionInfo.getVersion());
         System.out.println();
         System.out.println("Usage: java -jar GhidraMCPHeadless.jar [options]");
         System.out.println();
@@ -374,7 +374,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     }
 
     private void startServer() throws IOException {
-        http = new McpHttpServer(this::instanceInfo);
+        http = new McpHttpServer("headless", Map::of);
         registerEndpoints();
         http.start(new McpHttpServer.Config(true, tcp, bindAddress, port, 1, 10));
         running = true;
@@ -385,29 +385,13 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         }
     }
 
-    private Map<String, Object> instanceInfo() {
-        var openNames = new HashSet<String>();
-        for (Program p : programProvider.getAllOpenPrograms()) {
-            openNames.add(p.getName());
-        }
-        return com.xebyte.core.ServerManager.instanceInfo(programProvider.getProject(), openNames);
-    }
-
     private void registerEndpoints() {
         // ==========================================================================
         // INFRASTRUCTURE ENDPOINTS (not in service layer)
         // ==========================================================================
 
-        // Liveness banner, served by BOTH servers so the doctor has one route
-        // that identifies which of them answered. /health is headless-only and
-        // /mcp/health is GUI-only, so neither can play this role.
-        http.route("/check_connection", exchange -> {
-            sendResponse(exchange, "Connection OK - GhidraMCP Headless Server v" + VERSION);
-        });
-
-        http.route("/health", exchange -> {
-            sendResponse(exchange, health());
-        });
+        // /check_connection, /mcp/health and /mcp/instance_info are McpHttpServer's own,
+        // identical to the GUI's bar server_kind. /health, headless-only, is retired.
 
         // ==========================================================================
         // SHARED ENDPOINTS — Annotation-driven registration via AnnotationScanner
@@ -426,7 +410,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // GhidraMCPPlugin; see ManualToolDescriptors for the shared metadata
         // source. Found via a live-schema-vs-catalog diff (v6.0.0).
         com.xebyte.core.ManualToolDescriptors.addAll(scanner,
-            "/check_connection", "/exit_ghidra", "/health", "/mcp/schema",
+            "/check_connection", "/exit_ghidra", "/mcp/health", "/mcp/schema",
             "/server/admin/set_permissions", "/server/admin/terminate_all_checkouts",
             "/server/admin/terminate_checkout", "/server/admin/users",
             "/server/checkouts", "/server/connect", "/server/disconnect",
@@ -568,22 +552,6 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         });
 
         System.out.println("Registered " + countEndpoints() + " REST API endpoints");
-    }
-
-    /** Liveness plus version, for container healthchecks. Superseded by /mcp/health. */
-    private String health() {
-        Program program = programProvider.getCurrentProgram();
-        Map<String, Object> out = new java.util.LinkedHashMap<>();
-        out.put("status", "healthy");
-        out.put("version", VERSION);
-        out.put("plugin_name", "GhidraMCP Headless");
-        out.put("mode", "headless");
-        out.put("connected", true);
-        out.put("program_loaded", program != null);
-        if (program != null) {
-            out.put("program_name", program.getName());
-        }
-        return JsonHelper.toJson(out);
     }
 
     /**
