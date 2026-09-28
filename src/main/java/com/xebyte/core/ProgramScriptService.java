@@ -129,10 +129,10 @@ public class ProgramScriptService {
                 }
                 mgr.startAnalysis(ghidra.util.task.TaskMonitor.DUMMY);
                 // Through the guarded helper, never mgr.waitForAnalysis
-                // directly -- see awaitAnyPendingAnalysis. An unguarded call
+                // directly -- see ProgramSaves.awaitAnalysis. An unguarded call
                 // here is one of the two paths that wedged all three HTTP
                 // threads for 7.8 CPU-hours on 2026-08-11.
-                awaitAnyPendingAnalysis(program);
+                ProgramSaves.awaitAnalysis(program);
                 ghidra.program.util.GhidraProgramUtilities.markProgramAnalyzed(program);
                 txOk = true;
             } finally {
@@ -162,119 +162,7 @@ public class ProgramScriptService {
             return;
         }
         program.flushEvents();
-        saveWithRetry(program, () -> program.save(reason, ghidra.util.task.TaskMonitor.DUMMY));
-    }
-
-    @FunctionalInterface
-    private interface ThrowingSave {
-        void run() throws IOException, ghidra.util.exception.CancelledException;
-    }
-
-    /**
-     * Save a program, retrying if the attempt races Ghidra's own
-     * auto-analysis transaction management.
-     *
-     * <p>{@link AutoAnalysisManager} registers its own
-     * {@code DomainObjectListener} on every program and schedules a
-     * background "Auto Analysis" task whenever the program changes (a
-     * rename, a signature edit, a new function) -- entirely independent of
-     * any analysis this class explicitly starts. If that background task's
-     * transaction is still open when a save runs, the save throws
-     * {@code IOException: Unable to lock due to active transaction}.
-     * Confirmed via Ghidra's own application.log: the same stack trace,
-     * through {@code saveCurrentProgram}, recurring since at least
-     * 2026-07-08 -- weeks before any code path here explicitly triggered
-     * analysis, so it is not specific to this class's own analysis calls.</p>
-     *
-     * <p>Waiting for {@link AutoAnalysisManager#waitForAnalysis} to return
-     * first narrows the window but does not close it: Ghidra logs the task
-     * as complete and this save's lock failure in the same instant, meaning
-     * the completion notification and the background task's own transaction
-     * teardown are not perfectly synchronized with each other. A short
-     * backoff-and-retry on that specific message is the pragmatic fix for a
-     * race that waiting alone cannot fully eliminate.</p>
-     */
-    private void saveWithRetry(Program program, ThrowingSave saveAction)
-            throws IOException, ghidra.util.exception.CancelledException {
-        final int maxAttempts = 4;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            awaitAnyPendingAnalysis(program);
-            try {
-                saveAction.run();
-                return;
-            } catch (IOException e) {
-                String msg = e.getMessage();
-                boolean isLockRace = msg != null && msg.contains("Unable to lock due to active transaction");
-                if (!isLockRace || attempt == maxAttempts) {
-                    throw e;
-                }
-                Msg.warn(this, "Save raced Ghidra's own auto-analysis transaction (attempt "
-                        + attempt + "/" + maxAttempts + "), retrying: " + msg);
-                try {
-                    Thread.sleep(150L * attempt);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw e;
-                }
-            }
-        }
-    }
-
-    /**
-     * Re-entrancy guard for {@link AutoAnalysisManager#waitForAnalysis}.
-     *
-     * <p>{@code waitForAnalysis(null, monitor)} can re-enter ITSELF. Measured
-     * from a live thread dump on 2026-08-11, after Ghidra had been
-     * unresponsive for hours:</p>
-     *
-     * <pre>
-     *   AutoAnalysisManager.scheduleWorker(1350)
-     *     -&gt; waitForAnalysis(518)
-     *       -&gt; analysisWorkerCallback(523)
-     *         -&gt; AnalysisWorkerCommand.applyTo(1694)
-     *           -&gt; applyToWithTransaction
-     *             -&gt; scheduleWorker(1350)   ... and round again
-     * </pre>
-     *
-     * <p>All THREE GhidraMCP-HTTP threads -- the entire pool -- were stuck in
-     * that loop, 317 frames deep, having burned ~9,400 CPU-seconds EACH
-     * (7.8 CPU-hours between them). They never return, so the pool is
-     * permanently consumed and every one of the 253 endpoints times out. The
-     * symptom presents as "Ghidra is slow", not as an error, and the only
-     * recovery is a restart.</p>
-     *
-     * <p>A thread that is already inside a wait does not need to start
-     * another one: the outer call is still going to wait for the same
-     * analysis to finish. So a nested call on the same thread returns
-     * immediately and the recursion cannot form. This is deliberately the
-     * smallest fix that provably terminates -- it changes no semantics for
-     * the outer wait, and if it is wrong the failure mode is a save racing
-     * analysis, which {@code saveWithRetry} already handles and which is
-     * vastly preferable to a wedged server.</p>
-     */
-    // Package-visible on purpose: FrontEndProgramProvider shares this ONE
-    // guard. Two separate ThreadLocals would not guard each other, and the
-    // recursion can cross both classes on a single thread.
-    static final ThreadLocal<Boolean> IN_ANALYSIS_WAIT =
-            ThreadLocal.withInitial(() -> Boolean.FALSE);
-
-    private void awaitAnyPendingAnalysis(Program program) {
-        if (Boolean.TRUE.equals(IN_ANALYSIS_WAIT.get())) {
-            // Already waiting further up this same thread's stack. Starting
-            // another wait here is what forms the infinite recursion above.
-            return;
-        }
-        IN_ANALYSIS_WAIT.set(Boolean.TRUE);
-        try {
-            AutoAnalysisManager.getAnalysisManager(program)
-                    .waitForAnalysis(null, ghidra.util.task.TaskMonitor.DUMMY);
-        } catch (Exception e) {
-            // Best-effort: let the save call itself surface any real failure
-            // rather than mask it with a wait-side error here.
-            Msg.warn(this, "awaitAnyPendingAnalysis failed, proceeding to save anyway: " + e.getMessage());
-        } finally {
-            IN_ANALYSIS_WAIT.set(Boolean.FALSE);
-        }
+        ProgramSaves.withRetry(program, () -> program.save(reason, ghidra.util.task.TaskMonitor.DUMMY));
     }
 
     // ========================================================================
@@ -1028,7 +916,7 @@ public class ProgramScriptService {
                         errorMsg.set("Program has no domain file");
                         return;
                     }
-                    saveWithRetry(program, () -> df.save(new ConsoleTaskMonitor()));
+                    ProgramSaves.withRetry(program, () -> df.save(new ConsoleTaskMonitor()));
                     resultData.set(JsonHelper.mapOf(
                         "success", true,
                         "program", program.getName(),
@@ -1104,7 +992,7 @@ public class ProgramScriptService {
                         errors.get().add(info);
                         continue;
                     }
-                    saveWithRetry(program, () -> df.save(new ConsoleTaskMonitor()));
+                    ProgramSaves.withRetry(program, () -> df.save(new ConsoleTaskMonitor()));
                     saved.get().add(info);
                 } catch (Throwable e) {
                     info.put("error", e.getMessage() != null ? e.getMessage() : e.toString());
@@ -1194,32 +1082,46 @@ public class ProgramScriptService {
         }
 
         String search = name.trim();
+        Program target;
+        try {
+            // The provider's matcher -- the same one every endpoint resolves with. The
+            // old one here also took a path SUBSTRING and closed every hit, so closing
+            // /x/a.dll closed /x/a.dll.orig as well.
+            target = ProjectProgramProvider.match(
+                java.util.Arrays.asList(programProvider.getAllOpenPrograms()), search);
+        } catch (AmbiguousProgramException e) {
+            return Response.err(e.getMessage());
+        }
+        if (target == null) {
+            return Response.ok(JsonHelper.mapOf(
+                "success", true, "closed_count", 0, "released_cache", false, "name", search));
+        }
+
         AtomicInteger closedCount = new AtomicInteger(0);
         AtomicReference<String> error = new AtomicReference<>();
-
+        ghidra.framework.model.DomainFile targetFile = target.getDomainFile();
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     for (ProgramManager pm : findAllProgramManagers()) {
                         for (Program program : pm.getAllOpenPrograms()) {
-                            if (!programMatches(program, search)) {
+                            boolean same = program == target || (targetFile != null
+                                && program.getDomainFile() != null
+                                && program.getDomainFile().getPathname().equals(targetFile.getPathname()));
+                            if (!same) {
                                 continue;
                             }
                             if (save && program.isChanged()) {
                                 ghidra.framework.model.DomainFile df = program.getDomainFile();
                                 if (df != null && df.isInWritableProject()) {
-                                    saveWithRetry(program, () -> df.save(new ConsoleTaskMonitor()));
+                                    ProgramSaves.withRetry(program, () -> df.save(new ConsoleTaskMonitor()));
                                 }
                             }
-                            // ignoreChanges=true unconditionally: we have already
-                            // decided the fate of any unsaved edits above (saved,
-                            // or deliberately left to be discarded), so Ghidra must
-                            // never fall back to its own interactive "Save
-                            // changes?" dialog here -- that call blocks the Swing
-                            // event thread (and with it every other MCP request,
-                            // since they all funnel through invokeAndWait) until a
-                            // human clicks it, which is exactly the hang this
-                            // parameter exists to prevent.
+                            // ignoreChanges=true unconditionally: the fate of unsaved edits
+                            // was decided above (saved, or deliberately discarded), so Ghidra
+                            // must never fall back to its interactive "Save changes?" dialog,
+                            // which blocks the Swing thread -- and every MCP request behind
+                            // it -- until a human clicks.
                             pm.closeProgram(program, true);
                             closedCount.incrementAndGet();
                         }
@@ -1232,20 +1134,16 @@ public class ProgramScriptService {
             return Response.err("Failed to close program: " +
                     (e.getMessage() != null ? e.getMessage() : e.toString()));
         }
-
-        if (closedCount.get() == 0) {
-            for (Program program : programProvider.getAllOpenPrograms()) {
-                if (programMatches(program, search) && programProvider.closeProgram(program)) {
-                    closedCount.incrementAndGet();
-                }
-            }
-        }
-
         if (error.get() != null) {
             return Response.err("Failed to close program: " + error.get());
         }
 
-        boolean releasedCache = programProvider.releaseCachedProgram(search);
+        // The provider's own handle, with the same save choice. Releasing it used to
+        // save unconditionally, so save=false in the GUI still saved the discarded edits.
+        boolean releasedCache = programProvider.closeProgram(target, save);
+        if (closedCount.get() == 0 && releasedCache) {
+            closedCount.incrementAndGet();
+        }
 
         return Response.ok(JsonHelper.mapOf(
             "success", true,
@@ -1639,24 +1537,11 @@ public class ProgramScriptService {
             return Response.err("No programs are currently open");
         }
 
-        Program targetProgram = null;
-
-        // Find program by name (case-insensitive match)
-        for (Program prog : programs) {
-            if (prog.getName().equalsIgnoreCase(programName.trim())) {
-                targetProgram = prog;
-                break;
-            }
-        }
-
-        // If not found by exact name, try partial match on path
-        if (targetProgram == null) {
-            for (Program prog : programs) {
-                if (prog.getDomainFile().getPathname().toLowerCase().contains(programName.toLowerCase())) {
-                    targetProgram = prog;
-                    break;
-                }
-            }
+        Program targetProgram;
+        try {
+            targetProgram = ProjectProgramProvider.match(java.util.Arrays.asList(programs), programName.trim());
+        } catch (AmbiguousProgramException e) {
+            return Response.err(e.getMessage());
         }
 
         if (targetProgram == null) {
@@ -1670,13 +1555,21 @@ public class ProgramScriptService {
             ));
         }
 
-        // Switch to the target program
         programProvider.setCurrentProgram(targetProgram);
+        // Headless keeps no current program by design (a sticky one made a 17-program
+        // survey report one binary's numbers seventeen times), and a GUI program no
+        // CodeBrowser shows cannot outrank the one that does. This used to answer
+        // success anyway.
+        if (programProvider.getCurrentProgram() != targetProgram) {
+            return Response.err("This server did not switch to " + targetProgram.getName()
+                + ": it has no settable current program here. Pass program=\""
+                + ProjectProgramProvider.keyFor(targetProgram) + "\" on each call instead.");
+        }
 
         return Response.ok(JsonHelper.mapOf(
             "success", true,
             "switched_to", targetProgram.getName(),
-            "path", targetProgram.getDomainFile().getPathname()
+            "path", ProjectProgramProvider.keyFor(targetProgram)
         ));
     }
 
@@ -1990,23 +1883,9 @@ public class ProgramScriptService {
     }
 
     private void closeOpenProgramForFile(PluginTool tool, String filePath) {
-        if (programProvider.closeProgramByPath(filePath)) {
-            return;
-        }
-        if (tool == null) {
-            // Headless: close exactly this file, the same rule the GUI branch
-            // below uses. Not closeProgram(filePath, false) -- its matcher falls
-            // back to a SUBSTRING test and closes every hit, and the headless
-            // provider's close is a bare release with no save, so deleting
-            // /x/a.dll would also close /x/a.dll.orig and discard its unsaved
-            // edits while still reporting success.
-            for (Program prog : programProvider.getAllOpenPrograms()) {
-                ghidra.framework.model.DomainFile df = prog.getDomainFile();
-                if (df != null && df.getPathname().equalsIgnoreCase(filePath)) {
-                    programProvider.closeProgram(prog);
-                    return;
-                }
-            }
+        // Releases the provider's own handle on both servers (and closes it in every
+        // CodeBrowser on the GUI), by exact path.
+        if (programProvider.closeProgramByPath(filePath) || tool == null) {
             return;
         }
         // Close paths must NEVER spawn a CodeBrowser — there is nothing useful
@@ -2284,7 +2163,7 @@ public class ProgramScriptService {
             // branches below. It mutates the program DB, and AutoAnalysisManager's
             // own DomainObjectListener reacts to *any* program change by scheduling
             // a background "Auto Analysis" task (the same mechanism documented on
-            // saveWithRetry above) -- confirmed root cause of a real, intermittent
+            // ProgramSaves) -- confirmed root cause of a real, intermittent
             // bug: that premature background pass could already be "actively
             // running" by the time runAutoAnalysisAndPersistFlags below called its
             // own startAnalysis(), which per its own javadoc is then a no-op
@@ -2376,9 +2255,21 @@ public class ProgramScriptService {
             return Response.err("No programs are currently open");
         }
 
+        Program only = null;
+        if (programName != null && !programName.isEmpty()) {
+            try {
+                only = ProjectProgramProvider.match(java.util.Arrays.asList(allPrograms), programName.trim());
+            } catch (AmbiguousProgramException e) {
+                return Response.err(e.getMessage());
+            }
+            if (only == null) {
+                return Response.err("Program not open: " + programName);
+            }
+        }
+
         List<Map<String, Object>> results = new ArrayList<>();
         for (Program prog : allPrograms) {
-            if (programName != null && !programName.isEmpty() && !programMatches(prog, programName)) {
+            if (only != null && prog != only) {
                 continue;
             }
             boolean analyzing = false;
@@ -2409,21 +2300,6 @@ public class ProgramScriptService {
             return Response.ok(results.get(0));
         }
         return Response.ok(JsonHelper.mapOf("programs", results));
-    }
-
-    private boolean programMatches(Program prog, String programName) {
-        if (prog == null || programName == null || programName.isEmpty()) {
-            return true;
-        }
-        String searchName = programName.trim();
-        if (prog.getName().equalsIgnoreCase(searchName)) {
-            return true;
-        }
-        if (prog.getDomainFile() != null) {
-            String path = prog.getDomainFile().getPathname();
-            return path.equalsIgnoreCase(searchName) || path.toLowerCase().contains(searchName.toLowerCase());
-        }
-        return false;
     }
 
     // ========================================================================

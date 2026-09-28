@@ -104,17 +104,8 @@ _GETTER_RE = re.compile(
     r"\bpublic\s+([A-Za-z_][\w.]*)\s+(get[A-Za-z_]\w*)\s*\(\s*\)"
 )
 
-#: `class FrontEndProgramProvider implements ProgramProvider` / `... extends X`.
-_IMPLEMENTS_PROVIDER_RE = re.compile(
-    r"\bclass\s+\w+[^{]*?\b(?:implements|extends)\b[^{]*?\bProgramProvider\b",
-    re.DOTALL,
-)
-
-#: `class DirectThreadingStrategy implements ThreadingStrategy`.
-_IMPLEMENTS_THREADING_STRATEGY_RE = re.compile(
-    r"\bclass\s+\w+[^{]*?\b(?:implements|extends)\b[^{]*?\bThreadingStrategy\b",
-    re.DOTALL,
-)
+#: `class X [<...>] extends A implements B, C {` -- the supertypes named up to the brace.
+_CLASS_HEADER_RE = re.compile(r"\bclass\s+(\w+)([^{;]*)\{")
 
 
 def _repo_root() -> Path:
@@ -268,6 +259,28 @@ def _declared_types(text: str) -> tuple[dict[str, str], dict[str, str]]:
     return fields, getters
 
 
+def _subtypes(src_root: Path, root: str) -> set[str]:
+    """``root`` and every class that extends or implements it, directly or through
+    another subtype -- ``HeadlessProgramProvider extends ProjectProgramProvider`` is a
+    provider though it never names the interface."""
+    supers: dict[str, set[str]] = {}
+    for java in sorted(src_root.rglob("*.java")):
+        for m in _CLASS_HEADER_RE.finditer(_strip_comments(java.read_text(encoding="utf-8"))):
+            header = re.sub(r"<[^{]*?>", "", m.group(2))
+            header = re.sub(r"\b(?:extends|implements)\b", " ", header)
+            named = re.findall(r"[A-Za-z_][\w.]*", header)
+            supers.setdefault(m.group(1), set()).update(_simple(n) for n in named)
+    found = {root}
+    grew = True
+    while grew:
+        grew = False
+        for cls, parents in supers.items():
+            if cls not in found and parents & found:
+                found.add(cls)
+                grew = True
+    return found
+
+
 def _provider_classes(src_root: Path) -> set[str]:
     """Class names that are ``ProgramProvider`` implementations, read from source.
 
@@ -276,14 +289,7 @@ def _provider_classes(src_root: Path) -> set[str]:
     literal name ``ProgramProvider`` is not enough. Derived rather than listed so a
     renamed or added provider needs no edit here.
     """
-    providers = {"ProgramProvider"}
-    for java in sorted(src_root.rglob("*.java")):
-        text = java.read_text(encoding="utf-8")
-        if "ProgramProvider" not in text:
-            continue
-        if _IMPLEMENTS_PROVIDER_RE.search(_strip_comments(text)):
-            providers.add(java.stem)
-    return providers
+    return _subtypes(src_root, "ProgramProvider")
 
 
 def _threading_strategy_classes(src_root: Path) -> set[str]:
@@ -300,14 +306,7 @@ def _threading_strategy_classes(src_root: Path) -> set[str]:
     would silently miss the headless side. Derived rather than listed so a
     renamed or added strategy needs no edit here.
     """
-    strategies = {"ThreadingStrategy"}
-    for java in sorted(src_root.rglob("*.java")):
-        text = java.read_text(encoding="utf-8")
-        if "ThreadingStrategy" not in text:
-            continue
-        if _IMPLEMENTS_THREADING_STRATEGY_RE.search(_strip_comments(text)):
-            strategies.add(java.stem)
-    return strategies
+    return _subtypes(src_root, "ThreadingStrategy")
 
 
 def core_service_classes(repo: Path) -> list[str]:
