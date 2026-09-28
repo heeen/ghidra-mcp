@@ -171,8 +171,6 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/archive_project": InvalidationTier.UNBOUNDED,
     "/open_project": InvalidationTier.UNBOUNDED,
     "/import_program": InvalidationTier.UNBOUNDED,
-    "/load_program": InvalidationTier.UNBOUNDED,
-    "/load_program_from_project": InvalidationTier.UNBOUNDED,
 }
 
 
