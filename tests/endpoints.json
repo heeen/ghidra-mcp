@@ -519,7 +519,7 @@
         "gui",
         "headless"
       ],
-      "description": "Liveness probe: {status, server_kind (gui/headless), version, program}. Cheap and token-less, unlike the fuller /mcp/health; both servers answer it identically."
+      "description": "Liveness probe: {status, server_kind (gui/headless), version, program when one is current}. Cheap and token-less, unlike the fuller /mcp/health; both servers answer it identically."
     },
     {
       "path": "/checkin_program",

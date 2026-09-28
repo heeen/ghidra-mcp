@@ -39,9 +39,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>the cache;</li>
  *   <li>the project, opening on demand.</li>
  * </ol>
- * Within the open programs: exact project path, then exact name (case-insensitive), then a
- * substring of the name. Within the project: exact path, then filename. A name that fits
- * more than one program raises {@link AmbiguousProgramException} rather than guessing.
+ * A bare name is first resolved to a path by the project, so it means the same file
+ * whatever happens to be open; a name several project files share raises
+ * {@link AmbiguousProgramException} rather than guessing. Only a name the project does not
+ * know falls back to the open programs: exact name, then a unique substring.
  *
  * <p><b>Bounded.</b> At most {@link #MAX_CACHED_PROGRAMS} on-demand programs stay open;
  * the least recently used is saved and released. Without a cap a long run held a
@@ -135,6 +136,16 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
             return getCurrentProgram();
         }
         String wanted = name.trim();
+        if (!wanted.startsWith("/")) {
+            // A bare name is answered by the project, not by whatever happens to be
+            // open: with /fw/gnutrue open and /other/gnutrue not, "gnutrue" matched
+            // the open one, so the same request meant a different binary depending on
+            // what an earlier call had opened. Throws when the project has several.
+            DomainFile unique = findDomainFile(wanted);
+            if (unique != null) {
+                wanted = unique.getPathname();
+            }
+        }
         Program hit = matchExact(liveSessionPrograms(), wanted);
         if (hit != null) {
             return hit;
@@ -150,7 +161,7 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
         if (hit != null) {
             return hit;
         }
-        return matchSubstring(Arrays.asList(getAllOpenPrograms()), wanted);
+        return matchSubstring(Arrays.asList(getAllOpenPrograms()), name.trim());
     }
 
     /**
@@ -261,8 +272,9 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
     }
 
     /**
-     * The project file {@code ident} names: an exact path, a file at the root, or a
-     * unique filename anywhere (exact case preferred over case-insensitive).
+     * The project file {@code ident} names: an exact path, or a unique filename anywhere
+     * (exact case preferred over case-insensitive). A file at the root gets no priority:
+     * /x and /sub/x make "x" ambiguous.
      *
      * @throws AmbiguousProgramException when a filename matches several files
      */
@@ -278,10 +290,6 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
         }
         if (s.startsWith("/")) {
             return data.getFile(s);
-        }
-        DomainFile atRoot = data.getFile("/" + s);
-        if (atRoot != null) {
-            return atRoot;
         }
         List<DomainFile> exactCase = new ArrayList<>();
         List<DomainFile> anyCase = new ArrayList<>();

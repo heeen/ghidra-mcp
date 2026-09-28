@@ -560,7 +560,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
      * shutdown hook, after the caller had already been told it was done.
      */
     private String exitServer() {
-        Object saved = JsonHelper.parseJson(services.programScript().saveAllOpenPrograms().toJson());
+        Object saved = services.programScript().saveAllOpenPrograms().asEmbeddable();
         new Thread(() -> {
             try { Thread.sleep(500); } catch (InterruptedException ignored) {}
             System.exit(0);

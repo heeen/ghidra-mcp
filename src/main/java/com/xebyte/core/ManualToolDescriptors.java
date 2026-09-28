@@ -145,7 +145,7 @@ public final class ManualToolDescriptors {
             "score", "True (the default) appends a compact completeness score. Must be a JSON boolean: any other type falls back to the default and is read as TRUE, so the string false does not switch it off.",
             "program", "Accepted but not read by this route: every step runs against the active program. Use the individual tools when you need to target a specific one.");
         add(m, "/check_connection", "GET", "utility",
-            "Liveness probe: {status, server_kind (gui/headless), version, program}. Cheap and\n"
+            "Liveness probe: {status, server_kind (gui/headless), version, program when one is current}. Cheap and\n"
             + " token-less, unlike the fuller /mcp/health; both servers answer it identically.",
             ToolAccess.READ_ONLY);
         add(m, "/exit_ghidra", "POST", "program", "Save and exit Ghidra", ToolAccess.DESTRUCTIVE);

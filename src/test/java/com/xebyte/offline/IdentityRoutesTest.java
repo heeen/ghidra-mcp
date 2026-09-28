@@ -43,9 +43,14 @@ public class IdentityRoutesTest {
     private static Map<String, JsonObject> identity(String kind) throws Exception {
         Program current = mock(Program.class);
         when(current.getName()).thenReturn("a.dll");
+        return identity(kind, current);
+    }
+
+    private static Map<String, JsonObject> identity(String kind, Program current) throws Exception {
         ProgramProvider provider = mock(ProgramProvider.class);
         when(provider.getCurrentProgram()).thenReturn(current);
-        when(provider.getAllOpenPrograms()).thenReturn(new Program[] {current});
+        when(provider.getAllOpenPrograms())
+            .thenReturn(current != null ? new Program[] {current} : new Program[0]);
 
         McpHttpServer server = new McpHttpServer(kind, Map::of);
         server.endpoints(new AnnotationScanner(provider));
@@ -81,6 +86,13 @@ public class IdentityRoutesTest {
         assertEquals(VersionInfo.getVersion(), c.get("version").getAsString());
         assertFalse("never the old hard-coded suffix", c.get("version").getAsString().endsWith("-headless"));
         assertEquals("a.dll", c.get("program").getAsString());
+    }
+
+    @Test
+    public void withNoCurrentProgramTheProgramFieldIsAbsent() throws Exception {
+        // Null fields are omitted across the API, so "no program" is an absent key.
+        JsonObject c = identity("headless", null).get("/check_connection");
+        assertEquals(Set.of("status", "server_kind", "version"), c.keySet());
     }
 
     @Test
