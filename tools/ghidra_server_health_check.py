@@ -139,7 +139,8 @@ def _unwrap_json_object(body: str) -> dict[str, Any] | None:
 def _validate_connection(
     status: int, body: str, _headers: Mapping[str, str]
 ) -> tuple[bool, str | None, dict[str, Any]]:
-    """Both servers answer ``{status, server_kind, version, program}``.
+    """Both servers answer ``{status, server_kind, version}``, plus ``program`` when one
+    is current.
 
     This used to sniff two different English sentences to tell the servers apart.
     """

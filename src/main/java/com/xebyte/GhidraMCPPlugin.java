@@ -1222,7 +1222,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     private Map<String, Object> saveEverythingBeforeExit() {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("programs", JsonHelper.parseJson(programScriptService.saveAllOpenPrograms().toJson()));
+        result.put("programs", programScriptService.saveAllOpenPrograms().asEmbeddable());
         result.put("traces", saveAllOpenDebuggerTraces());
         return result;
     }

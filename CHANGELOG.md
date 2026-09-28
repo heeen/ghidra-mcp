@@ -127,7 +127,8 @@ and no aliases:
 
 **One health surface.** `McpHttpServer` builds `/check_connection`,
 `/mcp/health` and `/mcp/instance_info` for both servers:
-- `/check_connection` is JSON: `{status, server_kind, version, program}`.
+- `/check_connection` is JSON: `{status, server_kind, version}`, plus
+  `program` when one is current.
 - `instance_info` names the kind, version and endpoint count.
 - `/health` is retired.
 - `VersionInfo` moved to core, so headless stops reporting a hard-coded

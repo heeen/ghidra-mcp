@@ -38,11 +38,18 @@ public class ProjectProgramProviderTest {
         final Project project;
         final ProjectData data;
 
+        final List<DomainFile> files = new java.util.ArrayList<>();
+
         Fixture() {
             super(null, true);
             project = mock(Project.class);
             data = mock(ProjectData.class);
             when(project.getProjectData()).thenReturn(data);
+            // One flat folder holding every file: enough for a search by name.
+            DomainFolder root = mock(DomainFolder.class);
+            when(root.getFiles()).thenAnswer(inv -> files.toArray(new DomainFile[0]));
+            when(root.getFolders()).thenReturn(new DomainFolder[0]);
+            when(data.getRootFolder()).thenReturn(root);
         }
 
         @Override
@@ -65,6 +72,7 @@ public class ProjectProgramProviderTest {
             DomainFile df = p.getDomainFile();
             when(df.getDomainObject(any(), anyBoolean(), anyBoolean(), any())).thenReturn(p);
             when(data.getFile(path)).thenReturn(df);
+            files.add(df);
             return p;
         }
     }
@@ -143,6 +151,28 @@ public class ProjectProgramProviderTest {
         Program gnu = f.file("/gnu");
         assertSame(gnutrue, f.getProgram("/gnutrue"));
         assertSame("'gnu' names the file gnu, not the open gnutrue", gnu, f.getProgram("gnu"));
+    }
+
+    @Test
+    public void aBareNameTwoProjectFilesShareIsAmbiguousEvenWithOneOpen() throws Exception {
+        // Found live: with /fw/gnutrue open, "gnutrue" silently meant it, although
+        // /other/gnutrue sits in the same project. What is open must not decide.
+        Fixture f = new Fixture();
+        f.file("/fw/gnutrue");
+        f.file("/other/gnutrue");
+        f.getProgram("/fw/gnutrue");
+
+        AmbiguousProgramException e =
+            assertThrows(AmbiguousProgramException.class, () -> f.getProgram("gnutrue"));
+        assertEquals(List.of("/fw/gnutrue", "/other/gnutrue"), e.candidates());
+    }
+
+    @Test
+    public void aRootFileGetsNoPriorityOverASameNamedOneDeeper() throws Exception {
+        Fixture f = new Fixture();
+        f.file("/x");
+        f.file("/sub/x");
+        assertThrows(AmbiguousProgramException.class, () -> f.getProgram("x"));
     }
 
     @Test

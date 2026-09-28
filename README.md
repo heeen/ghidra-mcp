@@ -1103,7 +1103,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 ### Health, Schema & Tool Control
 
-- `check_connection` - Liveness probe: {status, server_kind (gui/headless), version, program}
+- `check_connection` - Liveness probe: {status, server_kind (gui/headless), version, program when one is current}
 - `mcp_health` - Server health: kind (gui/headless), build, current program, uptime, HTTP pool, memory, endpoint count
 - `mcp_schema` - Machine-readable API schema with endpoint metadata
 - `tool_goto_address` - Navigate CodeBrowser listing and decompiler to a specific address **(GUI only)**
@@ -1411,7 +1411,7 @@ docker-compose up -d ghidra-mcp
 
 # Test connection
 curl http://localhost:8089/check_connection
-# {"status": "ok", "server_kind": "headless", "version": "7.0.0", "program": null}
+# {"status": "ok", "server_kind": "headless", "version": "7.0.0"}
 ```
 
 ### Headless API Workflow
