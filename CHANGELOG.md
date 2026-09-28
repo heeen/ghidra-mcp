@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**241 endpoints**, 240 of them advertised as MCP tools — 227 served by the GUI
-plugin, 215 by the headless server, 201 by both. One endpoint,
+**237 endpoints**, 236 of them advertised as MCP tools — 229 served by the GUI
+plugin, 213 by the headless server, 205 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
@@ -77,6 +77,74 @@ The old split was accidentally immune on the UDS side, because those services
 read through a provider backed by the live tool map. Consolidating removed that
 immunity, so the dispose handoff now rebinds the whole server to a surviving
 window rather than only restarting the plugin's TCP listener.
+
+#### Headless and GUI: one program model, one set of names, one health surface
+
+Four commits carried the same work to the headless server. The GUI had one
+model of programs; headless had another. Headless kept a map, keyed by bare
+filename, of programs someone had explicitly loaded. So on a headless server
+with the program sitting in its project:
+- `get_metadata(program=/fw/gnutrue)` answered `Program not found`.
+- `close_program save=true` released without saving.
+- `switch_program` answered success while doing nothing.
+
+**One program model.** Both providers now extend `ProjectProgramProvider`, a
+path-keyed LRU cache over the project that opens a program the first time any
+endpoint names it. The cache holds at most `GHIDRA_MCP_MAX_CACHED_PROGRAMS`
+programs (default 8, minimum 2); set it in a systemd unit's `Environment=` to
+change it. The GUI adds only its CodeBrowser layer on top.
+
+Resolution is one matcher on both servers, in this order: exact path, exact
+name, the project, and only then a unique name substring. A name two versions
+share is an error listing the candidates, never the first hit. `close_program
+save=false` now really discards on the GUI too; the cache release used to save
+regardless. One `ProgramSaves` helper replaces three save paths that had
+drifted apart.
+
+**One name per operation**, served by both servers, with the old names retired
+and no aliases:
+
+| kept | retired |
+| --- | --- |
+| `/open_program` (now POST with a JSON body) | headless `/load_program_from_project` |
+| `/import_file` | headless `/load_program` |
+| `/get_project_info` | GUI `/project/info` |
+| `/checkin_program` | (was headless-only) |
+
+- `/open_program`: when the path is not found, the failure lists the paths the
+  project does contain and whether it is bound to a server. A program that could
+  only be opened read-only reports `read_only` with the reason. That reason
+  matters: a stale SLEIGH language opens read-only, so `success` alone no longer
+  means the program is current, and `upgrade_project_language --verify` reads
+  the reason.
+- `/import_file`: opens a same-named file already in the folder rather than
+  failing on the duplicate (`reused_existing`).
+- `/checkin_program`: saves, then closes every instance, CodeBrowsers included,
+  before checking in.
+- `/server/status`: means "is a Ghidra Server connected" on both servers. The
+  GUI used to answer `connected: true` for any open project.
+- Headless `/exit_ghidra`: saves and reports what it saved, as the GUI's does.
+
+**One health surface.** `McpHttpServer` builds `/check_connection`,
+`/mcp/health` and `/mcp/instance_info` for both servers:
+- `/check_connection` is JSON: `{status, server_kind, version, program}`.
+- `instance_info` names the kind, version and endpoint count.
+- `/health` is retired.
+- `VersionInfo` moved to core, so headless stops reporting a hard-coded
+  `7.0.0-headless`.
+- The doctor tool used to tell the servers apart by sniffing two English
+  banners. It now reads `server_kind`, and asks both kinds the same questions.
+
+**Construction.** The shared service set is built once, by `CoreServices`, for
+the plugin, the headless server and the offline tests. `HeadlessEndpointHandler`
+is gone: 2,148 lines, of which five small route bodies were live. Two of those
+bodies moved to `@McpTool`s:
+- `/list_projects` and `/delete_project` now apply the file-root allow-list they
+  skipped.
+- `/configure_analyzer` now reports an unknown analyzer instead of `success:
+  true`, and is served by both servers.
+
+The GUI schema also stopped listing every hand-coded route twice.
 
 An agent can now materialise a program's decompilation into an on-disk tree,
 already partitioned into compartments with the evidence that justified each
