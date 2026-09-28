@@ -68,12 +68,6 @@ def build_rules(
         ),
         ReplacementRule(
             repo_root
-            / "src/main/java/com/xebyte/headless/HeadlessEndpointHandler.java",
-            rf'"{escaped_old}-headless"',
-            f'"{new_version}-headless"',
-        ),
-        ReplacementRule(
-            repo_root
             / "src/main/java/com/xebyte/headless/GhidraMCPHeadlessServer.java",
             rf'"{escaped_old}-headless"',
             f'"{new_version}-headless"',
