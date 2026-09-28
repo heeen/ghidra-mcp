@@ -150,16 +150,8 @@ public final class ManualToolDescriptors {
             + " /mcp/health, which returns pool/uptime/memory diagnostics; this one\n"
             + " stays cheap and is served by the GUI and headless servers alike.",
             ToolAccess.READ_ONLY);
-        add(m, "/configure_analyzer", "POST", "analysis", "Configure an analysis plugin", ToolAccess.WRITE,
-            "name", "Analyzer name exactly as Ghidra registers it, e.g. Decompiler Parameter ID.",
-            "enabled", "True enables the analyzer, false disables it. Omitting the key entirely leaves the current setting alone.",
-            "program", "Target program name (omit to use the active program). Headless mode only.");
-        add(m, "/delete_project", "POST", "project", "Delete a Ghidra project", ToolAccess.DESTRUCTIVE,
-            "projectPath", "Filesystem path of the project to delete: its .gpr file or the project directory. Headless mode only; the GUI plugin does not register this route.");
         add(m, "/exit_ghidra", "POST", "program", "Save and exit Ghidra", ToolAccess.DESTRUCTIVE);
         add(m, "/health", "GET", "utility", "Health check endpoint for headless server", ToolAccess.READ_ONLY);
-        add(m, "/list_projects", "GET", "project", "List available Ghidra projects", ToolAccess.READ_ONLY,
-            "searchDir", "Directory to scan for .gpr projects. Headless mode only; the GUI plugin does not register this route.");
         add(m, "/mcp/health", "GET", "utility", "HTTP server health: pool stats, uptime, memory, active request count", ToolAccess.READ_ONLY);
         add(m, "/mcp/schema", "GET", "utility", "Machine-readable API schema with endpoint metadata", ToolAccess.READ_ONLY);
         // /move_file and /move_folder used to live here: manually routed in the

@@ -647,6 +647,7 @@
         "program"
       ],
       "servers": [
+        "gui",
         "headless"
       ],
       "description": "Configure an analysis plugin"

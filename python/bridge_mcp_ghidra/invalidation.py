@@ -59,6 +59,8 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/checkin_program": InvalidationTier.NONE,
     "/export_program": InvalidationTier.NONE,
     "/prompt_policy": InvalidationTier.NONE,
+    # Analysis options are program state, but no function or program body reports them.
+    "/configure_analyzer": InvalidationTier.NONE,
     "/set_bookmark": InvalidationTier.NONE,
     "/delete_bookmark": InvalidationTier.NONE,
     "/archive_ingest_function": InvalidationTier.NONE,
@@ -163,6 +165,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/delete_file": InvalidationTier.UNBOUNDED,
     "/merge_program_documentation": InvalidationTier.UNBOUNDED,
     "/create_project": InvalidationTier.UNBOUNDED,
+    "/delete_project": InvalidationTier.UNBOUNDED,
     "/close_project": InvalidationTier.UNBOUNDED,
     "/restore_project": InvalidationTier.UNBOUNDED,
     "/archive_project": InvalidationTier.UNBOUNDED,

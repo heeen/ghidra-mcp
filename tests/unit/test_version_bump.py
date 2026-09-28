@@ -48,9 +48,6 @@ def repo(tmp_path: Path) -> Path:
 
     headless_dir = plugin_dir / "headless"
     headless_dir.mkdir(parents=True)
-    (headless_dir / "HeadlessEndpointHandler.java").write_text(
-        f'return "{OLD}-headless";\n', encoding="utf-8"
-    )
     (headless_dir / "GhidraMCPHeadlessServer.java").write_text(
         f'static final String VER = "{OLD}-headless";\n', encoding="utf-8"
     )
@@ -205,18 +202,6 @@ def test_rule_java_plugin_version_string(repo: Path):
     assert OLD not in content
 
 
-def test_rule_headless_endpoint_handler(repo: Path):
-    from tools.setup.version_bump import apply_version_bump
-
-    apply_version_bump(repo, NEW, old_version=OLD)
-
-    content = (
-        repo / "src" / "main" / "java" / "com" / "xebyte" / "headless" / "HeadlessEndpointHandler.java"
-    ).read_text(encoding="utf-8")
-    assert f'"{NEW}-headless"' in content
-    assert OLD not in content
-
-
 def test_rule_headless_server(repo: Path):
     from tools.setup.version_bump import apply_version_bump
 
@@ -322,7 +307,6 @@ def test_build_rules_covers_all_expected_files(tmp_path: Path):
         "pom.xml",
         "src/main/resources/META-INF/MANIFEST.MF",
         "src/main/java/com/xebyte/GhidraMCPPlugin.java",
-        "src/main/java/com/xebyte/headless/HeadlessEndpointHandler.java",
         "src/main/java/com/xebyte/headless/GhidraMCPHeadlessServer.java",
         "tests/endpoints.json",
         "CLAUDE.md",

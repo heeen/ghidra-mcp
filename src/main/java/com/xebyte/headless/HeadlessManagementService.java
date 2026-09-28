@@ -146,6 +146,48 @@ public class HeadlessManagementService {
         }
     }
 
+    // Both below were hand-coded routes on the server until 7.0, outside the file-root
+    // allow-list every filesystem-touching sibling here applies -- including a
+    // recursive project DELETE. They take the same check now.
+
+    @McpTool(path = "/list_projects", description = "Find Ghidra projects (.gpr) in a directory", category = "project", access = ToolAccess.READ_ONLY)
+    public Response listProjects(
+            @Param(value = "searchDir", defaultValue = "",
+                   description = "Directory to search for .gpr files. Omit for the server user's home "
+                               + "directory. Must resolve inside the configured file root.") String searchDir) {
+        String dir = searchDir == null || searchDir.isEmpty()
+            ? System.getProperty("user.home") : searchDir;
+        File resolved = resolveWithinRootOrLog(dir, "/list_projects");
+        if (resolved == null) return Response.err(FILE_ROOT_DENY);
+        try {
+            List<Map<String, Object>> projects = new java.util.ArrayList<>();
+            for (HeadlessProgramProvider.ProjectInfo p : programProvider.listProjects(resolved.getPath())) {
+                projects.add(JsonHelper.mapOf("name", p.name, "path", p.path, "active", p.active));
+            }
+            return Response.ok(JsonHelper.mapOf("projects", projects, "count", projects.size()));
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    @McpTool(path = "/delete_project", method = "POST", description = "Delete a Ghidra project from disk", category = "project", access = ToolAccess.DESTRUCTIVE)
+    public Response deleteProject(
+            @Param(value = "projectPath", source = ParamSource.BODY,
+                   description = "The project's .gpr file or its directory. Must resolve inside the "
+                               + "configured file root.") String projectPath) {
+        if (projectPath == null || projectPath.isEmpty()) return Response.err("projectPath required");
+        File resolved = resolveWithinRootOrLog(projectPath, "/delete_project");
+        if (resolved == null) return Response.err(FILE_ROOT_DENY);
+        try {
+            if (programProvider.deleteProject(resolved.getPath())) {
+                return Response.ok(JsonHelper.mapOf("success", true, "deleted", resolved.getPath()));
+            }
+            return Response.err("Failed to delete project");
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
     @McpTool(path = "/open_project", method = "POST",
             description = "Open a Ghidra project: a local .gpr/directory, or a shared "
                 + "Ghidra Server repository via ghidra://host[:port]/repo (creates a "

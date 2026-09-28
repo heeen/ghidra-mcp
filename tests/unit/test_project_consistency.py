@@ -319,10 +319,11 @@ class TestJavaArchitecture(unittest.TestCase):
             "/tool/running_tools",
         }
         headless_only_expected = {
-            "/configure_analyzer",
-            "/delete_project",
             "/health",
-            "/list_projects",
+            # /configure_analyzer, /list_projects and /delete_project were hand-routed
+            # here until they became @McpTools (AnalysisService, on both servers; and
+            # HeadlessManagementService). Hand-routed, they skipped the file-root
+            # allow-list and /configure_analyzer answered success for any name.
             # /move_file and /move_folder used to be listed here. They were
             # hand-routed headless-only while tests/endpoints.json advertised
             # them globally, so a FrontEnd-mode /mcp/schema never served them

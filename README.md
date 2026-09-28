@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 240 tools fully implemented (the whole catalog; the GUI plugin serves 227 of them and the headless server 215)
+- **MCP Tools**: 240 tools fully implemented (the whole catalog; the GUI plugin serves 228 of them and the headless server 215)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -873,7 +873,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 240 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-200 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (26) or **(headless only)** (14) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+201 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (26) or **(headless only)** (13) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -1065,7 +1065,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `analyze_function_complete` - Comprehensive single-call function analysis
 - `analyze_function_completeness` - Analyze documentation completeness
 - `batch_apply_documentation` - Apply all documentation to a function in one call **(GUI only)**
-- `configure_analyzer` - Configure an analysis plugin **(headless only)**
+- `configure_analyzer` - Configure an analysis plugin
 - `detect_array_bounds` - Detect array bounds
 - `find_code_gaps` - Find gaps of undefined bytes between functions in executable memory
 - `find_dead_code` - Find dead code
@@ -1209,7 +1209,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 ### Components
 
 - **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (241 catalog entries)
-- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (227 endpoints)
+- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (228 endpoints)
 - **GhidraMCPHeadlessServer** — Standalone headless server — 215 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
 
@@ -1293,7 +1293,7 @@ ghidra-mcp/
 ├── python/bridge_mcp_ghidra/ # MCP server package (Python, 241 catalog entries)
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
-│       ├── GhidraMCPPlugin.java         # GUI plugin (227 endpoints)
+│       ├── GhidraMCPPlugin.java         # GUI plugin (228 endpoints)
 │       ├── headless/                    # Headless server (215 endpoints)
 │       └── core/                        # Shared service layer (14 services)
 ├── ghidra_scripts/          # Automation scripts for batch workflows
@@ -1485,7 +1485,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | -------- | ------- |
 | **Version** | 7.0.0 |
 | **MCP Tools** | 241 fully implemented |
-| **GUI Endpoints** | 227 (GhidraMCPPlugin) |
+| **GUI Endpoints** | 228 (GhidraMCPPlugin) |
 | **Headless Endpoints** | 215 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |
 | **Batch Efficiency** | 93% API call reduction |

@@ -179,7 +179,7 @@ class VersionInfo {
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 227 endpoints for reverse engineering automation. " +
+                  "Provides 228 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -266,6 +266,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private com.xebyte.core.GhidraMCPAuthenticator authenticator;
 
     // Service layer for delegated operations
+    private final com.xebyte.core.CoreServices services;
     private final com.xebyte.core.ListingService listingService;
     private final com.xebyte.core.CommentService commentService;
     private final com.xebyte.core.SymbolLabelService symbolLabelService;
@@ -276,14 +277,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private final com.xebyte.core.AnalysisService analysisService;
     private final com.xebyte.core.MalwareSecurityService malwareSecurityService;
     private final com.xebyte.core.ProgramScriptService programScriptService;
-    private final com.xebyte.core.EmulationService emulationService;
     private final com.xebyte.core.DebuggerService debuggerService;
     private final com.xebyte.core.PromptPolicyService promptPolicyService;
-    private final com.xebyte.core.FunctionBundleService functionBundleService;
-    private final com.xebyte.core.TypeReferenceService typeReferenceService;
-    private final com.xebyte.core.ChangeTokenService changeTokenService;
-    private final com.xebyte.core.PartitionService partitionService;
-    private final com.xebyte.core.CheckoutService checkoutService;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -293,25 +288,19 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // Initialize service layer — FrontEnd mode: opens programs on-demand from project
         this.programProvider = new FrontEndProgramProvider(tool, this);
         this.threadingStrategy = new com.xebyte.headless.DirectThreadingStrategy();
-        this.listingService = new com.xebyte.core.ListingService(programProvider);
-        this.commentService = new com.xebyte.core.CommentService(programProvider, threadingStrategy);
-        this.symbolLabelService = new com.xebyte.core.SymbolLabelService(programProvider, threadingStrategy);
-        this.functionService = new com.xebyte.core.FunctionService(programProvider, threadingStrategy);
-        this.xrefCallGraphService = new com.xebyte.core.XrefCallGraphService(programProvider, threadingStrategy);
-        this.dataTypeService = new com.xebyte.core.DataTypeService(programProvider, threadingStrategy);
-        this.documentationHashService = new com.xebyte.core.DocumentationHashService(programProvider, threadingStrategy, new com.xebyte.core.BinaryComparisonService());
-        this.documentationHashService.setFunctionService(this.functionService);
-        this.analysisService = new com.xebyte.core.AnalysisService(programProvider, threadingStrategy, this.functionService);
-        this.malwareSecurityService = new com.xebyte.core.MalwareSecurityService(programProvider, threadingStrategy);
-        this.programScriptService = new com.xebyte.core.ProgramScriptService(programProvider, threadingStrategy);
-        this.emulationService = new com.xebyte.core.EmulationService(programProvider, threadingStrategy);
+        this.services = com.xebyte.core.CoreServices.build(programProvider, threadingStrategy);
+        this.listingService = services.listing();
+        this.commentService = services.comment();
+        this.symbolLabelService = services.symbolLabel();
+        this.functionService = services.function();
+        this.xrefCallGraphService = services.xrefCallGraph();
+        this.dataTypeService = services.dataType();
+        this.documentationHashService = services.documentationHash();
+        this.analysisService = services.analysis();
+        this.malwareSecurityService = services.malwareSecurity();
+        this.programScriptService = services.programScript();
         this.debuggerService = new com.xebyte.core.DebuggerService(programProvider, threadingStrategy, tool);
         this.promptPolicyService = new com.xebyte.core.PromptPolicyService();
-        this.functionBundleService = new com.xebyte.core.FunctionBundleService(programProvider, threadingStrategy, functionService);
-        this.typeReferenceService = new com.xebyte.core.TypeReferenceService(programProvider);
-        this.changeTokenService = new com.xebyte.core.ChangeTokenService(programProvider);
-        this.partitionService = new com.xebyte.core.PartitionService(programProvider);
-        this.checkoutService = new com.xebyte.core.CheckoutService(programProvider);
         Msg.info(this, "============================================");
         Msg.info(this, "GhidraMCP " + VersionInfo.getFullVersion());
         Msg.info(this, "Endpoints: " + VersionInfo.getEndpointCount());
@@ -569,11 +558,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      */
     private AnnotationScanner buildScanner() {
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
-            listingService, functionService, commentService, symbolLabelService,
-            xrefCallGraphService, dataTypeService, analysisService,
-            documentationHashService, malwareSecurityService, programScriptService,
-            emulationService, debuggerService, promptPolicyService, functionBundleService,
-            typeReferenceService, changeTokenService, partitionService, checkoutService);
+            services.plus(debuggerService, promptPolicyService));
         // The hand-coded routes are live on every transport, but the scanner only
         // knows annotated methods; without this they stay out of /mcp/schema and so
         // out of the bridge's dynamic tool discovery.
