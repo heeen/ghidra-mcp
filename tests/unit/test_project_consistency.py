@@ -309,16 +309,17 @@ class TestJavaArchitecture(unittest.TestCase):
                 re.findall(r'@McpTool\(\s*(?:path\s*=\s*)?"([^"]+)"', java_file.read_text())
             )
 
+        # /check_connection, /mcp/health and /mcp/instance_info are McpHttpServer's own,
+        # served by both servers and registered via http.route by neither.
         gui_only_expected = {
             "/batch_apply_documentation",
-            "/mcp/health",
             "/server/authenticate",
             "/tool/goto_address",
             "/tool/launch_codebrowser",
             "/tool/running_tools",
         }
-        headless_only_expected = {
-            "/health",
+            # /health was the last one: headless-only liveness, retired for the
+            # shared /mcp/health.
             # /configure_analyzer, /list_projects and /delete_project were hand-routed
             # here until they became @McpTools (AnalysisService, on both servers; and
             # HeadlessManagementService). Hand-routed, they skipped the file-root
@@ -329,7 +330,7 @@ class TestJavaArchitecture(unittest.TestCase):
             # and every bridge call 404'd. They are now @McpTool methods on
             # ProgramScriptService, i.e. `annotated`, and must NOT come back
             # to this set -- see ProjectMoveEndpointsOfflineTest.
-        }
+        headless_only_expected: set[str] = set()
 
         self.assertEqual(gui - headless - annotated, gui_only_expected)
         self.assertEqual(headless - gui - annotated, headless_only_expected)

@@ -324,9 +324,9 @@ class TestFaultInjection:
         assert _get(f"{fake_ghidra.url}/check_connection")[0] == 200
 
     def test_fail_next_can_be_scoped_to_one_path(self, fake_ghidra):
-        fake_ghidra.fail_next(500, path="/get_version")
+        fake_ghidra.fail_next(500, path="/mcp/health")
         assert _get(f"{fake_ghidra.url}/check_connection")[0] == 200
-        assert _get(f"{fake_ghidra.url}/get_version")[0] == 500
+        assert _get(f"{fake_ghidra.url}/mcp/health")[0] == 500
 
     def test_malformed_next_returns_unparseable_json(self, fake_ghidra):
         fake_ghidra.malformed_next()
@@ -336,8 +336,8 @@ class TestFaultInjection:
             json.loads(body)
 
     def test_requests_are_recorded_for_inspection(self, fake_ghidra):
-        _get(f"{fake_ghidra.url}/get_version")
-        calls = fake_ghidra.calls_to("/get_version")
+        _get(f"{fake_ghidra.url}/mcp/health")
+        calls = fake_ghidra.calls_to("/mcp/health")
         assert len(calls) == 1
         assert calls[0].method == "GET"
         assert calls[0].status == 200

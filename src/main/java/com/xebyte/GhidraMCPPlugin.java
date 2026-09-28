@@ -59,6 +59,7 @@ import ghidra.program.model.block.CodeBlockIterator;
 import ghidra.program.model.block.CodeBlockReference;
 import ghidra.program.model.block.CodeBlockReferenceIterator;
 
+import com.xebyte.core.VersionInfo;
 import com.xebyte.core.BinaryComparisonService;
 import com.xebyte.core.AnnotationScanner;
 import com.xebyte.core.McpHttpServer;
@@ -99,80 +100,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
-// Load version from properties file (populated by Maven during build)
-class VersionInfo {
-    private static String VERSION = "7.0.0"; // Default fallback
-    private static String APP_NAME = "GhidraMCP";
-    private static String GHIDRA_VERSION = "unknown"; // Loaded from version.properties (Maven-filtered)
-    private static String BUILD_TIMESTAMP = "dev"; // Will be replaced by Maven
-    private static String BUILD_NUMBER = "0"; // Will be replaced by Maven
-    // Default fallback when the plugin has not yet finished registering its
-    // scanner-driven endpoints (e.g., headless usage that imports this class
-    // without running the GUI activation path). The live value is set via
-    // setEndpointCount() once the scanner has enumerated everything.
-    private static volatile int ENDPOINT_COUNT = 177;
-
-    static {
-        // v5.4.2: loading "/version.properties" from the classpath root was
-        // hitting a sibling version.properties exported by another Ghidra
-        // module, which resolved first and returned stale values. Move the
-        // resource under the com/xebyte/ package path so the lookup is scoped
-        // to this plugin's classes.
-        try (InputStream input = GhidraMCPPlugin.class
-                .getResourceAsStream("/com/xebyte/version.properties")) {
-            if (input != null) {
-                Properties props = new Properties();
-                props.load(input);
-                VERSION = props.getProperty("app.version", VERSION);
-                APP_NAME = props.getProperty("app.name", APP_NAME);
-                GHIDRA_VERSION = props.getProperty("ghidra.version", GHIDRA_VERSION);
-                BUILD_TIMESTAMP = props.getProperty("build.timestamp", BUILD_TIMESTAMP);
-                BUILD_NUMBER = props.getProperty("build.number", BUILD_NUMBER);
-            }
-        } catch (IOException e) {
-            // Use defaults (hard-coded above) if file not found.
-        }
-    }
-
-    public static String getVersion() {
-        return VERSION;
-    }
-
-    public static String getAppName() {
-        return APP_NAME;
-    }
-
-    public static String getGhidraVersion() {
-        return GHIDRA_VERSION;
-    }
-
-    public static String getBuildTimestamp() {
-        return BUILD_TIMESTAMP;
-    }
-
-    public static String getBuildNumber() {
-        return BUILD_NUMBER;
-    }
-
-    public static int getEndpointCount() {
-        return ENDPOINT_COUNT;
-    }
-
-    /**
-     * Update the live endpoint count after the AnnotationScanner has
-     * enumerated everything. Keeps {@code /get_version.endpoint_count}
-     * in sync with {@code /mcp/schema} so version-banner output and
-     * release smoke tests don't drift from reality.
-     */
-    public static void setEndpointCount(int count) {
-        ENDPOINT_COUNT = count;
-    }
-
-    public static String getFullVersion() {
-        return VERSION + " (build " + BUILD_NUMBER + ", " + BUILD_TIMESTAMP + ")";
-    }
-}
-
 @PluginInfo(
     status = PluginStatus.RELEASED,
     packageName = ghidra.framework.main.UtilityPluginPackage.NAME,
@@ -190,8 +117,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     // Static singleton: one TCP server shared across all tool windows (fixes #35).
     // Serves this plugin's own FrontEnd-mode services; the socket is ServerManager's.
-    private static final long serverStartMillis = System.currentTimeMillis();
     private static int instanceCount = 0;
+    // What this plugin's /mcp/schema serves, for the Server Status dialog.
+    private int endpointCount;
     // Live plugin instances. The TCP server's route lambdas capture the
     // owning instance's services (programProvider, listingService, …); when
     // that instance is disposed first while others survive, the routes are
@@ -303,7 +231,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         this.promptPolicyService = new com.xebyte.core.PromptPolicyService();
         Msg.info(this, "============================================");
         Msg.info(this, "GhidraMCP " + VersionInfo.getFullVersion());
-        Msg.info(this, "Endpoints: " + VersionInfo.getEndpointCount());
         Msg.info(this, "============================================");
 
         // Server authenticator: ensure credentials are registered before any project opens.
@@ -535,7 +462,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                     "TCP: " + tcpStatus + "\n" +
                     "Strict naming enforcement: " + NamingPolicy.getInstance().isStrictNamingEnforcement() + "\n" +
                     "Version: " + VersionInfo.getFullVersion() + "\n" +
-                    "Endpoints: " + VersionInfo.getEndpointCount();
+                    "Endpoints: " + endpointCount;
                 Msg.showInfo(getClass(), null, "GhidraMCP", message);
             }
         };
@@ -564,8 +491,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // out of the bridge's dynamic tool discovery.
         com.xebyte.core.ManualToolDescriptors.addAll(
             scanner, com.xebyte.core.ManualToolDescriptors.SHARED_ROUTES);
-        // /get_version's endpoint_count must match what /mcp/schema serves.
-        VersionInfo.setEndpointCount(scanner.getDescriptors().size());
+        endpointCount = scanner.getDescriptors().size();
+        Msg.info(this, "Endpoints: " + endpointCount);
         return scanner;
     }
 
@@ -1503,15 +1430,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return documentationHashService.applyFunctionDocumentation(jsonBody, programName).toJson();
     }
 
-    /** Liveness banner: is the plugin up, and what is it looking at. */
-    private String checkConnection() {
-        Program program = getCurrentProgram();
-        if (program == null) {
-            return "Connected: GhidraMCP plugin running, but no program loaded";
-        }
-        return "Connected: GhidraMCP plugin running with program '" + program.getName() + "'";
-    }
-
     /**
      * Register the hand-coded routes — the utility / GUI-state / Ghidra-Server
      * endpoints that predate the {@code @McpTool} convention and have no service
@@ -1528,52 +1446,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * TCP side wraps its Sun exchange in {@link SunHttpExchangeAdapter} at registration.
      */
     private void registerHandCodedRoutes(McpHttpServer http) {
-        // ==========================================================================
-        // HEALTH / METRICS ENDPOINT
-        // Exposes HTTP thread pool saturation, active request count, uptime,
-        // memory. Used by the dashboard to show a "server is struggling" badge
-        // and by regression tests to assert healthy baselines.
-        // ==========================================================================
-        // Liveness, deliberately separate from /mcp/health's diagnostics: this is
-        // the probe `tools/ghidra_server_health_check.py` uses to identify which
-        // server answered, and both servers must serve it. Folding it into the
-        // diagnostics route in 7.0 left the doctor with no route common to both.
-        http.route("/check_connection", exchange -> {
-            sendResponse(exchange, checkConnection());
-        });
-
-        http.route("/mcp/health", exchange -> {
-            int active = http.activeRequests();
-            long uptimeSec = (System.currentTimeMillis() - serverStartMillis) / 1000L;
-            Runtime rt = Runtime.getRuntime();
-            long usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L);
-            long totalMb = rt.totalMemory() / (1024L * 1024L);
-            long maxMb = rt.maxMemory() / (1024L * 1024L);
-
-            Program current = getCurrentProgram();
-            // Absorbs the former /check_connection (which answered an English sentence,
-            // the last endpoint to violate the JSON contract) and /get_version: three
-            // endpoints answering "who and what are you, and are you alive".
-            sendResponse(exchange, com.xebyte.core.JsonHelper.toJson(
-                com.xebyte.core.JsonHelper.mapOf(
-                    "status", "ok",
-                    "connected", true,
-                    "program", current != null ? current.getName() : null,
-                    "uptime_seconds", uptimeSec,
-                    "active_requests", active,
-                    "version", com.xebyte.core.JsonHelper.mapOf(
-                        "plugin_version", VersionInfo.getVersion(),
-                        "plugin_name", VersionInfo.getAppName(),
-                        "full_version", VersionInfo.getFullVersion(),
-                        "build_timestamp", VersionInfo.getBuildTimestamp(),
-                        "build_number", VersionInfo.getBuildNumber(),
-                        "ghidra_version", VersionInfo.getGhidraVersion(),
-                        "java_version", System.getProperty("java.version"),
-                        "endpoint_count", VersionInfo.getEndpointCount()),
-                    "http_pool", http.poolStats(),
-                    "memory_mb", com.xebyte.core.JsonHelper.mapOf(
-                        "used", usedMb, "total", totalMb, "max", maxMb))));
-        });
+        // /check_connection, /mcp/health and /mcp/instance_info are McpHttpServer's own:
+        // both servers answer them identically, bar server_kind.
 
         // ==========================================================================
         // INFRASTRUCTURE ENDPOINTS (not in service layer)

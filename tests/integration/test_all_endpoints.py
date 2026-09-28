@@ -33,7 +33,8 @@ class TestServerConnection:
         """Server should respond to health check."""
         response = http_client.get("/mcp/health")
         assert response.status_code == 200
-        assert "Connection OK" in response.text or "GhidraMCP" in response.text
+        assert response.json()["status"] == "ok"
+        assert response.json()["server_kind"] in {"gui", "headless"}
 
     def test_version_endpoint(self, http_client):
         """Server should return version info."""

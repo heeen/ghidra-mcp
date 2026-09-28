@@ -145,13 +145,11 @@ public final class ManualToolDescriptors {
             "score", "True (the default) appends a compact completeness score. Must be a JSON boolean: any other type falls back to the default and is read as TRUE, so the string false does not switch it off.",
             "program", "Accepted but not read by this route: every step runs against the active program. Use the individual tools when you need to target a specific one.");
         add(m, "/check_connection", "GET", "utility",
-            "Liveness probe: is the server up, and which one is it. Deliberately not\n"
-            + " /mcp/health, which returns pool/uptime/memory diagnostics; this one\n"
-            + " stays cheap and is served by the GUI and headless servers alike.",
+            "Liveness probe: {status, server_kind (gui/headless), version, program}. Cheap and\n"
+            + " token-less, unlike the fuller /mcp/health; both servers answer it identically.",
             ToolAccess.READ_ONLY);
         add(m, "/exit_ghidra", "POST", "program", "Save and exit Ghidra", ToolAccess.DESTRUCTIVE);
-        add(m, "/health", "GET", "utility", "Health check endpoint for headless server", ToolAccess.READ_ONLY);
-        add(m, "/mcp/health", "GET", "utility", "HTTP server health: pool stats, uptime, memory, active request count", ToolAccess.READ_ONLY);
+        add(m, "/mcp/health", "GET", "utility", "Server health: kind (gui/headless), build, current program, uptime, HTTP pool, memory, endpoint count", ToolAccess.READ_ONLY);
         add(m, "/mcp/schema", "GET", "utility", "Machine-readable API schema with endpoint metadata", ToolAccess.READ_ONLY);
         // /move_file and /move_folder used to live here: manually routed in the
         // headless server, absent from the GUI/FrontEnd server entirely, and so

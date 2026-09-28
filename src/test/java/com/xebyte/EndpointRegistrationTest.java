@@ -49,12 +49,12 @@ public class EndpointRegistrationTest extends TestCase {
     private boolean checkServerAvailability() {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(BASE_URL + "/get_version"))
+                .uri(URI.create(BASE_URL + "/check_connection"))
                 .timeout(Duration.ofSeconds(2))
                 .GET()
                 .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.statusCode() == 200 && response.body() != null && response.body().contains("5.8.0");
+            return response.statusCode() == 200 && response.body() != null && response.body().contains("server_kind");
         } catch (Exception e) {
             return false;
         }
