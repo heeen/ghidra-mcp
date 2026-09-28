@@ -133,11 +133,10 @@ public class ServerManager {
         lastConfig = config;
         server = new McpHttpServer(this::buildInstanceInfo);
         server.endpoints(scanner);
-        // Advertise the plugin's hand-coded routes too -- a route missing from the
-        // schema is a route the bridge's dynamic discovery never offers. Only when a
-        // registrar was supplied, so the schema never promises a path we don't serve.
+        // The scanner arrives with its manual descriptors already added (the plugin's
+        // buildScanner owns that); adding them here too listed every hand-coded route
+        // twice in /mcp/schema.
         if (guiEndpoints != null) {
-            ManualToolDescriptors.addAll(scanner, ManualToolDescriptors.SHARED_ROUTES);
             guiEndpoints.accept(server);
         }
         server.start(config);
