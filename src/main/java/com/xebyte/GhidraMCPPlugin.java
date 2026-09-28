@@ -1415,7 +1415,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      * Save a debugger trace, retrying if the attempt races an in-flight
      * transaction on the trace's own domain object -- the same {@code
      * IOException: Unable to lock due to active transaction} documented for
-     * program saves in {@code ProgramScriptService.saveWithRetry}, confirmed
+     * program saves in {@code ProgramSaves.withRetry}, confirmed
      * live against a debugger trace too (2026-07-26): a trace accumulates its
      * own transactions from continuous Trace RMI sync writes (module/register
      * updates), and one can still be open when {@code exit_ghidra} saves on

@@ -738,7 +738,12 @@ public final class ServiceUtils {
      */
     public static ProgramOrError getProgramOrError(ProgramProvider provider, String programName) {
         if (programName != null && !programName.isEmpty()) {
-            Program program = provider.getProgram(programName);
+            Program program;
+            try {
+                program = provider.getProgram(programName);
+            } catch (AmbiguousProgramException e) {
+                return new ProgramOrError(null, Response.err(e.getMessage()));
+            }
             if (program == null) {
                 return new ProgramOrError(null, Response.err(
                         "Program not found: " + programName + formatAvailablePrograms(provider)));

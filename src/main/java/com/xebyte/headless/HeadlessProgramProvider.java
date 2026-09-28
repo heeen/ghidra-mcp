@@ -15,7 +15,9 @@
  */
 package com.xebyte.headless;
 
+import com.xebyte.core.AmbiguousProgramException;
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.ProjectProgramProvider;
 import com.xebyte.core.WriteTx;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.plugin.core.archive.HeadlessArchiveBridge;
@@ -60,10 +62,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Manages programs directly without relying on GUI services like ProgramManager.
  * Programs can be loaded from files or Ghidra project folders.
  */
-public class HeadlessProgramProvider implements ProgramProvider {
+public class HeadlessProgramProvider extends ProjectProgramProvider {
 
-    private final Map<String, Program> openPrograms = new ConcurrentHashMap<>();
-    private final TaskMonitor monitor;
     private Project project;
     private GhidraProject ghidraProject;  // For headless project management
 
@@ -71,7 +71,14 @@ public class HeadlessProgramProvider implements ProgramProvider {
      * Create a new HeadlessProgramProvider.
      */
     public HeadlessProgramProvider() {
-        this.monitor = new ConsoleTaskMonitor();
+        // okToUpgrade: headless may upgrade a program's stored format on open. The GUI
+        // may not -- an upgrade needs an exclusive checkout it must not take silently.
+        super(null, true);
+    }
+
+    @Override
+    protected Project project() {
+        return project;
     }
 
     /**
@@ -96,123 +103,10 @@ public class HeadlessProgramProvider implements ProgramProvider {
     }
 
     @Override
-    public Program getProgram(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            return getCurrentProgram();
-        }
-
-        String searchName = name.trim();
-
-        // Try exact name match first
-        Program exact = openPrograms.get(searchName);
-        if (exact != null) {
-            return exact;
-        }
-
-        // Try case-insensitive match
-        for (Map.Entry<String, Program> entry : openPrograms.entrySet()) {
-            if (entry.getKey().equalsIgnoreCase(searchName)) {
-                return entry.getValue();
-            }
-        }
-
-        // Try partial match
-        for (Map.Entry<String, Program> entry : openPrograms.entrySet()) {
-            if (entry.getKey().toLowerCase().contains(searchName.toLowerCase())) {
-                return entry.getValue();
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Whether a program with exactly this name is currently loaded in memory.
-     *
-     * <p>Unlike {@link #getProgram(String)} this does <em>not</em> fall back to
-     * partial matching — overwrite protection must key off the precise
-     * destination name, not a fuzzy substring hit. Exact and case-insensitive
-     * matches both count as "open".
-     */
-    private boolean isProgramOpen(String name) {
-        return exactOpenProgram(name) != null;
-    }
-
-    /**
-     * Exact (then case-insensitive) lookup of a loaded program by name.
-     *
-     * <p>Unlike {@link #getProgram(String)} this never falls back to fuzzy
-     * substring matching — callers that resolve a precise destination
-     * (overwrite protection, GZF export) must not silently act on a similarly
-     * named program.
-     *
-     * @return the matching open Program, or {@code null} when none matches
-     */
-    private Program exactOpenProgram(String name) {
-        if (name == null || name.isEmpty()) {
-            return null;
-        }
-        Program exact = openPrograms.get(name);
-        if (exact != null) {
-            return exact;
-        }
-        for (Map.Entry<String, Program> entry : openPrograms.entrySet()) {
-            if (entry.getKey().equalsIgnoreCase(name)) {
-                return entry.getValue();
-            }
-        }
-        return null;
-    }
-
-    @Override
-    public Program[] getAllOpenPrograms() {
-        return openPrograms.values().toArray(new Program[0]);
-    }
-
-    @Override
     public void setCurrentProgram(Program program) {
         // Explicit no-op: headless has no current-program concept. GUI providers
         // implement this against ProgramManager / CodeBrowser focus; pretending
         // here would reintroduce sticky omit-program state with no way to steer it.
-    }
-
-    /**
-     * Track an already-open Program in the open set without implying current-program
-     * state. Load paths use this; tests that inject ProgramBuilder programs do too.
-     */
-    public void trackOpenProgram(Program program) {
-        if (program != null) {
-            registerProgram(program);
-        }
-    }
-
-    /**
-     * Track a newly-opened Program in {@link #openPrograms}, releasing any
-     * prior different instance held under the same name.
-     * <p>
-     * {@code Program.getName()} is just the leaf filename (e.g.
-     * {@code D2Client.dll}), so importing two versions of the same binary —
-     * or the same filename from two folders — would otherwise overwrite the
-     * earlier map entry without {@code release()}ing it. The orphaned
-     * Program's DomainObject consumer reference and DB buffers then stay
-     * live for the JVM's lifetime, invisibly accumulating toward the
-     * ~5-open-program crash ceiling.
-     */
-    private void registerProgram(Program program) {
-        String name = program.getName();
-        Program prior = openPrograms.put(name, program);
-        if (prior != null && prior != program) {
-            Msg.warn(this, "Program name collision on '" + name
-                + "' — releasing previously-tracked instance to avoid a leak. "
-                + "Consider closing the earlier program explicitly before "
-                + "loading another with the same filename.");
-            try {
-                prior.release(this);
-            } catch (Exception e) {
-                Msg.warn(this, "Error releasing displaced program '" + name
-                    + "': " + e.getMessage());
-            }
-        }
     }
 
     /**
@@ -266,7 +160,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
             }
 
             if (program != null) {
-                registerProgram(program);
+                trackOpenProgram(program);
                 Msg.info(this, "Loaded program: " + program.getName() +
                     " (" + file.getAbsolutePath() + ")");
             } else {
@@ -288,7 +182,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
      *
      * Used for firmware blobs and other raw images where AutoImporter's best-guess
      * format detection has no header to latch onto (e.g. ARM Cortex-M .mem dumps).
-     * Mirrors {@link #loadProgramFromFile(File)} for openPrograms bookkeeping so
+     * Mirrors {@link #loadProgramFromFile(File)} for open-program bookkeeping so
      * subsequent /list_functions, /decompile_function, etc. resolve the result
      * transparently.
      *
@@ -361,7 +255,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
             }
 
             if (program != null) {
-                registerProgram(program);
+                trackOpenProgram(program);
                 Msg.info(this, "Loaded raw binary: " + program.getName()
                     + " (" + file.getAbsolutePath() + ") as " + languageId);
             } else {
@@ -395,23 +289,8 @@ public class HeadlessProgramProvider implements ProgramProvider {
     private Program openExistingByName(String name) {
         if (project == null || name == null || name.isEmpty()) return null;
         try {
-            // Hot path: already opened in this session.
-            Program cached = openPrograms.get(name);
-            if (cached != null) return cached;
-
-            // Idempotency is scoped to the import location (root): the loaders
-            // always import under folder "/", so a recursive search could reopen
-            // a same-named program from a different folder and break the
-            // intended "reload the file I just imported" contract.
-            ProjectData pd = project.getProjectData();
-            DomainFile df = pd.getFile("/" + name);
-            if (df == null) return null;
-
-            Program program = (Program) df.getDomainObject(this, true, false, monitor);
-            if (program != null) {
-                openPrograms.put(program.getName(), program);
-            }
-            return program;
+            DomainFile df = project.getProjectData().getFile("/" + name);
+            return df == null ? null : openDomainFile(df);
         } catch (Exception e) {
             Msg.warn(this, "openExistingByName failed for '" + name + "': " + e.getMessage());
             return null;
@@ -496,14 +375,13 @@ public class HeadlessProgramProvider implements ProgramProvider {
         }
 
         try {
-            Program program = (Program) domainFile.getDomainObject(this, true, false, monitor);
+            Program program = openDomainFile(domainFile);
             if (program == null) {
                 String serverHint = describeServerBinding(projectData);
                 return ProgramLoadResult.failure(
                     "domainFile.getDomainObject returned null for: " + projectPath
                     + (serverHint.isEmpty() ? "" : " (" + serverHint + ")"));
             }
-            registerProgram(program);
             Msg.info(this, "Loaded program from project: " + program.getName());
             return ProgramLoadResult.success(program);
         } catch (Exception e) {
@@ -636,55 +514,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
     }
 
     /**
-     * Close a specific program.
-     *
-     * @param program The program to close
-     */
-    @Override
-    public boolean closeProgram(Program program) {
-        if (program == null) {
-            return false;
-        }
-
-        openPrograms.remove(program.getName());
-
-        try {
-            program.release(this);
-        } catch (Exception e) {
-            Msg.warn(this, "Error releasing program: " + e.getMessage());
-        }
-        return true;
-    }
-
-    /**
-     * Save modified programs, then close all open programs.
-     */
-    public void closeAllPrograms() {
-        for (Program program : openPrograms.values()) {
-            // Runs on shutdown (SIGTERM from systemd included) and on project
-            // switch; release() alone would silently discard every unsaved edit.
-            // Saving lands in the local working copy only -- checkin stays explicit.
-            // Not gated on Program.canSave(): that is false for a program upgraded
-            // on open (its DBHandle cannot update in place), which DomainFile.save()
-            // handles fine -- the same call /save_program makes.
-            if (program.isChanged()) {
-                try {
-                    program.getDomainFile().save(monitor);
-                    Msg.info(this, "Saved " + program.getName() + " on close");
-                } catch (Exception e) {
-                    Msg.error(this, "Unsaved changes LOST in " + program.getName() + ": " + e);
-                }
-            }
-            try {
-                program.release(this);
-            } catch (Exception e) {
-                Msg.warn(this, "Error releasing program " + program.getName() + ": " + e.getMessage());
-            }
-        }
-        openPrograms.clear();
-    }
-
-    /**
      * Get the task monitor for this provider.
      *
      * @return The TaskMonitor
@@ -757,7 +586,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
                 return out;
             }
             // Only treat a same-named open program as ours if its DomainFile matches.
-            Program candidate = openPrograms.get(file.getName());
+            Program candidate = openProgramNamed(file.getName());
             prog = (candidate != null && file.equals(candidate.getDomainFile())) ? candidate : null;
         }
 
@@ -786,7 +615,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
                     out.put("error", "Save before checkin failed: " + e.getMessage());
                     return out;
                 }
-                closeProgram(prog);
+                closeProgram(prog, true);
             }
 
             int versionBefore = file.getVersion();
@@ -1105,7 +934,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
         if (ghidraProject != null) {
             try {
                 // Close all programs from this project first
-                closeAllPrograms();
+                releaseAll();
                 ghidraProject.close();
                 Msg.info(this, "Closed project");
             } catch (Exception e) {
@@ -1115,7 +944,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
             project = null;
         } else if (project != null) {
             try {
-                closeAllPrograms();
+                releaseAll();
                 project.close();
                 Msg.info(this, "Closed project");
             } catch (Exception e) {
@@ -1191,64 +1020,6 @@ public class HeadlessProgramProvider implements ProgramProvider {
     // ========================================================================
 
     /**
-     * Resolve a DomainFile in the open project by exact path or by leading-slash
-     * path. When neither matches, fall back to a bare program-name search across
-     * all folders. Returns null when no project is open or when no match is
-     * found.
-     *
-     * @throws AmbiguousProgramException when a bare name matches files in more
-     *     than one folder \u2014 the caller must supply a full project path to
-     *     disambiguate rather than have us guess the wrong program.
-     */
-    private DomainFile findDomainFile(String programIdent) throws AmbiguousProgramException {
-        if (project == null || programIdent == null || programIdent.isEmpty()) return null;
-        List<DomainFile> matches = new ArrayList<>();
-        try {
-            ProjectData pd = project.getProjectData();
-            DomainFile f = pd.getFile(programIdent);
-            if (f != null) return f;
-            if (!programIdent.startsWith("/")) {
-                f = pd.getFile("/" + programIdent);
-                if (f != null) return f;
-            }
-            collectByName(pd.getRootFolder(), programIdent, matches);
-        } catch (Exception e) {
-            Msg.warn(this, "findDomainFile failed for '" + programIdent + "': " + e.getMessage());
-            return null;
-        }
-        if (matches.isEmpty()) return null;
-        if (matches.size() > 1) {
-            throw new AmbiguousProgramException(programIdent, matches.size());
-        }
-        return matches.get(0);
-    }
-
-    private void collectByName(DomainFolder folder, String name, List<DomainFile> out) {
-        try {
-            for (DomainFile f : folder.getFiles()) {
-                if (name.equals(f.getName())) out.add(f);
-            }
-            for (DomainFolder sub : folder.getFolders()) {
-                collectByName(sub, name, out);
-            }
-        } catch (Exception ignore) {
-            // best-effort
-        }
-    }
-
-    /**
-     * Raised when a bare program name matches files in multiple project folders,
-     * so resolving it would have to guess which one the caller meant.
-     */
-    private static final class AmbiguousProgramException extends Exception {
-        AmbiguousProgramException(String ident, int matchCount) {
-            super("'" + ident + "' is ambiguous: " + matchCount
-                + " programs share this filename in different project folders. "
-                + "Pass a full project path (e.g. /folder/" + ident + ") to disambiguate.");
-        }
-    }
-
-    /**
      * Resolve a DomainFolder by path, optionally creating missing intermediate folders.
      * Returns null when no project is open or when {@code createMissing} is false and the
      * folder doesn't exist.
@@ -1313,7 +1084,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
         // Prefer the live in-memory program — it includes unsaved analyst edits.
         // Exact match only: getProgram()'s fuzzy substring fallback could pack
         // the wrong program when several open names overlap.
-        Program live = exactOpenProgram(programIdent);
+        Program live = openProgramNamed(programIdent);
         if (live != null) {
             try {
                 live.saveToPackedFile(output, monitor);
@@ -1396,7 +1167,7 @@ public class HeadlessProgramProvider implements ProgramProvider {
             // from setName/delete would leave the file half-renamed depending
             // on Ghidra's locking, so check the open-program bookkeeping first
             // and fail with a clear structured error that mutates nothing.
-            if (existing != null && isProgramOpen(chosenName)) {
+            if (existing != null && openProgramNamed(chosenName) != null) {
                 return ImportResult.failure("cannot overwrite '"
                     + folder.getPathname() + "/" + chosenName
                     + "': program is currently loaded in memory. "
@@ -1940,10 +1711,8 @@ public class HeadlessProgramProvider implements ProgramProvider {
             }
             // Close it if currently open
             String fileName = domainFile.getName();
-            Program openProg = openPrograms.get(fileName);
-            if (openProg != null) {
-                closeProgram(openProg);
-            }
+            // Deleting it: nothing to save for.
+            closeProgramByPath(filePath);
             domainFile.delete();
             Msg.info(this, "Deleted file: " + filePath);
             return true;

@@ -1831,7 +1831,7 @@ def run_debugger_live_test(repo_root: Path, mcp_url: str) -> None:
         # OLD resume-only approach, before this launcher-kill existed.
         # Tried a settle delay before severing the connection, on the theory
         # this was a narrow timing race the same way the analogous
-        # program-save race is (see ProgramScriptService.saveWithRetry) --
+        # program-save race is (see ProgramSaves.withRetry) --
         # measured, live, that it made no difference: the lock reproduced on
         # literally the first debugger cycle after a completely fresh
         # deploy, delay or no delay. This is not a rare race to narrow; it

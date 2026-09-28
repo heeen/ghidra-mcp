@@ -69,7 +69,7 @@ public class HeadlessCurrentProgramTest {
         provider.trackOpenProgram(a);
         provider.trackOpenProgram(b);
         assertNull(provider.getCurrentProgram());
-        provider.closeProgram(a);
+        provider.closeProgram(a, false);
         assertSame(b, provider.getCurrentProgram());
     }
 }
