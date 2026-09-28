@@ -22,13 +22,13 @@
 >
 > If Ghidra MCP saves you time, consider [sponsoring the project](https://github.com/sponsors/bethington). One-time and recurring support both help fund compatibility updates, production hardening, docs, and new tooling.
 
-A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **240 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
+A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **237 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
 
 ## Why Ghidra MCP?
 
 Most Ghidra MCP implementations give you a handful of read-only tools and call it a day. This project is different — it was built by a reverse engineer who uses it daily on real binaries, not as a demo.
 
-- **240 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
+- **237 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
 - **Battle-tested AI workflows** — Proven documentation workflows (V5) refined across hundreds of functions. Includes step-by-step prompts, Hungarian notation reference, batch processing guides, and orphaned code discovery.
 - **Production-grade reliability** — Atomic transactions, batch operations (93% API call reduction), configurable timeouts, and graceful error handling. No silent failures.
 - **Cross-binary documentation transfer** — SHA-256 function hash matching propagates documentation across binary versions automatically. Document once, apply everywhere.
@@ -59,7 +59,7 @@ v5.0 moves conventions from "things to remember" into the tool layer, where they
 ### Core MCP Integration
 
 - **Full MCP Compatibility** — Complete implementation of Model Context Protocol
-- **240 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
+- **237 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
 - **Production-Ready Reliability** — Atomic transactions, batch operations, configurable timeouts
 - **Real-time Analysis** — Live integration with Ghidra's analysis engine
 
@@ -444,7 +444,7 @@ uv run bridge-mcp-ghidra --transport sse --mcp-host 127.0.0.1 --mcp-port 8081
 
 #### Lazy tool loading is the default (issue #440)
 
-Advertising all 241 endpoints in a single `tools/list` is over a hard limit for
+Advertising all 238 endpoints in a single `tools/list` is over a hard limit for
 at least one major provider. Gemini compiles function declarations into a
 constrained-decoding state machine and rejects the whole request before any tool
 is ever called:
@@ -640,7 +640,7 @@ GhidraMCP is designed for **localhost-only development**. The default configurat
 | --- | --- |
 | `GHIDRA_MCP_AUTH_TOKEN` | When set, every HTTP request must carry `Authorization: Bearer <token>`. Timing-safe comparison. `/mcp/health`, `/health`, `/check_connection` are exempt. |
 | `GHIDRA_MCP_ALLOW_SCRIPTS` | Set to `1`, `true`, or `yes` to enable `/run_script_inline` and `/run_ghidra_script`. **Off by default as of v5.4.1** — these endpoints execute arbitrary Java against the Ghidra process. In headless mode this also triggers OSGi `BundleHost` initialization at server startup (Felix framework, ~hundreds of ms); leave it off if you don't need script execution. |
-| `GHIDRA_MCP_FILE_ROOT` | When set to a directory path, filesystem-path endpoints (`/load_program`, `/import_file`, `/open_project`, `/delete_file`, etc.) canonicalize the input and require it to fall under this root. Prevents path-traversal. |
+| `GHIDRA_MCP_FILE_ROOT` | When set to a directory path, filesystem-path endpoints (`/import_file`, `/open_project`, `/delete_file`, etc.) canonicalize the input and require it to fall under this root. Prevents path-traversal. |
 
 Name-quality enforcement is separate from security. By default,
 `rename_function` and global write endpoints reject names that fail
@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 240 tools fully implemented (the whole catalog; the GUI plugin serves 228 of them and the headless server 215)
+- **MCP Tools**: 237 tools fully implemented (the whole catalog; the GUI plugin serves 229 of them and the headless server 213)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -871,9 +871,9 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 <!-- BEGIN GENERATED API REFERENCE (tools/gen_readme_api_reference.py) -->
 
-240 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
+237 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-201 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (26) or **(headless only)** (13) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+203 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (25) or **(headless only)** (9) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -915,27 +915,24 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ### Project Organization
 
+- `checkin_program` - Check an open program back in to the shared Ghidra Server as a new version
 - `create_folder` - Create a folder in the project
 - `delete_file` - Delete a file from the project
 - `delete_project` - Delete a Ghidra project **(headless only)**
+- `get_project_info` - Get info about the currently open project
 - `list_projects` - List available Ghidra projects **(headless only)**
 - `move_file` - Move a program file to a different folder in the project, preserving analysis and documentation
 - `move_folder` - Move a project folder and everything under it into another folder
-- `project_info` - Get detailed project info including running tools and open programs **(GUI only)**
 
 ### Headless Project & Program Lifecycle
 
 Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 - `archive_project` - Archive the currently open project to a Ghidra-native .gar file **(headless only)**
-- `checkin_program` - Check an open program back in to the shared Ghidra Server as a new version **(headless only)**
 - `close_project` - Close the currently open project **(headless only)**
 - `create_project` - Create a new Ghidra project **(headless only)**
 - `export_program` - Export an open or project-resident program to a Ghidra Zip File (.gzf) **(headless only)**
-- `get_project_info` - Get info about the currently open project **(headless only)**
 - `import_program` - Import a Ghidra Zip File (.gzf) into the currently open project as a new DomainFile under target_folder (default '/') **(headless only)**
-- `load_program` - Load a binary file into the headless server for analysis **(headless only)**
-- `load_program_from_project` - Load program from Ghidra project (headless) **(headless only)**
 - `open_project` - Open an existing Ghidra project (.gpr file or directory)
 - `restore_project` - Restore a Ghidra .gar archive into a fresh on-disk project at `parent_dir/project_name` **(headless only)**
 - `server_status` - Check headless server connection status
@@ -1208,9 +1205,9 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ### Components
 
-- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (241 catalog entries)
-- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (228 endpoints)
-- **GhidraMCPHeadlessServer** — Standalone headless server — 215 endpoints, no GUI required
+- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (238 catalog entries)
+- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (229 endpoints)
+- **GhidraMCPHeadlessServer** — Standalone headless server — 213 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
 
 ## 🔧 Development
@@ -1290,11 +1287,11 @@ python -m tools.setup --help
 ```text
 ghidra-mcp/
 ├── pyproject.toml           # uv project (ghidra-mcp-bridge wheel + dependency groups)
-├── python/bridge_mcp_ghidra/ # MCP server package (Python, 241 catalog entries)
+├── python/bridge_mcp_ghidra/ # MCP server package (Python, 238 catalog entries)
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
-│       ├── GhidraMCPPlugin.java         # GUI plugin (228 endpoints)
-│       ├── headless/                    # Headless server (215 endpoints)
+│       ├── GhidraMCPPlugin.java         # GUI plugin (229 endpoints)
+│       ├── headless/                    # Headless server (213 endpoints)
 │       └── core/                        # Shared service layer (14 services)
 ├── ghidra_scripts/          # Automation scripts for batch workflows
 ├── tests/                   # Python unit tests + endpoint catalog
@@ -1421,10 +1418,11 @@ curl http://localhost:8089/check_connection
 ### Headless API Workflow
 
 ```bash
-# 1. Load a binary
-curl -X POST -d "file=/data/program.exe" http://localhost:8089/load_program
+# 1. Import a binary into the open project (auto-analysis runs by default)
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"file_path": "/data/program.exe"}' http://localhost:8089/import_file
 
-# 2. Run auto-analysis (identifies functions, strings, data types)
+# 2. Re-run auto-analysis later if needed
 curl -X POST http://localhost:8089/run_analysis
 
 # 3. List discovered functions
@@ -1441,7 +1439,8 @@ curl http://localhost:8089/get_metadata
 
 | Endpoint | Method | Description |
 | ---------- | -------- | ------------- |
-| `/load_program` | POST | Load binary file for analysis |
+| `/import_file` | POST | Import a binary into the project and open it |
+| `/open_program` | POST | Open a program already in the project (any `program=` also opens on demand) |
 | `/run_analysis` | POST | Run Ghidra auto-analysis |
 | `/list_functions` | GET | List all discovered functions |
 | `/list_exports` | GET | List exported symbols |
@@ -1484,9 +1483,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | Metric | Value |
 | -------- | ------- |
 | **Version** | 7.0.0 |
-| **MCP Tools** | 241 fully implemented |
-| **GUI Endpoints** | 228 (GhidraMCPPlugin) |
-| **Headless Endpoints** | 215 (GhidraMCPHeadlessServer) |
+| **MCP Tools** | 238 fully implemented |
+| **GUI Endpoints** | 229 (GhidraMCPPlugin) |
+| **Headless Endpoints** | 213 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |
 | **Batch Efficiency** | 93% API call reduction |
 | **AI Workflows** | 7 proven documentation workflows |

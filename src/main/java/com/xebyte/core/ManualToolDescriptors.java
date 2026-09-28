@@ -58,7 +58,6 @@ public final class ManualToolDescriptors {
         "/mcp/health",
         "/mcp/schema",
         "/open_project",
-        "/project/info",
         "/server/admin/set_permissions",
         "/server/admin/terminate_all_checkouts",
         "/server/admin/terminate_checkout",
@@ -170,7 +169,6 @@ public final class ManualToolDescriptors {
             "path", "Path to the project: its .gpr file or the project directory holding it.",
             "headless", "GUI mode only. True (the default) loads the project into the FrontEnd tool without opening a CodeBrowser window; false launches one for `program`. The headless server ignores it.",
             "program", "GUI mode only, and only when headless=false: the DomainFile path to open in the launched CodeBrowser.");
-        add(m, "/project/info", "GET", "project", "Get detailed project info including running tools and open programs", ToolAccess.READ_ONLY);
         add(m, "/server/admin/set_permissions", "POST", "server", "Set user permissions on a repository", ToolAccess.WRITE,
             "repo", REPO_HEADLESS_ONLY + " The GUI plugin answers that this operation needs headless mode.",
             "user", "Server user whose access is being set. The repository ACL is read, this one entry replaced or appended, and every other user preserved.",
@@ -205,7 +203,7 @@ public final class ManualToolDescriptors {
         add(m, "/server/repository/files", "GET", "server", "List files in a server repository folder", ToolAccess.READ_ONLY,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Folder to list. Defaults to / — the repository or project root.");
-        add(m, "/server/status", "GET", "headless", "Check headless server connection status", ToolAccess.READ_ONLY);
+        add(m, "/server/status", "GET", "headless", "Whether a Ghidra Server is connected (not whether a project is open: see /get_project_info)", ToolAccess.READ_ONLY);
         add(m, "/server/version_control/add", "POST", "server", "Add a file in the open shared project to version control. Requires /open_project with a ghidra:// URL. Local tree mirrors YOUR working copy.", ToolAccess.WRITE,
             "repo", REPO_HEADLESS_ONLY,
             "path", "Path of the not-yet-versioned file to add.",

@@ -190,8 +190,9 @@ The headless server exposes the same REST API as the GUI plugin. Currently imple
 - `GET /list_open_programs` - List loaded programs
 - `GET /get_current_program_info` - Current program info
 - `POST /switch_program` - Switch active program
-- `POST /load_program` - Load program from file (headless only)
-- `POST /close_program` - Close a program (headless only)
+- `POST /import_file` - Import a binary into the project and open it
+- `POST /open_program` - Open a program from the project (any `program=` also opens on demand)
+- `POST /close_program` - Close a program (`save=false` discards its unsaved edits)
 
 ## Testing
 
@@ -255,7 +256,7 @@ Multi-Instance Setup:
 
 ### No program loaded
 
-1. Load a program via API: `curl -X POST -d "file=/data/binary.exe" http://localhost:8089/load_program`
+1. Import a program via API: `curl -X POST -H 'Content-Type: application/json' -d '{"file_path": "/data/binary.exe"}' http://localhost:8089/import_file`
 2. Or set `PROGRAM_FILE` environment variable
 
 ### Memory issues

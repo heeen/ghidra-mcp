@@ -62,6 +62,10 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
     // test double) by name. Path, not name: D2Common.dll exists in every version folder.
     private final Map<String, Program> cache = new ConcurrentHashMap<>();
     private final Map<String, Long> lastAccessNanos = new ConcurrentHashMap<>();
+    // Why a program is open read-only: the writable open's failure, kept so a caller can
+    // be told (a stale SLEIGH language opens read-only and every edit is then lost).
+    private final Map<Program, Exception> readOnlyReasons =
+        Collections.synchronizedMap(new java.util.WeakHashMap<>());
     private final boolean okToUpgrade;
     protected final Object consumer;
     protected final TaskMonitor monitor = new ConsoleTaskMonitor();
@@ -335,6 +339,9 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
                 writable.addSuppressed(readOnly);
                 throw writable;
             }
+            if (program != null) {
+                readOnlyReasons.put(program, writable);
+            }
         }
         if (program == null) {
             throw new IllegalStateException("getDomainObject returned null for " + key);
@@ -449,6 +456,246 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
         } catch (Exception e) {
             Msg.warn(this, "Error releasing program " + key + ": " + e.getMessage());
         }
+    }
+
+    // ------------------------------------------------------ project operations
+
+    /** What an import produced. {@code reusedExisting}: the project already had the file. */
+    public record Imported(Program program, boolean reusedExisting) {}
+
+    /**
+     * Import a binary into {@code folder} and open it, or open the file already there.
+     *
+     * <p>A file of the same name already in the folder is opened instead of re-imported:
+     * a second import would fail on the duplicate name, and repeated imports are how a
+     * scripted setup stays idempotent. The caller learns which happened.
+     *
+     * <p>The importer's own references are dropped once the file is saved, and the saved
+     * file is opened through {@link #openDomainFile} like any other: the program then has
+     * exactly one reference, the cache's, which eviction and close manage. With no project
+     * the program stays in memory under the provider's consumer.
+     *
+     * @param languageId     empty to auto-detect the format; set for raw binaries
+     * @param compilerSpecId empty for the language's default; only read with a language
+     */
+    public Imported importFile(java.io.File file, String folder, String languageId,
+            String compilerSpecId) throws Exception {
+        Project project = project();
+        String dest = folder == null || folder.isBlank() ? "/" : folder.trim();
+        String language = languageId == null ? "" : languageId.trim();
+        String compiler = compilerSpecId == null ? "" : compilerSpecId.trim();
+
+        if (project != null) {
+            ghidra.framework.model.DomainFolder target = project.getProjectData().getFolder(dest);
+            DomainFile existing = target != null ? target.getFile(file.getName()) : null;
+            if (existing != null) {
+                return new Imported(openDomainFile(existing), true);
+            }
+        }
+
+        ghidra.app.util.importer.MessageLog log = new ghidra.app.util.importer.MessageLog();
+        ghidra.app.util.opinion.LoadResults<Program> results;
+        if (language.isEmpty()) {
+            results = ghidra.app.util.importer.AutoImporter.importByUsingBestGuess(
+                file, project, dest, consumer, log, monitor);
+            if (results == null) {
+                throw new java.io.IOException("no loader recognised " + file.getName()
+                    + "; for a raw binary pass a language (e.g. 'ARM:LE:32:Cortex'). " + log);
+            }
+        } else {
+            ghidra.program.model.lang.Language lang = ghidra.program.util.DefaultLanguageService
+                .getLanguageService().getLanguage(new ghidra.program.model.lang.LanguageID(language));
+            ghidra.program.model.lang.CompilerSpec spec = compiler.isEmpty()
+                ? lang.getDefaultCompilerSpec()
+                : lang.getCompilerSpecByID(new ghidra.program.model.lang.CompilerSpecID(compiler));
+            ghidra.app.util.opinion.Loaded<Program> loaded = ghidra.app.util.importer.AutoImporter
+                .importAsBinary(file, project, dest, lang, spec, consumer, log, monitor);
+            if (loaded == null) {
+                throw new java.io.IOException("import as " + language + " produced nothing. " + log);
+            }
+            results = new ghidra.app.util.opinion.LoadResults<>(loaded);
+        }
+
+        if (project == null) {
+            Program program = results.getPrimaryDomainObject(consumer);
+            results.close();
+            trackOpenProgram(program);
+            return new Imported(program, false);
+        }
+        DomainFile saved;
+        try {
+            // Without the save the DomainFile is a transient proxy, and every later save
+            // fails with "Location does not exist for a save operation!".
+            results.save(monitor);
+            saved = results.getPrimary().getSavedDomainFile();
+        } finally {
+            results.close();
+        }
+        return new Imported(openDomainFile(saved), false);
+    }
+
+    /**
+     * Whether the open project is bound to a Ghidra Server: which repository, where
+     * ({@code serverInfo}, host:port, null when it cannot be read), and whether connected.
+     */
+    public record ServerBinding(boolean bound, String repository, String serverInfo, boolean connected) {}
+
+    /** The open project's server binding, or null with no project. */
+    public ServerBinding serverBinding() {
+        Project project = project();
+        if (project == null) {
+            return null;
+        }
+        try {
+            ghidra.framework.client.RepositoryAdapter repo = project.getProjectData().getRepository();
+            if (repo == null) {
+                return new ServerBinding(false, null, null, false);
+            }
+            String where = null;
+            try {
+                // toString, not a typed read: getServerInfo()'s return type changed
+                // between Ghidra 12.0.x point builds (String on some, ServerInfo on
+                // others), and a typed use broke the CI build once.
+                Object info = repo.getServerInfo();
+                where = info != null ? info.toString() : null;
+            } catch (Exception e) {
+                // disconnected, or the probe itself failed: report the binding without it
+            }
+            return new ServerBinding(true, repo.getName(), where, repo.isConnected());
+        } catch (Exception e) {
+            return new ServerBinding(false, null, null, false);
+        }
+    }
+
+    /**
+     * Why an open may have failed, as far as the server binding explains it. The recurring
+     * case (#119): a checkout on a standalone server connection syncs nothing into a
+     * local-only project, so the file the caller checked out is simply not there.
+     */
+    public String describeServerBinding() {
+        ServerBinding b = serverBinding();
+        if (b == null) {
+            return "No project is open.";
+        }
+        if (!b.bound()) {
+            return "Project is local-only (not bound to a Ghidra Server). A file checked out "
+                + "on a separate server connection does not appear here: open a shared project "
+                + "via /open_project with a ghidra://host[:port]/repo URL instead.";
+        }
+        return "Project is bound to a Ghidra Server (repo '" + b.repository() + "'"
+            + (b.connected() ? "" : ", currently disconnected") + ")";
+    }
+
+    /** Why {@code program} was opened read-only, or null when it opened writable. */
+    public Exception readOnlyReason(Program program) {
+        return readOnlyReasons.get(program);
+    }
+
+    /** Up to {@code max} program paths in the project, for "did you mean" diagnostics. */
+    public List<String> programPaths(int max) {
+        List<String> out = new ArrayList<>();
+        Project project = project();
+        if (project != null) {
+            collectProgramPaths(project.getProjectData().getRootFolder(), out, max);
+        }
+        return out;
+    }
+
+    private static void collectProgramPaths(DomainFolder folder, List<String> out, int max) {
+        for (DomainFile f : folder.getFiles()) {
+            if (out.size() >= max) return;
+            if ("Program".equals(f.getContentType())) {
+                out.add(f.getPathname());
+            }
+        }
+        for (DomainFolder sub : folder.getFolders()) {
+            if (out.size() >= max) return;
+            collectProgramPaths(sub, out, max);
+        }
+    }
+
+    /**
+     * Check a program in to the shared Ghidra Server as a new version.
+     *
+     * <p>Pending edits are saved to the local project first and every open instance is
+     * then closed, because checking in a file that is still open forces
+     * keepCheckedOut=true whatever the handler says (Ghidra logs "File currently open -
+     * must keep checked-out"). {@code GhidraServerManager.checkinFile} cannot do this at
+     * all: {@code RepositoryAdapter} has no checkin, so it must go through the project's
+     * {@code DomainFile} (#119).
+     *
+     * @param path null or empty for the sole open program's file
+     * @return {@code success}, {@code version_before}/{@code version}/{@code version_bumped},
+     *         or {@code success: false} with an {@code error}
+     */
+    public Map<String, Object> checkinProgram(String path, String comment, boolean keepCheckedOut) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        Project project = project();
+        if (project == null) {
+            return failure(out, "No project open. Call /open_project first.");
+        }
+        String cmt = comment == null ? "" : comment;
+
+        DomainFile file;
+        if (path == null || path.isBlank()) {
+            Program current = getCurrentProgram();
+            if (current == null || current.getDomainFile() == null) {
+                return failure(out, "No sole open program; supply 'path'.");
+            }
+            file = current.getDomainFile();
+        } else {
+            file = project.getProjectData().getFile(path.trim());
+            if (file == null) {
+                return failure(out, "File not found in project: " + path);
+            }
+        }
+        String filePath = file.getPathname();
+        if (!file.isVersioned()) {
+            return failure(out, "File is not under version control: " + filePath
+                + " (add it first, or check out a versioned file)");
+        }
+        if (!file.isCheckedOut()) {
+            return failure(out, "File is not checked out: " + filePath);
+        }
+
+        for (Program p : getAllOpenPrograms()) {
+            if (p.getDomainFile() != null && p.getDomainFile().getPathname().equals(filePath)
+                    && !ProgramSaves.saveIfChanged(p, monitor)) {
+                return failure(out, "Save before checkin failed for " + filePath
+                    + "; nothing was checked in (see the Ghidra log)");
+            }
+        }
+        closeProgramByPath(filePath);
+
+        try {
+            int before = file.getVersion();
+            file.checkin(new ghidra.framework.data.CheckinHandler() {
+                @Override public boolean keepCheckedOut() { return keepCheckedOut; }
+                @Override public String getComment() { return cmt; }
+                @Override public boolean createKeepFile() { return false; }
+            }, monitor);
+            int after = file.getVersion();
+            out.put("success", true);
+            out.put("status", "checked_in");
+            out.put("path", filePath);
+            out.put("version_before", before);
+            out.put("version", after);
+            out.put("version_bumped", after > before);
+            out.put("checked_out", file.isCheckedOut());
+            out.put("comment", cmt);
+            out.put("keep_checked_out", keepCheckedOut);
+            Msg.info(this, "Checked in " + filePath + " (v" + before + " -> v" + after + ")");
+            return out;
+        } catch (Exception e) {
+            Msg.error(this, "Checkin failed for " + filePath, e);
+            return failure(out, "Checkin failed (" + e.getClass().getSimpleName() + "): " + e.getMessage());
+        }
+    }
+
+    private static Map<String, Object> failure(Map<String, Object> out, String error) {
+        out.put("success", false);
+        out.put("error", error);
+        return out;
     }
 
     // --------------------------------------------------------------- eviction

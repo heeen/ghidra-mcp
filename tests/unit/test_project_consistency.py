@@ -312,7 +312,6 @@ class TestJavaArchitecture(unittest.TestCase):
         gui_only_expected = {
             "/batch_apply_documentation",
             "/mcp/health",
-            "/project/info",
             "/server/authenticate",
             "/tool/goto_address",
             "/tool/launch_codebrowser",

@@ -179,7 +179,7 @@ class VersionInfo {
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 228 endpoints for reverse engineering automation. " +
+                  "Provides 229 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -1461,17 +1461,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return programScriptService.listProjectFiles(folderPath).toJson();
     }
 
-    /**
-     * Open a program from the current project by path
-     */
-    private String openProgramFromProject(String path) {
-        return programScriptService.openProgramFromProject(path).toJson();
-    }
-
-    private String openProgramFromProject(String path, boolean autoAnalyze) {
-        return programScriptService.openProgramFromProject(path, autoAnalyze).toJson();
-    }
-
     // ====================================================================================
     // FUNCTION HASH INDEX - Cross-binary documentation propagation
     // ====================================================================================
@@ -1771,10 +1760,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // PROJECT & TOOL MANAGEMENT ENDPOINTS (4 endpoints)
         // FrontEnd-level operations for project and tool management
         // ==========================================================================
-
-        http.route("/project/info", exchange -> {
-            sendResponse(exchange, getProjectInfo());
-        });
 
         http.route("/tool/running_tools", exchange -> {
             sendResponse(exchange, getRunningTools());
@@ -3010,28 +2995,28 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         }
     }
 
+    /**
+     * The Ghidra Server connection, the one thing {@code /server/status} means on both
+     * servers: {@code connected} is whether a server is reachable, never whether a
+     * project is open. The project itself is {@code /get_project_info}.
+     */
     private String getProjectStatusJson() {
         Project project = tool.getProject();
-        if (project == null) {
-            return "{\"connected\": false, \"error\": \"No project open\"}";
-        }
-        ProjectData data = project.getProjectData();
-        RepositoryAdapter repo = getProjectRepository();
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"connected\": true");
-        sb.append(", \"project\": \"").append(escapeJson(project.getName())).append("\"");
-        sb.append(", \"shared\": ").append(repo != null);
+        RepositoryAdapter repo = project != null ? getProjectRepository() : null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        boolean connected = false;
         if (repo != null) {
             try {
-                sb.append(", \"server_connected\": ").append(repo.isConnected());
-                sb.append(", \"server_info\": \"").append(escapeJson(repo.getServerInfo().toString())).append("\"");
+                connected = repo.isConnected();
+                out.put("server_info", repo.getServerInfo().toString());
             } catch (Exception e) {
-                sb.append(", \"server_connected\": false");
+                out.put("last_error", e.getMessage());
             }
+            out.put("repository", repo.getName());
         }
-        sb.append(", \"file_count\": ").append(data.getFileCount());
-        sb.append("}");
-        return sb.toString();
+        out.put("connected", connected);
+        out.put("shared_project", repo != null);
+        return JsonHelper.toJson(out);
     }
 
     private String listProjectFilesJson(String folderPath) {
@@ -3383,67 +3368,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // ==========================================================================
     // PROJECT & TOOL MANAGEMENT HELPERS
     // ==========================================================================
-
-    private String getProjectInfo() {
-        Project project = tool.getProject();
-        if (project == null) {
-            return "{\"error\": \"No project open\"}";
-        }
-        ProjectData data = project.getProjectData();
-        RepositoryAdapter repo = getProjectRepository();
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"project\": \"").append(escapeJson(project.getName())).append("\"");
-        sb.append(", \"shared\": ").append(repo != null);
-        if (repo != null) {
-            try {
-                sb.append(", \"server_connected\": ").append(repo.isConnected());
-                sb.append(", \"server_info\": \"").append(escapeJson(repo.getServerInfo().toString())).append("\"");
-            } catch (Exception e) {
-                sb.append(", \"server_connected\": false");
-            }
-        }
-        sb.append(", \"file_count\": ").append(data.getFileCount());
-
-        // Open programs
-        Program[] openProgs = programProvider.getAllOpenPrograms();
-        sb.append(", \"open_programs\": [");
-        for (int i = 0; i < openProgs.length; i++) {
-            if (i > 0) sb.append(", ");
-            sb.append("\"").append(escapeJson(openProgs[i].getName())).append("\"");
-        }
-        sb.append("]");
-        sb.append(", \"open_program_count\": ").append(openProgs.length);
-
-        // Current program
-        Program current = programProvider.getCurrentProgram();
-        if (current != null) {
-            sb.append(", \"current_program\": \"").append(escapeJson(current.getName())).append("\"");
-        }
-
-        // Running tools
-        try {
-            ghidra.framework.model.ToolManager tm = project.getToolManager();
-            if (tm != null) {
-                PluginTool[] tools = tm.getRunningTools();
-                sb.append(", \"running_tools\": [");
-                boolean hasCodeBrowser = false;
-                for (int i = 0; i < tools.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append("\"").append(escapeJson(tools[i].getName())).append("\"");
-                    if (tools[i].getService(ghidra.app.services.ProgramManager.class) != null) {
-                        hasCodeBrowser = true;
-                    }
-                }
-                sb.append("]");
-                sb.append(", \"codebrowser_active\": ").append(hasCodeBrowser);
-            }
-        } catch (Exception e) {
-            // ToolManager not available
-        }
-
-        sb.append("}");
-        return sb.toString();
-    }
 
     private String getRunningTools() {
         Project project = tool.getProject();

@@ -6,6 +6,7 @@ import com.xebyte.core.ProjectProgramProvider;
 import com.xebyte.core.Response;
 import com.xebyte.headless.HeadlessProgramProvider;
 import ghidra.framework.model.DomainFile;
+import ghidra.framework.model.DomainFolder;
 import ghidra.framework.model.Project;
 import ghidra.framework.model.ProjectData;
 import ghidra.program.model.listing.Program;
@@ -13,6 +14,7 @@ import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,7 +34,7 @@ import static org.mockito.Mockito.*;
 public class ProjectProgramProviderTest {
 
     /** A provider over a mocked project; nothing GUI- or headless-specific. */
-    private static final class Fixture extends ProjectProgramProvider {
+    private static class Fixture extends ProjectProgramProvider {
         final Project project;
         final ProjectData data;
 
@@ -215,5 +217,97 @@ public class ProjectProgramProviderTest {
 
         assertTrue(r instanceof Response.Err);
         assertTrue(r.toString(), r.toString().contains("ambiguous"));
+    }
+
+    // ------------------------------------------------- open / import / checkin
+
+    private static Map<String, Object> body(Response r) {
+        assertTrue("expected Ok: " + r, r instanceof Response.Ok);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> m = (Map<String, Object>) ((Response.Ok) r).data();
+        return m;
+    }
+
+    @Test
+    public void openProgramNotFoundCarriesDiagnostics() throws Exception {
+        Fixture f = new Fixture();
+        when(f.project.getName()).thenReturn("proj");
+        DomainFolder root = mock(DomainFolder.class);
+        DomainFile real = mock(DomainFile.class);
+        when(real.getContentType()).thenReturn("Program");
+        when(real.getPathname()).thenReturn("/fw/gnutrue");
+        when(root.getFiles()).thenReturn(new DomainFile[] {real});
+        when(root.getFolders()).thenReturn(new DomainFolder[0]);
+        when(f.data.getRootFolder()).thenReturn(root);
+
+        Map<String, Object> out = body(new ProgramScriptService(f, new NoopThreadingStrategy())
+            .openProgramFromProject("/fw/gnutrue.typo", false));
+
+        assertEquals(false, out.get("success"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> diagnostics = (Map<String, Object>) out.get("diagnostics");
+        assertEquals(List.of("/fw/gnutrue"), diagnostics.get("available_program_paths"));
+        assertEquals(false, diagnostics.get("project_server_bound"));
+    }
+
+    @Test
+    public void openProgramWithNoProjectSaysSo() {
+        Fixture f = new Fixture() {
+            @Override
+            protected Project project() {
+                return null;
+            }
+        };
+        Response r = new ProgramScriptService(f, new NoopThreadingStrategy()).openProgramFromProject("/a", false);
+        assertTrue(r.toString(), r instanceof Response.Err && r.toString().contains("/open_project"));
+    }
+
+    @Test
+    public void importOfAFileTheFolderAlreadyHoldsOpensItInstead() throws Exception {
+        Fixture f = new Fixture();
+        Program existing = f.file("/fw/blob.bin");
+        DomainFolder folder = mock(DomainFolder.class);
+        DomainFile existingFile = existing.getDomainFile();
+        when(folder.getFile("blob.bin")).thenReturn(existingFile);
+        when(f.data.getFolder("/fw")).thenReturn(folder);
+
+        ProjectProgramProvider.Imported imported =
+            f.importFile(new java.io.File("/nonexistent/blob.bin"), "/fw", "", "");
+
+        assertTrue("a second import must not re-import (duplicate name)", imported.reusedExisting());
+        assertSame(existing, imported.program());
+        assertArrayEquals(new Program[] {existing}, f.getAllOpenPrograms());
+    }
+
+    @Test
+    public void checkinRefusesAFileThatIsNotCheckedOut() throws Exception {
+        Fixture f = new Fixture();
+        Program p = f.file("/fw/a");
+        when(p.getDomainFile().isVersioned()).thenReturn(true);
+        when(p.getDomainFile().isCheckedOut()).thenReturn(false);
+
+        Map<String, Object> out = f.checkinProgram("/fw/a", "c", false);
+
+        assertEquals(false, out.get("success"));
+        assertEquals("File is not checked out: /fw/a", out.get("error"));
+        verify(p.getDomainFile(), never()).checkin(any(), any());
+    }
+
+    @Test
+    public void projectInfoIsTheSameShapeWithoutAGui() throws Exception {
+        Fixture f = new Fixture();
+        when(f.project.getName()).thenReturn("proj");
+        when(f.data.getFileCount()).thenReturn(3);
+        f.file("/fw/a");
+        f.getProgram("/fw/a");
+
+        Map<String, Object> out = body(new ProgramScriptService(f, new NoopThreadingStrategy()).getProjectInfo());
+
+        assertEquals(true, out.get("has_project"));
+        assertEquals("proj", out.get("project_name"));
+        assertEquals(3, out.get("file_count"));
+        assertEquals(false, out.get("project_server_bound"));
+        assertEquals(List.of("/fw/a"), out.get("open_programs"));
+        assertFalse("running_tools is GUI-only", out.containsKey("running_tools"));
     }
 }

@@ -17,6 +17,7 @@ package com.xebyte.headless;
 
 import com.xebyte.core.HttpExchange;
 import com.xebyte.core.McpHttpServer;
+import com.xebyte.core.AmbiguousProgramException;
 import com.xebyte.core.AnnotationScanner;
 import com.xebyte.core.CoreServices;
 import com.xebyte.core.JsonHelper;
@@ -331,12 +332,11 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // Load from file if specified
         if (filePath != null) {
-            File file = new File(filePath);
-            Program program = programProvider.loadProgramFromFile(file);
-            if (program != null) {
+            try {
+                Program program = programProvider.importFile(new File(filePath), "/", "", "").program();
                 System.out.println("Loaded program: " + program.getName());
-            } else {
-                System.err.println("Failed to load program from: " + filePath);
+            } catch (Exception e) {
+                System.err.println("Failed to load program from " + filePath + ": " + e.getMessage());
             }
         }
 
@@ -350,14 +350,18 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
                 // If program name specified, load it
                 if (programName != null) {
-                    Program program = programProvider.loadProgramFromProject(programName);
+                    Program program = null;
+                    try {
+                        program = programProvider.openFromProject(programName);
+                    } catch (AmbiguousProgramException e) {
+                        System.err.println(e.getMessage());
+                    }
                     if (program != null) {
                         System.out.println("Loaded program from project: " + program.getName());
                     } else {
                         System.err.println("Failed to load program: " + programName);
-                        // List available programs
                         System.out.println("Available programs:");
-                        for (String p : programProvider.listProjectPrograms()) {
+                        for (String p : programProvider.programPaths(200)) {
                             System.out.println("  " + p);
                         }
                     }
@@ -582,12 +586,21 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         return JsonHelper.toJson(out);
     }
 
+    /**
+     * Save every open program, answer with what was saved, then exit. The GUI's
+     * /exit_ghidra always did this; headless used to exit and leave the saving to the
+     * shutdown hook, after the caller had already been told it was done.
+     */
     private String exitServer() {
+        Object saved = JsonHelper.parseJson(services.programScript().saveAllOpenPrograms().toJson());
         new Thread(() -> {
             try { Thread.sleep(500); } catch (InterruptedException ignored) {}
             System.exit(0);
         }).start();
-        return "{\"success\": true, \"message\": \"Server shutting down\"}";
+        return JsonHelper.toJson(JsonHelper.mapOf(
+            "success", true,
+            "message", "Saving all open programs, then exiting",
+            "save", JsonHelper.mapOf("programs", saved)));
     }
 
     private int countEndpoints() {
