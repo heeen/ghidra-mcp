@@ -156,6 +156,20 @@ client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
 
+- **Shared services no longer touch Swing or a `PluginTool`.** Forty-odd direct
+  `SwingUtilities.invokeAndWait` calls in seven services now go through
+  `ThreadingStrategy.runOnUi`: the event thread on the GUI (and inline when already on it),
+  the calling thread headless, where the hop onto an AWT thread bought nothing and put a
+  second thread between a write and the global lock. The `PluginTool` reads in
+  `ProgramScriptService` moved into `Workbench`, which the GUI provider hands out from
+  `ProgramProvider.workbench()` (null headless, which is how GUI-only operations detect
+  it): program managers, the code viewer, showing and closing a program in a CodeBrowser,
+  the running tool list and script state. `ProgramProvider.getTool()` and
+  `ThreadingStrategy.isHeadless()` (no callers) are gone. Deliberately left as they were:
+  the GUI-only services (`DebuggerService`, `GuiToolService`, `PromptPolicyService`, the
+  plugin) and the one asynchronous `invokeLater` with a timeout in
+  `AnalysisService`.
+
 - **Seventeen tools folded into siblings** (the migration guide's "Folds after the
   consolidation" table has every old call and its replacement). Each survivor keeps its
   single-item call and gains the removed tool's job:
