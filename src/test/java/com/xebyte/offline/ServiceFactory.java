@@ -4,6 +4,7 @@ import com.xebyte.core.CoreServices;
 import com.xebyte.core.DebuggerService;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.ProjectServerSession;
+import com.xebyte.core.ServerLifecycleService;
 import com.xebyte.core.PromptPolicyService;
 import com.xebyte.core.ThreadingStrategy;
 import com.xebyte.core.VersionControlService;
@@ -26,12 +27,14 @@ public final class ServiceFactory {
         ThreadingStrategy ts = new NoopThreadingStrategy();
         // The shared set both servers build, plus every server's own additions: the
         // union is what the catalog describes, and what the parity tests scan.
-        return CoreServices.build(provider, ts).plus(
+        CoreServices core = CoreServices.build(provider, ts);
+        return core.plus(
             new HeadlessManagementService(new HeadlessProgramProvider(), new GhidraServerManager()),
             // PluginTool is only used at runtime; the scanner reflects on signatures.
             new DebuggerService(provider, ts, null),
             new PromptPolicyService(),
-            new VersionControlService(provider, new ProjectServerSession(provider)));
+            new VersionControlService(provider, new ProjectServerSession(provider)),
+            new ServerLifecycleService(core.programScript(), () -> { }));
     }
 
     /** Convenience: build a {@link StubProgramProvider}. */

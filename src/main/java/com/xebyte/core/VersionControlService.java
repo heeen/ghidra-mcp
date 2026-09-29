@@ -166,6 +166,37 @@ public class VersionControlService {
         return session.disconnect();
     }
 
+    @McpTool(path = "/server/authenticate", method = "POST",
+            description = "Register Ghidra Server credentials for this process, replacing any from the "
+                + "environment. They are used for every server connection from now on, including "
+                + "opening a shared project and /server/connect.",
+            category = "server", access = ToolAccess.WRITE)
+    public Response authenticate(
+            @Param(value = "username", source = ParamSource.BODY, defaultValue = "",
+                   description = "Server username. Omit to fall back to Ghidra's stored "
+                               + "PasswordPrompt.Name, then to the OS user name.") String username,
+            @Param(value = "password", source = ParamSource.BODY, defaultValue = "",
+                   description = "Server password. Required: the call is refused without it.") String password) {
+        if (password == null || password.isEmpty()) {
+            return Response.err("Password is required");
+        }
+        String user = username;
+        if (user == null || user.isEmpty()) {
+            user = ghidra.framework.preferences.Preferences.getProperty("PasswordPrompt.Name");
+        }
+        if (user == null || user.isEmpty()) {
+            user = System.getProperty("user.name");
+        }
+        try {
+            session.useCredentials(user, password.toCharArray());
+            repositories.clear();
+            return Response.ok(Map.of("success", true, "message", "Server credentials registered",
+                "username", user));
+        } catch (Exception e) {
+            return Response.err("Failed to register authenticator: " + messageOf(e));
+        }
+    }
+
     @McpTool(path = "/server/status",
             description = "Whether a Ghidra Server is connected (not whether a project is open: see "
                 + "/get_project_info).",

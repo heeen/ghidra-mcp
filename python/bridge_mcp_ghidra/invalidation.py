@@ -60,6 +60,9 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     # Server connection, repository administration and adding a file to version control
     # change nothing a program's resources report.
     "/server/connect": InvalidationTier.NONE,
+    "/server/authenticate": InvalidationTier.NONE,
+    # The process ends; nothing survives to be stale.
+    "/exit_ghidra": InvalidationTier.NONE,
     "/server/disconnect": InvalidationTier.NONE,
     "/server/repository/create": InvalidationTier.NONE,
     "/server/admin/set_permissions": InvalidationTier.NONE,

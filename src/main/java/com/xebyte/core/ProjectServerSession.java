@@ -54,6 +54,11 @@ public final class ProjectServerSession implements ServerSession {
     }
 
     @Override
+    public void useCredentials(String username, char[] password) {
+        GhidraMCPAuthenticator.register(username, password);
+    }
+
+    @Override
     public Map<String, Object> status() {
         RepositoryAdapter repo = repository();
         Map<String, Object> out = new LinkedHashMap<>();

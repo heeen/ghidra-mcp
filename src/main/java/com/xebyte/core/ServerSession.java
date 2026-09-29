@@ -25,4 +25,10 @@ public interface ServerSession {
 
     /** Whether a server is connected, and what is known about it. */
     Map<String, Object> status();
+
+    /**
+     * Use these credentials from now on. Registers them with Ghidra's client, and, for a
+     * session that connects itself, remembers them for the next connect.
+     */
+    void useCredentials(String username, char[] password);
 }
