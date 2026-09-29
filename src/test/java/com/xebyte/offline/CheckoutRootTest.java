@@ -4,7 +4,7 @@ import com.xebyte.core.checkout.CheckoutConfig;
 import com.xebyte.core.checkout.CheckoutKey;
 import com.xebyte.core.checkout.CheckoutRegistry;
 import com.xebyte.core.checkout.CheckoutRoot;
-import com.xebyte.headless.HeadlessPaths;
+import com.xebyte.core.SafePaths;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -76,10 +76,10 @@ public class CheckoutRootTest {
         Files.createDirectories(exports);
         Files.createDirectories(evil);
 
-        assertTrue(HeadlessPaths.isWithin(exports.toFile(), exports.resolve("out.c").toFile()));
+        assertTrue(SafePaths.isWithin(exports.toFile(), exports.resolve("out.c").toFile()));
         assertFalse(
                 "sibling exports-evil must not count as inside exports",
-                HeadlessPaths.isWithin(exports.toFile(), evil.resolve("out.c").toFile()));
+                SafePaths.isWithin(exports.toFile(), evil.resolve("out.c").toFile()));
     }
 
     @Test

@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 233 tools fully implemented (the whole catalog; the GUI plugin serves 226 of them and the headless server 213)
+- **MCP Tools**: 233 tools fully implemented (the whole catalog; the GUI plugin serves 230 of them and the headless server 213)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -873,7 +873,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 233 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-204 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (21) or **(headless only)** (8) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+208 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (21) or **(headless only)** (4) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -915,26 +915,26 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ### Project Organization
 
+- `archive_project` - Archive the currently open project to a Ghidra-native .gar file
 - `checkin_program` - Check an open program back in to the shared Ghidra Server as a new version
 - `create_folder` - Create a folder in the project
 - `delete_file` - Delete a file from the project
 - `delete_project` - Delete a Ghidra project **(headless only)**
+- `export_program` - Export an open or project-resident program to a Ghidra Zip File (.gzf)
 - `get_project_info` - Get info about the currently open project
+- `import_program` - Import a Ghidra Zip File (.gzf) into the currently open project as a new DomainFile under target_folder (default '/')
 - `list_projects` - List available Ghidra projects **(headless only)**
 - `move_file` - Move a program file to a different folder in the project, preserving analysis and documentation
 - `move_folder` - Move a project folder and everything under it into another folder
+- `restore_project` - Restore a Ghidra .gar archive into a fresh on-disk project at `parent_dir/project_name`
 
 ### Headless Project & Program Lifecycle
 
 Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
-- `archive_project` - Archive the currently open project to a Ghidra-native .gar file **(headless only)**
 - `close_project` - Close the currently open project **(headless only)**
 - `create_project` - Create a new Ghidra project **(headless only)**
-- `export_program` - Export an open or project-resident program to a Ghidra Zip File (.gzf) **(headless only)**
-- `import_program` - Import a Ghidra Zip File (.gzf) into the currently open project as a new DomainFile under target_folder (default '/') **(headless only)**
 - `open_project` - Open an existing Ghidra project (.gpr file or directory)
-- `restore_project` - Restore a Ghidra .gar archive into a fresh on-disk project at `parent_dir/project_name` **(headless only)**
 
 ### Listing & Enumeration
 
@@ -1202,7 +1202,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 ### Components
 
 - **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (234 catalog entries)
-- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (226 endpoints)
+- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (230 endpoints)
 - **GhidraMCPHeadlessServer** — Standalone headless server — 213 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
 
@@ -1286,7 +1286,7 @@ ghidra-mcp/
 ├── python/bridge_mcp_ghidra/ # MCP server package (Python, 234 catalog entries)
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
-│       ├── GhidraMCPPlugin.java         # GUI plugin (226 endpoints)
+│       ├── GhidraMCPPlugin.java         # GUI plugin (230 endpoints)
 │       ├── headless/                    # Headless server (213 endpoints)
 │       └── core/                        # Shared service layer (14 services)
 ├── ghidra_scripts/          # Automation scripts for batch workflows
@@ -1480,7 +1480,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | -------- | ------- |
 | **Version** | 7.0.0 |
 | **MCP Tools** | 234 fully implemented |
-| **GUI Endpoints** | 226 (GhidraMCPPlugin) |
+| **GUI Endpoints** | 230 (GhidraMCPPlugin) |
 | **Headless Endpoints** | 213 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |
 | **Batch Efficiency** | 93% API call reduction |

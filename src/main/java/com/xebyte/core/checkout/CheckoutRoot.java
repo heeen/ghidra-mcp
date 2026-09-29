@@ -1,7 +1,7 @@
 package com.xebyte.core.checkout;
 
 import com.xebyte.core.SecurityConfig;
-import com.xebyte.headless.HeadlessPaths;
+import com.xebyte.core.SafePaths;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -122,13 +122,13 @@ public final class CheckoutRoot {
 
     private void writeFileOnce(Path relative, byte[] content) throws IOException {
         Path target = root.resolve(relative).normalize();
-        if (!HeadlessPaths.isWithin(root.toFile(), target.toFile())) {
+        if (!SafePaths.isWithin(root.toFile(), target.toFile())) {
             throw new SecurityException(
                     "checkout write escapes root: " + relative + " (root=" + root + ")");
         }
         ensureParentForWrite(target);
         // Re-check after createDirectories: a symlink race could have moved us.
-        if (!HeadlessPaths.isWithin(root.toFile(), target.toFile())) {
+        if (!SafePaths.isWithin(root.toFile(), target.toFile())) {
             throw new SecurityException(
                     "checkout write escapes root after createDirectories: " + relative);
         }
@@ -195,7 +195,7 @@ public final class CheckoutRoot {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
                     throws IOException {
-                if (!HeadlessPaths.isWithin(root.toFile(), file.toFile())) {
+                if (!SafePaths.isWithin(root.toFile(), file.toFile())) {
                     throw new SecurityException("refusing to delete escaped path: " + file);
                 }
                 Files.deleteIfExists(file);

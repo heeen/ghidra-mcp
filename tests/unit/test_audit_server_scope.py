@@ -295,7 +295,7 @@ def test_the_asymmetry_is_wiring_not_per_tool_annotation(live):
     # and are therefore wired into both servers -- and VersionControlService,
     # ServerLifecycleService and DocumentationApplyService, which each server builds
     # with what differs between them (a ServerSession, a ServerLifecycle, a navigator).
-    assert len(gui & headless) == 19
+    assert len(gui & headless) == 20
 
 
 # --------------------------------------------------------------------------

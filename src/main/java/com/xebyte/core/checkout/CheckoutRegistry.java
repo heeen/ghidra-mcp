@@ -371,7 +371,7 @@ public final class CheckoutRegistry {
         if (pathOrName == null) {
             return false;
         }
-        return selector.equals(com.xebyte.headless.HeadlessPaths.safeBasename(pathOrName));
+        return selector.equals(com.xebyte.core.SafePaths.safeBasename(pathOrName));
     }
 
     /**
