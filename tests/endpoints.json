@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 236,
+  "total_endpoints": 235,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -3548,18 +3548,6 @@
         "gui"
       ],
       "description": "Navigate CodeBrowser listing and decompiler to a specific address"
-    },
-    {
-      "path": "/tool/launch_codebrowser",
-      "method": "POST",
-      "category": "utility",
-      "params": [
-        "path"
-      ],
-      "servers": [
-        "gui"
-      ],
-      "description": "Open a file in CodeBrowser, launching a new one if needed"
     },
     {
       "path": "/tool/running_tools",

@@ -2,12 +2,10 @@ package com.xebyte;
 
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
-import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.*;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.DebuggerTraceManagerService;
-import ghidra.app.services.GoToService;
 
 import ghidra.program.model.data.*;
 import ghidra.framework.plugintool.PluginInfo;
@@ -33,13 +31,10 @@ import com.xebyte.core.ServerManager;
 
 import ghidra.framework.main.ApplicationLevelPlugin;
 
-import ghidra.framework.model.DomainFile;
 import ghidra.framework.model.Project;
 import ghidra.framework.model.ProjectLocator;
 import ghidra.framework.model.ProjectManager;
 import ghidra.framework.main.AppInfo;
-
-import ghidra.util.task.TaskMonitor;
 
 import com.sun.net.httpserver.Headers;
 import com.xebyte.core.HttpExchange;
@@ -50,7 +45,6 @@ import java.io.*;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -58,7 +52,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 228 endpoints for reverse engineering automation. " +
+                  "Provides 227 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -121,9 +115,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // nest on the same thread (see AnnotationScanner.createHandler).
     private final com.xebyte.core.ThreadingStrategy threadingStrategy;
 
-
     // Service layer for delegated operations
     private final com.xebyte.core.CoreServices services;
+    private final com.xebyte.core.GuiToolService guiToolService;
     private final com.xebyte.core.ListingService listingService;
     private final com.xebyte.core.CommentService commentService;
     private final com.xebyte.core.SymbolLabelService symbolLabelService;
@@ -157,6 +151,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         this.malwareSecurityService = services.malwareSecurity();
         this.programScriptService = services.programScript();
         this.debuggerService = new com.xebyte.core.DebuggerService(programProvider, threadingStrategy, tool);
+        this.guiToolService = new com.xebyte.core.GuiToolService(tool);
         this.promptPolicyService = new com.xebyte.core.PromptPolicyService();
         Msg.info(this, "============================================");
         Msg.info(this, "GhidraMCP " + VersionInfo.getFullVersion());
@@ -416,7 +411,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             services.plus(debuggerService, promptPolicyService,
                 new com.xebyte.core.VersionControlService(programProvider,
                     new com.xebyte.core.ProjectServerSession(programProvider)),
-                new com.xebyte.core.ServerLifecycleService(services.programScript(), guiLifecycle())));
+                new com.xebyte.core.ServerLifecycleService(services.programScript(), guiLifecycle()),
+                guiToolService));
         // The hand-coded routes are live on every transport, but the scanner only
         // knows annotated methods; without this they stay out of /mcp/schema and so
         // out of the bridge's dynamic tool discovery.
@@ -802,22 +798,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         // FrontEnd-level operations for project and tool management
         // ==========================================================================
 
-        http.route("/tool/running_tools", exchange -> {
-            sendResponse(exchange, getRunningTools());
-        });
-
-        http.route("/tool/launch_codebrowser", exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String filePath = params.get("path") != null ? params.get("path").toString() : null;
-            sendResponse(exchange, launchCodeBrowser(filePath));
-        });
-
-        http.route("/tool/goto_address", exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String address = params.get("address") != null ? params.get("address").toString() : null;
-            sendResponse(exchange, gotoAddress(address));
-        });
-
         http.route("/batch_apply_documentation", exchange -> {
             Map<String, Object> params = parseJsonParams(exchange);
             sendResponse(exchange, batchApplyDocumentation(params));
@@ -1125,7 +1105,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             if (!firstStep) sb.append(", ");
             firstStep = false;
             try {
-                String gotoResult = gotoAddress(address);
+                String gotoResult = guiToolService.gotoAddress(address).toJson();
                 boolean gotoOk = gotoResult != null && !gotoResult.contains("\"error\"");
                 sb.append("\"goto\": {\"success\": ").append(gotoOk).append("}");
             } catch (Exception e) {
@@ -1345,49 +1325,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // PROJECT & TOOL MANAGEMENT HELPERS
     // ==========================================================================
 
-    private String getRunningTools() {
-        Project project = tool.getProject();
-        if (project == null) {
-            return "{\"error\": \"No project open\"}";
-        }
-        try {
-            ghidra.framework.model.ToolManager tm = project.getToolManager();
-            if (tm == null) {
-                return "{\"error\": \"ToolManager not available\"}";
-            }
-            PluginTool[] tools = tm.getRunningTools();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"tools\": [");
-            for (int i = 0; i < tools.length; i++) {
-                if (i > 0) sb.append(", ");
-                sb.append("{\"name\": \"").append(escapeJson(tools[i].getName())).append("\"");
-                sb.append(", \"instance\": \"").append(escapeJson(tools[i].getInstanceName())).append("\"");
-                ghidra.app.services.ProgramManager pm = tools[i].getService(ghidra.app.services.ProgramManager.class);
-                if (pm != null) {
-                    sb.append(", \"has_program_manager\": true");
-                    Program current = pm.getCurrentProgram();
-                    if (current != null) {
-                        sb.append(", \"current_program\": \"").append(escapeJson(current.getName())).append("\"");
-                    }
-                    Program[] progs = pm.getAllOpenPrograms();
-                    sb.append(", \"open_programs\": [");
-                    for (int j = 0; j < progs.length; j++) {
-                        if (j > 0) sb.append(", ");
-                        sb.append("\"").append(escapeJson(progs[j].getName())).append("\"");
-                    }
-                    sb.append("]");
-                } else {
-                    sb.append(", \"has_program_manager\": false");
-                }
-                sb.append("}");
-            }
-            sb.append("], \"count\": ").append(tools.length).append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to list tools: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
     /**
      * Open (or switch to) a Ghidra project from the FrontEnd plugin.
      *
@@ -1460,7 +1397,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             // Already open — honor headless flag for CodeBrowser side-effect anyway.
             String maybeLaunch = null;
             if (!headless && programToLaunch != null && !programToLaunch.isEmpty()) {
-                maybeLaunch = launchCodeBrowser(programToLaunch);
+                maybeLaunch = programScriptService.openProgramFromProject(programToLaunch, false).toJson();
             }
             return "{\"success\": true, \"project\": \"" + escapeJson(name) + "\", "
                 + "\"already_open\": true, \"headless\": " + headless
@@ -1506,7 +1443,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
         String launchResult = null;
         if (!headless && programToLaunch != null && !programToLaunch.isEmpty()) {
-            launchResult = launchCodeBrowser(programToLaunch);
+            launchResult = programScriptService.openProgramFromProject(programToLaunch, false).toJson();
         }
         StringBuilder json = new StringBuilder(256);
         json.append("{\"success\": true, \"project\": \"").append(escapeJson(opened[0].getName()))
@@ -1516,146 +1453,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         }
         json.append("}");
         return json.toString();
-    }
-
-    private String launchCodeBrowser(String filePath) {
-        Project project = tool.getProject();
-        if (project == null) {
-            return "{\"error\": \"No project open\"}";
-        }
-
-        DomainFile domainFile = null;
-        if (filePath != null && !filePath.trim().isEmpty()) {
-            domainFile = project.getProjectData().getFile(filePath);
-            if (domainFile == null) {
-                return "{\"error\": \"File not found in project: " + escapeJson(filePath) + "\"}";
-            }
-        }
-
-        try {
-            ghidra.framework.model.ToolServices ts = project.getToolServices();
-            if (ts == null) {
-                return "{\"error\": \"ToolServices not available\"}";
-            }
-
-            // Find existing CodeBrowser or launch a new one
-            ghidra.framework.model.ToolManager tm = project.getToolManager();
-            PluginTool codeBrowser = null;
-            if (tm != null) {
-                for (PluginTool runningTool : tm.getRunningTools()) {
-                    if (runningTool.getService(ghidra.app.services.ProgramManager.class) != null) {
-                        codeBrowser = runningTool;
-                        break;
-                    }
-                }
-            }
-
-            if (codeBrowser != null && domainFile != null) {
-                // Existing CodeBrowser found - open the file in it
-                final ghidra.app.services.ProgramManager pm = codeBrowser.getService(ghidra.app.services.ProgramManager.class);
-                final Program program = (Program) domainFile.getDomainObject(this, false, false, TaskMonitor.DUMMY);
-                javax.swing.SwingUtilities.invokeAndWait(() -> {
-                    pm.openProgram(program);
-                    pm.setCurrentProgram(program);
-                });
-                return "{\"success\": true, \"message\": \"Opened in existing CodeBrowser\", " +
-                    "\"tool\": \"" + escapeJson(codeBrowser.getName()) + "\", " +
-                    "\"program\": \"" + escapeJson(program.getName()) + "\", " +
-                    "\"path\": \"" + escapeJson(filePath) + "\"}";
-            } else if (domainFile != null) {
-                // No CodeBrowser running - launch one with the file (must run on EDT)
-                final DomainFile df = domainFile;
-                final String fp = filePath;
-                javax.swing.SwingUtilities.invokeAndWait(() -> {
-                    ts.launchDefaultTool(Collections.singletonList(df));
-                });
-                return "{\"success\": true, \"message\": \"Launched new CodeBrowser\", " +
-                    "\"path\": \"" + escapeJson(fp) + "\"}";
-            } else {
-                // No file specified - just launch empty CodeBrowser (must run on EDT)
-                javax.swing.SwingUtilities.invokeAndWait(() -> {
-                    ts.launchDefaultTool(Collections.emptyList());
-                });
-                return "{\"success\": true, \"message\": \"Launched new CodeBrowser (no file)\"}";
-            }
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to launch CodeBrowser: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Navigate the CodeBrowser listing/decompiler to a specific address.
-     * Finds the running CodeBrowser via ToolManager and uses GoToService.
-     */
-    private String gotoAddress(String addressStr) {
-        if (addressStr == null || addressStr.trim().isEmpty()) {
-            return "{\"error\": \"address parameter is required\"}";
-        }
-
-        try {
-            Project project = tool.getProject();
-            if (project == null) {
-                return "{\"error\": \"No project open\"}";
-            }
-
-            // Find a running CodeBrowser
-            ghidra.framework.model.ToolManager tm = project.getToolManager();
-            if (tm == null) {
-                return "{\"error\": \"ToolManager not available\"}";
-            }
-
-            PluginTool codeBrowser = null;
-            for (PluginTool runningTool : tm.getRunningTools()) {
-                if (runningTool.getService(ghidra.app.services.ProgramManager.class) != null) {
-                    codeBrowser = runningTool;
-                    break;
-                }
-            }
-
-            if (codeBrowser == null) {
-                return "{\"error\": \"No CodeBrowser running\"}";
-            }
-
-            // Get GoToService from the CodeBrowser
-            GoToService goToService = codeBrowser.getService(GoToService.class);
-            if (goToService == null) {
-                return "{\"error\": \"GoToService not available in CodeBrowser\"}";
-            }
-
-            // Get the current program from the CodeBrowser
-            ghidra.app.services.ProgramManager pm = codeBrowser.getService(ghidra.app.services.ProgramManager.class);
-            Program program = pm.getCurrentProgram();
-            if (program == null) {
-                return "{\"error\": \"No program open in CodeBrowser\"}";
-            }
-
-            // Parse the address
-            Address addr = program.getAddressFactory().getAddress(addressStr);
-            if (addr == null) {
-                return "{\"error\": \"Invalid address: " + escapeJson(addressStr) + "\"}";
-            }
-
-            // Navigate on the EDT
-            final GoToService gts = goToService;
-            final Address targetAddr = addr;
-            final AtomicBoolean success = new AtomicBoolean(false);
-            SwingUtilities.invokeAndWait(() -> {
-                success.set(gts.goTo(targetAddr));
-            });
-
-            if (success.get()) {
-                // Check if the address is in a function
-                Function func = program.getFunctionManager().getFunctionContaining(addr);
-                String funcInfo = func != null
-                    ? ", \"function\": \"" + escapeJson(func.getName()) + "\""
-                    : "";
-                return "{\"success\": true, \"address\": \"" + addr.toString() + "\"" + funcInfo + "}";
-            } else {
-                return "{\"error\": \"GoToService could not navigate to " + escapeJson(addressStr) + "\"}";
-            }
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to navigate: " + escapeJson(e.getMessage()) + "\"}";
-        }
     }
 
     @Override
