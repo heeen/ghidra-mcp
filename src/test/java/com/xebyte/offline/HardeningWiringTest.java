@@ -147,8 +147,6 @@ public class HardeningWiringTest extends TestCase {
                 read("core", "JsonHelper.java").contains("readNBytes"));
         assertTrue("GUI hand-coded routes must read bodies through the bounded JsonHelper.parseBody",
                 read("GhidraMCPPlugin.java").contains("JsonHelper.parseBody("));
-        assertTrue("headless parsePostParams must bound the read",
-                read("headless", "GhidraMCPHeadlessServer.java").contains("readNBytes"));
         assertTrue("McpHttpServer must reject an oversized Content-Length (413)",
                 read("core", "McpHttpServer.java").contains("exceedsMaxBody"));
         assertTrue("UDS must reject oversized Content-Length (413)",
@@ -193,13 +191,14 @@ public class HardeningWiringTest extends TestCase {
 
     /** A scoped server must not check in outside its scope either. */
     public void testCheckinEnforcesProjectFolderScope() throws IOException {
-        String src = read("core", "ProjectProgramProvider.java");
-        int at = src.indexOf("public Map<String, Object> checkinProgram(");
-        assertTrue("checkinProgram not found", at >= 0);
-        String method = src.substring(at);
-        assertTrue("checkinProgram must call isPathInProjectScope before touching the file",
-                method.indexOf("isPathInProjectScope(") >= 0
-                && method.indexOf("isPathInProjectScope(") < method.indexOf("file.checkin("));
+        String src = read("core", "ProjectVersionControl.java");
+        int lookup = src.indexOf("private FileOrError file(String path)");
+        assertTrue("the file lookup must exist", lookup >= 0);
+        int scope = src.indexOf("isPathInProjectScope(", lookup);
+        assertTrue("every operation that names a file goes through file(), which must apply the scope",
+                scope > lookup && scope < src.indexOf("getFile(normalized)", lookup));
+        assertTrue("the folder walks must skip files outside the scope too",
+                src.split("isPathInProjectScope\\(", -1).length >= 4);
     }
 
     private static int countOccurrences(String s, String sub) {

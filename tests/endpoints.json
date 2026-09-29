@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 237,
+  "total_endpoints": 236,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -3077,7 +3077,7 @@
       "params": [
         "repo",
         "user",
-        "accessLevel"
+        "access_level"
       ],
       "servers": [
         "gui",
@@ -3090,7 +3090,6 @@
       "method": "POST",
       "category": "server",
       "params": [
-        "repo",
         "path"
       ],
       "servers": [
@@ -3104,9 +3103,7 @@
       "method": "POST",
       "category": "server",
       "params": [
-        "repo",
         "path",
-        "checkoutId",
         "checkout_id"
       ],
       "servers": [
@@ -3144,7 +3141,6 @@
       "method": "GET",
       "category": "server",
       "params": [
-        "repo",
         "path"
       ],
       "servers": [
@@ -3230,7 +3226,7 @@
     {
       "path": "/server/status",
       "method": "GET",
-      "category": "headless",
+      "category": "server",
       "params": [],
       "servers": [
         "gui",
@@ -3243,10 +3239,9 @@
       "method": "POST",
       "category": "server",
       "params": [
-        "repo",
         "path",
         "comment",
-        "keepCheckedOut"
+        "keep_checked_out"
       ],
       "servers": [
         "gui",
@@ -3255,28 +3250,12 @@
       "description": "Add a file to version control"
     },
     {
-      "path": "/server/version_control/checkin",
-      "method": "POST",
-      "category": "server",
-      "params": [
-        "repo",
-        "path",
-        "comment",
-        "keepCheckedOut"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Check in a version-controlled file"
-    },
-    {
       "path": "/server/version_control/checkout",
       "method": "POST",
       "category": "server",
       "params": [
-        "repo",
-        "path"
+        "path",
+        "exclusive"
       ],
       "servers": [
         "gui",
@@ -3289,8 +3268,8 @@
       "method": "POST",
       "category": "server",
       "params": [
-        "repo",
-        "path"
+        "path",
+        "keep"
       ],
       "servers": [
         "gui",
@@ -3303,7 +3282,6 @@
       "method": "GET",
       "category": "server",
       "params": [
-        "repo",
         "path"
       ],
       "servers": [

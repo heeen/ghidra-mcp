@@ -57,6 +57,14 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/save_program": InvalidationTier.NONE,
     "/save_all_programs": InvalidationTier.NONE,
     "/checkin_program": InvalidationTier.NONE,
+    # Server connection, repository administration and adding a file to version control
+    # change nothing a program's resources report.
+    "/server/connect": InvalidationTier.NONE,
+    "/server/disconnect": InvalidationTier.NONE,
+    "/server/repository/create": InvalidationTier.NONE,
+    "/server/admin/set_permissions": InvalidationTier.NONE,
+    "/server/admin/terminate_all_checkouts": InvalidationTier.NONE,
+    "/server/version_control/add": InvalidationTier.NONE,
     "/export_program": InvalidationTier.NONE,
     "/prompt_policy": InvalidationTier.NONE,
     # Analysis options are program state, but no function or program body reports them.
@@ -153,6 +161,11 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/close_program": InvalidationTier.UNBOUNDED,
     "/switch_program": InvalidationTier.UNBOUNDED,
     "/import_file": InvalidationTier.UNBOUNDED,
+    # These swap or discard a program's local working copy, so anything cached from it
+    # may no longer be true.
+    "/server/version_control/checkout": InvalidationTier.UNBOUNDED,
+    "/server/version_control/undo_checkout": InvalidationTier.UNBOUNDED,
+    "/server/admin/terminate_checkout": InvalidationTier.UNBOUNDED,
     "/set_program_option": InvalidationTier.UNBOUNDED,
     "/remove_program_option": InvalidationTier.UNBOUNDED,
     "/set_property": InvalidationTier.UNBOUNDED,
