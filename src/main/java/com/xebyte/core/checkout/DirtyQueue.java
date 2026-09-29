@@ -127,11 +127,6 @@ public final class DirtyQueue {
         return b != null && b.needsReconcile;
     }
 
-    public synchronized boolean isDrainQueued(String checkoutId) {
-        Bucket b = buckets.get(checkoutId);
-        return b != null && b.drainQueued;
-    }
-
     public synchronized void clear(String checkoutId) {
         if (checkoutId != null) {
             buckets.remove(checkoutId);

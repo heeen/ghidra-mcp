@@ -91,15 +91,6 @@ public class HeadlessProgramProvider extends ProjectProgramProvider {
     }
 
     /**
-     * Set the Ghidra project for loading programs.
-     *
-     * @param project The project to use
-     */
-    public void setProject(Project project) {
-        this.project = project;
-    }
-
-    /**
      * Get the current project.
      *
      * <p>Also satisfies {@link ProgramProvider#getProject()}, which is how the

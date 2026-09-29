@@ -130,20 +130,6 @@ public record CheckoutConfig(
                 disassembleMissing);
     }
 
-    public CheckoutConfig withDecompileTimeoutSeconds(int seconds) {
-        return new CheckoutConfig(
-                rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, seconds, analysisWaitSeconds, maxFileBytes,
-                disassembleMissing);
-    }
-
-    public CheckoutConfig withAnalysisWaitSeconds(int seconds) {
-        return new CheckoutConfig(
-                rootPath, enabledStrategies, bandSize, exclusions, includeOnly,
-                throttlePercent, decompileTimeoutSeconds, seconds, maxFileBytes,
-                disassembleMissing);
-    }
-
     public CheckoutConfig withMaxFileBytes(int bytes) {
         return new CheckoutConfig(
                 rootPath, enabledStrategies, bandSize, exclusions, includeOnly,

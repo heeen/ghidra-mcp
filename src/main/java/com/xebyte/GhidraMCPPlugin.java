@@ -466,61 +466,13 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // Pagination-aware listing (consolidated under listProgramItems)
     // ----------------------------------------------------------------------------------
 
-    private String listProgramItems(String kind, int offset, int limit, String programName) {
-        return listingService.listProgramItems(kind, offset, limit, programName).toJson();
-    }
-
-    private String listProgramItems(String kind, int offset, int limit) {
-        return listingService.listProgramItems(kind, offset, limit, null).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // Logic for rename, decompile, etc.
     // ----------------------------------------------------------------------------------
 
-    private String renameDataAtAddress(String addressStr, String newName, String programName) {
-        return symbolLabelService.renameDataAtAddress(addressStr, newName, programName).toJson();
-    }
-
-    private String renameDataAtAddress(String addressStr, String newName) {
-        return symbolLabelService.renameDataAtAddress(addressStr, newName).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // New methods to implement the new functionalities
     // ----------------------------------------------------------------------------------
-
-    /**
-     * Get function by address
-     */
-    private String getFunctionByAddress(String addressStr, String programName) {
-        return functionService.getFunctionByAddress(addressStr, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String getFunctionByAddress(String addressStr) {
-        return functionService.getFunctionByAddress(addressStr).toJson();
-    }
-
-    private String decompileFunctionByAddress(String addressStr, String programName, int timeoutSeconds) {
-        return functionService.decompileFunctionByAddress(addressStr, programName, timeoutSeconds).toJson();
-    }
-
-    private String decompileFunctionByAddress(String addressStr, String programName) {
-        return functionService.decompileFunctionByAddress(addressStr, programName).toJson();
-    }
-
-    private String decompileFunctionByAddress(String addressStr) {
-        return functionService.decompileFunctionByAddress(addressStr).toJson();
-    }
-
-    private String disassembleFunction(String addressStr, String programName) {
-        return functionService.disassembleFunction(addressStr, programName).toJson();
-    }
-
-    private String disassembleFunction(String addressStr) {
-        return functionService.disassembleFunction(addressStr).toJson();
-    }
 
     private String renameFunctionByAddress(String functionAddrStr, String newName, String programName) {
         return functionService.renameFunctionByAddress(functionAddrStr, newName, programName).toJson();
@@ -543,62 +495,12 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return functionService.setFunctionPrototype(functionAddrStr, prototype, callingConvention, programName);
     }
 
-    private String listCallingConventions(String programName) {
-        return listingService.listCallingConventions(programName).toJson();
-    }
-
-    private String listCallingConventions() {
-        return listingService.listCallingConventions(null).toJson();
-    }
-
     private String setLocalVariableType(String functionAddrStr, String variableName, String newType, String programName) {
         return functionService.setLocalVariableType(functionAddrStr, variableName, newType, programName).toJson();
     }
 
     private String setLocalVariableType(String functionAddrStr, String variableName, String newType) {
         return functionService.setLocalVariableType(functionAddrStr, variableName, newType).toJson();
-    }
-
-    private String setFunctionNoReturn(String functionAddrStr, boolean noReturn, String programName) {
-        return functionService.setFunctionNoReturn(functionAddrStr, noReturn, programName).toJson();
-    }
-
-    private String setFunctionNoReturn(String functionAddrStr, boolean noReturn) {
-        return functionService.setFunctionNoReturn(functionAddrStr, noReturn).toJson();
-    }
-
-    private String clearInstructionFlowOverride(String instructionAddrStr, String programName) {
-        return functionService.clearInstructionFlowOverride(instructionAddrStr, programName).toJson();
-    }
-
-    private String clearInstructionFlowOverride(String instructionAddrStr) {
-        return functionService.clearInstructionFlowOverride(instructionAddrStr).toJson();
-    }
-
-    private String setVariableStorage(String functionAddrStr, String variableName, String storageSpec, String programName) {
-        return functionService.setVariableStorage(functionAddrStr, variableName, storageSpec, programName).toJson();
-    }
-
-    private String setVariableStorage(String functionAddrStr, String variableName, String storageSpec) {
-        return functionService.setVariableStorage(functionAddrStr, variableName, storageSpec).toJson();
-    }
-
-    /**
-     * Run a Ghidra script programmatically (v1.7.0, fixed v2.0.1)
-     *
-     * Fixes: Issue #1 (args support via setScriptArgs), Issue #2 (OSGi path
-     * resolution by copying to ~/ghidra_scripts/), Issue #5 (timeout protection).
-     *
-     * @param scriptPath Path to the script file (.java or .py), or just a filename
-     * @param scriptArgs Optional space-separated arguments for the script
-     * @return Script output or error message
-     */
-    private String runGhidraScript(String scriptPath, String scriptArgs, String programName) {
-        return programScriptService.runGhidraScript(scriptPath, scriptArgs, programName).toJson();
-    }
-
-    private String runGhidraScript(String scriptPath, String scriptArgs) {
-        return programScriptService.runGhidraScript(scriptPath, scriptArgs).toJson();
     }
 
     // ----------------------------------------------------------------------------------
@@ -829,33 +731,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // ====================================================================================
     // FUNCTION HASH INDEX - Cross-binary documentation propagation
     // ====================================================================================
-
-    /**
-     * Compute a normalized opcode hash for a function.
-     * The hash normalizes:
-     * - Absolute addresses (call targets, jump targets, data refs) are replaced with placeholders
-     * - Register-based operations are preserved
-     * - Instruction mnemonics and operand types are included
-     *
-     * This allows matching identical functions that are located at different addresses.
-     */
-    private String getFunctionHash(String functionAddress, String programName) {
-        return documentationHashService.getFunctionHash(functionAddress, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String getFunctionHash(String functionAddress) {
-        return documentationHashService.getFunctionHash(functionAddress).toJson();
-    }
-
-    private String getBulkFunctionHashes(int offset, int limit, String filter, String programName) {
-        return documentationHashService.getBulkFunctionHashes(offset, limit, filter, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String getBulkFunctionHashes(int offset, int limit, String filter) {
-        return documentationHashService.getBulkFunctionHashes(offset, limit, filter).toJson();
-    }
 
     /**
      * Register the hand-coded routes — the utility / GUI-state / Ghidra-Server
@@ -1178,29 +1053,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return dataTypeService.applyDataType(addressStr, typeName, clearExisting).toJson();
     }
 
-    private String renameGlobalVariable(String oldName, String newName, String programName) {
-        return symbolLabelService.renameGlobalVariable(oldName, newName, programName).toJson();
-    }
-
-    private String renameGlobalVariable(String oldName, String newName) {
-        return symbolLabelService.renameGlobalVariable(oldName, newName).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // Data Type Analysis and Management Methods
     // ----------------------------------------------------------------------------------
-
-    /**
-     * Read memory at a specific address
-     */
-    private String readMemory(String addressStr, int length, String programName) {
-        return programScriptService.readMemory(addressStr, length, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String readMemory(String addressStr, int length) {
-        return programScriptService.readMemory(addressStr, length, null).toJson();
-    }
 
     /**
      * Helper method to extract JSON values from simple JSON strings
@@ -1244,20 +1099,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private String batchSetComments(String functionAddress, List<Map<String, String>> decompilerComments,
                                     List<Map<String, String>> disassemblyComments, String plateComment) {
         return commentService.batchSetComments(functionAddress, decompilerComments, disassemblyComments, plateComment).toJson();
-    }
-
-    /**
-     * v1.5.0: Get all variables in a function (parameters and locals)
-     */
-    @SuppressWarnings("deprecation")
-    private String getFunctionVariables(String functionName, String programName) {
-        return functionService.getFunctionVariables(functionName, null, programName, 200, null).toJson();
-    }
-
-    // Backward compatibility overload
-    @SuppressWarnings("deprecation")
-    private String getFunctionVariables(String functionName) {
-        return functionService.getFunctionVariables(functionName).toJson();
     }
 
     /**
@@ -1490,90 +1331,15 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * v1.5.0: Find next undefined function needing analysis
-     */
-    private String findNextUndefinedFunction(String startAddress, String criteria,
-                                            String pattern, String direction, String programName) {
-        return analysisService.findNextUndefinedFunction(startAddress, criteria, pattern, direction, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String findNextUndefinedFunction(String startAddress, String criteria,
-                                            String pattern, String direction) {
-        return analysisService.findNextUndefinedFunction(startAddress, criteria, pattern, direction).toJson();
-    }
-
-    /**
      * NEW v1.6.0: Batch rename variables with partial success reporting and fallback
      */
     private String batchRenameVariables(String functionAddress, Map<String, String> variableRenames, boolean forceIndividual) {
         return functionService.batchRenameVariables(functionAddress, variableRenames, forceIndividual).toJson();
     }
 
-    /**
-     * NEW v1.6.0: Determine if address has data/code and suggest operation
-     */
-    private String canRenameAtAddress(String addressStr, String programName) {
-        return symbolLabelService.canRenameAtAddress(addressStr, programName).toJson();
-    }
-
-    private String canRenameAtAddress(String addressStr) {
-        return symbolLabelService.canRenameAtAddress(addressStr).toJson();
-    }
-
-    /**
-     * NEW v1.6.0: Comprehensive function analysis in single call
-     */
-    private String analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
-                                          boolean includeCallers, boolean includeDisasm, boolean includeVariables,
-                                          String programName) {
-        return analysisService.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String analyzeFunctionComplete(String name, boolean includeXrefs, boolean includeCallees,
-                                          boolean includeCallers, boolean includeDisasm, boolean includeVariables) {
-        return analysisService.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables).toJson();
-    }
-
     // ===================================================================================
     // BOOKMARK METHODS (v1.9.4) - Progress tracking via Ghidra bookmarks
     // ===================================================================================
-
-    /**
-     * List all external locations (imports, ordinal imports, etc.)
-     */
-    private String listExternalLocations(int offset, int limit, String programName) {
-        return listProgramItems("external_locations", offset, limit, programName);
-    }
-
-    // Backward compatibility overload
-    private String listExternalLocations(int offset, int limit) {
-        return listProgramItems("external_locations", offset, limit);
-    }
-
-    /**
-     * Get details of a specific external location
-     */
-    private String getExternalLocationDetails(String address, String dllName, String programName) {
-        return listingService.getExternalLocationDetails(address, dllName, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    private String getExternalLocationDetails(String address, String dllName) {
-        return listingService.getExternalLocationDetails(address, dllName, null).toJson();
-    }
-
-    /**
-     * Rename an external location (e.g., change Ordinal_123 to a real function name)
-     */
-    private String renameExternalLocation(String address, String newName, String programName) {
-        return symbolLabelService.renameExternalLocation(address, newName, programName).toJson();
-    }
-
-    private String renameExternalLocation(String address, String newName) {
-        return symbolLabelService.renameExternalLocation(address, newName).toJson();
-    }
 
     // ==================================================================================
     // CROSS-VERSION MATCHING TOOLS
