@@ -62,6 +62,7 @@ SCANNED_SERVICES = (
     "CheckoutService",
     "VersionControlService",
     "ServerLifecycleService",
+    "GuiToolService",
 )
 
 # Hand-registered routes get their descriptors from ManualToolDescriptors, which

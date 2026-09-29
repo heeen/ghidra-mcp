@@ -288,7 +288,7 @@ def test_the_asymmetry_is_wiring_not_per_tool_annotation(live):
     """
     gui = set(live["gui_service_classes"])
     headless = set(live["headless_service_classes"])
-    assert gui - headless == {"DebuggerService", "PromptPolicyService"}
+    assert gui - headless == {"DebuggerService", "PromptPolicyService", "GuiToolService"}
     assert headless - gui == {"HeadlessManagementService"}
     # 18: the 11 that predate this branch plus FunctionBundle, TypeReference,
     # ChangeToken, Partition and Checkout, all of which take a ThreadingStrategy

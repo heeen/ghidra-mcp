@@ -56,10 +56,7 @@ public final class ManualToolDescriptors {
         "/check_connection",
         "/mcp/health",
         "/mcp/schema",
-        "/open_project",
-        "/tool/goto_address",
-        "/tool/launch_codebrowser",
-        "/tool/running_tools"
+        "/open_project"
     );
 
 
@@ -140,11 +137,6 @@ public final class ManualToolDescriptors {
             "path", "Path to the project: its .gpr file or the project directory holding it.",
             "headless", "GUI mode only. True (the default) loads the project into the FrontEnd tool without opening a CodeBrowser window; false launches one for `program`. The headless server ignores it.",
             "program", "GUI mode only, and only when headless=false: the DomainFile path to open in the launched CodeBrowser.");
-        add(m, "/tool/goto_address", "POST", "utility", "Navigate CodeBrowser listing and decompiler to a specific address", ToolAccess.WRITE,
-            "address", "Address to navigate to, as 0x<hex> or <space>:<hex>. GUI mode only — it moves a CodeBrowser window.");
-        add(m, "/tool/launch_codebrowser", "POST", "utility", "Open a file in CodeBrowser, launching a new one if needed", ToolAccess.WRITE,
-            "path", "DomainFile path of the program to open, e.g. /Vanilla/1.13c/D2Common.dll. GUI mode only.");
-        add(m, "/tool/running_tools", "GET", "utility", "List all running Ghidra tool windows", ToolAccess.READ_ONLY);
         return m;
     }
 
