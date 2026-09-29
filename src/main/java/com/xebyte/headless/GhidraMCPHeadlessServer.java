@@ -396,7 +396,9 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
             services.plus(managementService, new VersionControlService(programProvider, serverManager),
                 new com.xebyte.core.ServerLifecycleService(services.programScript(),
-                    () -> System.exit(0))));
+                    () -> System.exit(0)),
+                new com.xebyte.core.DocumentationBatchService(services.function(), services.comment(),
+                    services.analysis(), null)));
 
         http.endpoints(scanner);
 

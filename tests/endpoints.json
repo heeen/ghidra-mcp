@@ -399,6 +399,7 @@
       "category": "analysis",
       "params": [
         "address",
+        "goto",
         "name",
         "prototype",
         "calling_convention",
@@ -407,12 +408,12 @@
         "plate_comment",
         "decompiler_comments",
         "disassembly_comments",
-        "goto",
         "score",
         "program"
       ],
       "servers": [
-        "gui"
+        "gui",
+        "headless"
       ],
       "description": "Apply all documentation to a function in one call"
     },

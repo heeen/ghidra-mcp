@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 234 tools fully implemented (the whole catalog; the GUI plugin serves 227 of them and the headless server 213)
+- **MCP Tools**: 234 tools fully implemented (the whole catalog; the GUI plugin serves 227 of them and the headless server 214)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -873,7 +873,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 234 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-204 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (22) or **(headless only)** (8) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+205 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (21) or **(headless only)** (8) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -1060,7 +1060,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `analyze_for_documentation` - Composite RE documentation analysis (decompile + classify + variables + completeness)
 - `analyze_function_complete` - Comprehensive single-call function analysis
 - `analyze_function_completeness` - Analyze documentation completeness
-- `batch_apply_documentation` - Apply all documentation to a function in one call **(GUI only)**
+- `batch_apply_documentation` - Apply all documentation to a function in one call
 - `configure_analyzer` - Configure an analysis plugin
 - `detect_array_bounds` - Detect array bounds
 - `find_code_gaps` - Find gaps of undefined bytes between functions in executable memory
@@ -1204,7 +1204,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 - **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (235 catalog entries)
 - **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (227 endpoints)
-- **GhidraMCPHeadlessServer** — Standalone headless server — 213 endpoints, no GUI required
+- **GhidraMCPHeadlessServer** — Standalone headless server — 214 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
 
 ## 🔧 Development
@@ -1288,7 +1288,7 @@ ghidra-mcp/
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
 │       ├── GhidraMCPPlugin.java         # GUI plugin (227 endpoints)
-│       ├── headless/                    # Headless server (213 endpoints)
+│       ├── headless/                    # Headless server (214 endpoints)
 │       └── core/                        # Shared service layer (14 services)
 ├── ghidra_scripts/          # Automation scripts for batch workflows
 ├── tests/                   # Python unit tests + endpoint catalog
@@ -1482,7 +1482,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | **Version** | 7.0.0 |
 | **MCP Tools** | 235 fully implemented |
 | **GUI Endpoints** | 227 (GhidraMCPPlugin) |
-| **Headless Endpoints** | 213 (GhidraMCPHeadlessServer) |
+| **Headless Endpoints** | 214 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |
 | **Batch Efficiency** | 93% API call reduction |
 | **AI Workflows** | 7 proven documentation workflows |

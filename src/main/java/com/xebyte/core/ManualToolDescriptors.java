@@ -52,7 +52,6 @@ public final class ManualToolDescriptors {
      * the routes themselves were shared.
      */
     public static final List<String> SHARED_ROUTES = List.of(
-        "/batch_apply_documentation",
         "/check_connection",
         "/mcp/health",
         "/mcp/schema",
@@ -101,20 +100,6 @@ public final class ManualToolDescriptors {
 
     private static Map<String, AnnotationScanner.ToolDescriptor> buildAll() {
         Map<String, AnnotationScanner.ToolDescriptor> m = new LinkedHashMap<>();
-        add(m, "/batch_apply_documentation", "POST", "analysis",
-            "Apply all documentation to a function in one call", ToolAccess.WRITE,
-            "address", "Function entry address, as 0x<hex> or <space>:<hex>. Required: every step below is applied to the function at this address.",
-            "name", "New function name. Omit or leave empty to skip the rename step.",
-            "prototype", "Full C signature. Applied BEFORE the comment step on purpose, because setting a prototype wipes the plate comment.",
-            "calling_convention", "Convention for the prototype step, e.g. __stdcall. Read only when prototype is also given.",
-            "variable_types", "Object mapping variable name to new type. Each is applied on its own; the step reports set/failed counts plus per-variable errors.",
-            "variable_renames", "Object mapping each variable's CURRENT name to its new name.",
-            "plate_comment", "Plate comment for the function. Pass real multi-line text: an escaped newline sequence is stored as those two literal characters, not as a line break.",
-            "decompiler_comments", "Array of {address, comment} objects setting PRE comments. Each entry carries its own address; the top-level address is the function entry only.",
-            "disassembly_comments", "Array of {address, comment} objects setting EOL comments. Each entry carries its own address.",
-            "goto", "True navigates the CodeBrowser to address before anything else. Must be a JSON boolean: any other type is read as FALSE. Default false.",
-            "score", "True (the default) appends a compact completeness score. Must be a JSON boolean: any other type falls back to the default and is read as TRUE, so the string false does not switch it off.",
-            "program", "Accepted but not read by this route: every step runs against the active program. Use the individual tools when you need to target a specific one.");
         add(m, "/check_connection", "GET", "utility",
             "Liveness probe: {status, server_kind (gui/headless), version, program when one is current}. Cheap and\n"
             + " token-less, unlike the fuller /mcp/health; both servers answer it identically.",

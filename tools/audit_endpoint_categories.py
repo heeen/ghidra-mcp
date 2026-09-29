@@ -63,6 +63,7 @@ SCANNED_SERVICES = (
     "VersionControlService",
     "ServerLifecycleService",
     "GuiToolService",
+    "DocumentationBatchService",
 )
 
 # Hand-registered routes get their descriptors from ManualToolDescriptors, which
