@@ -63,7 +63,7 @@ public class DocumentationHashService {
      */
     @McpTool(path = "/get_function_hash", description = "Compute normalized opcode hash for function. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
     public Response getFunctionHash(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -317,7 +317,7 @@ public class DocumentationHashService {
 
     @McpTool(path = "/get_function_documentation", description = "Export all documentation for a function. Prefer ghidra://function/{program}/{address} (or /get_functions) when you want decompile + docs + callers in one cacheable read. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
     public Response getFunctionDocumentation(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -984,7 +984,7 @@ public class DocumentationHashService {
      * for the Ghidra signature string, or this method directly for the feature vector.
      */
     public Response handleGetFunctionSignature(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -1015,7 +1015,7 @@ public class DocumentationHashService {
      */
     @McpTool(path = "/find_similar_functions_fuzzy", description = "Cross-binary fuzzy function matching. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
     public Response handleFindSimilarFunctionsFuzzy(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -1678,7 +1678,7 @@ public class DocumentationHashService {
             + "resolution happens on the archive side. Use archive_ingest_program for bulk.",
         category = "documentation", access = ToolAccess.WRITE)
     public Response archiveIngestFunction(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                 description = "Function entry-point address (Ghidra hex form)") String functionAddress,
             @Param(value = "program",
                 description = "Target program path/name", defaultValue = "") String programName,
@@ -1697,7 +1697,7 @@ public class DocumentationHashService {
         Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
         if (addr == null) return Response.err(ServiceUtils.getLastParseError());
         Function fn = program.getFunctionManager().getFunctionAt(addr);
-        if (fn == null) return Response.err("No function at " + functionAddress);
+        if (fn == null) return Response.err("No function at address: " + functionAddress);
 
         String version = (versionOverride != null && !versionOverride.isEmpty())
             ? versionOverride : extractVersion(program);

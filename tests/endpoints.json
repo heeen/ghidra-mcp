@@ -30,6 +30,10 @@
       "category": "function",
       "params": [
         "function",
+        "address",
+        "name",
+        "function_address",
+        "function_name",
         "tags",
         "assignments",
         "program"
@@ -1957,6 +1961,10 @@
       "category": "function",
       "params": [
         "function",
+        "address",
+        "name",
+        "function_address",
+        "function_name",
         "program"
       ],
       "servers": [
@@ -1971,8 +1979,8 @@
       "category": "function",
       "params": [
         "function",
-        "name",
         "address",
+        "name",
         "function_address",
         "function_name",
         "functions",
@@ -2717,6 +2725,10 @@
       "category": "function",
       "params": [
         "function",
+        "address",
+        "name",
+        "function_address",
+        "function_name",
         "tags",
         "assignments",
         "program"

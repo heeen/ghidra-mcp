@@ -1665,8 +1665,8 @@ class TestParamAliases(unittest.TestCase):
                     "function": {
                         "type": "string",
                         "source": "query",
-                        "param_type": "address",
-                        "aliases": ["name", "address", "function_name"],
+                        "param_type": "function_ref",
+                        "aliases": ["address", "name", "function_address", "function_name"],
                     },
                 },
                 "required": [],
@@ -1677,6 +1677,26 @@ class TestParamAliases(unittest.TestCase):
             fn(name="syna_helper_180001000")
         _, kwargs = mock_get.call_args
         self.assertEqual("syna_helper_180001000", kwargs["params"]["function"])
+
+    def test_a_function_ref_is_not_rewritten_even_when_it_looks_like_an_address(self):
+        """function_ref values reach the server exactly as given; only param_type=address is normalised."""
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_functions",
+            "GET",
+            {
+                "properties": {
+                    "function": {"type": "string", "source": "query", "param_type": "function_ref"},
+                },
+                "required": [],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(function="0xABCDEF")
+        _, kwargs = mock_get.call_args
+        self.assertEqual("0xABCDEF", kwargs["params"]["function"])
 
     def test_tools_without_aliases_are_untouched(self):
         from bridge_mcp_ghidra import _build_tool_function

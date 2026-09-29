@@ -2460,7 +2460,7 @@ public class DataTypeService {
      */
     @McpTool(path = "/validate_function_prototype", description = "Validate prototype before applying. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "datatype", access = ToolAccess.READ_ONLY)
     public Response validateFunctionPrototype(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -4557,7 +4557,7 @@ public class DataTypeService {
             category = "datatype", access = ToolAccess.READ_ONLY)
     public Response auditGlobalsInFunction(
             @Param(value = "function",
-                   aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+                   paramType = Param.FUNCTION_REF,
                    description = "Address of the function (NOT a global address). Accepts 0x<hex> (default space) or <space>:<hex>.") String addressStr,
             @Param(value = "program", description = "Target program name", defaultValue = "") String programName) {
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
@@ -4569,10 +4569,9 @@ public class DataTypeService {
         }
         // resolveFunction takes a name OR an address; parsing an address first would
         // reject every name before the resolver ever ran.
-        Function func = ServiceUtils.resolveFunction(program, addressStr);
-        if (func == null) {
-            return Response.err("No function found for " + addressStr);
-        }
+        ServiceUtils.FunctionOrError funcLookup = ServiceUtils.getFunctionOrError(program, addressStr);
+        if (funcLookup.hasError()) return funcLookup.error();
+        Function func = funcLookup.function();
         Address funcAddr = func.getEntryPoint();
 
         // Walk instructions, gather unique data-reference targets.
