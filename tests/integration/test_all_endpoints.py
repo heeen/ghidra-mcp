@@ -125,12 +125,12 @@ class TestListingEndpoints:
                     assert ":" in line or "error" in line.lower()
 
     @pytest.mark.requires_program
-    def test_list_data_types(self, http_client, program_loaded):
-        """list_data_types should return data type list."""
+    def test_find_data_types(self, http_client, program_loaded):
+        """find_data_types should return data type records."""
         if not program_loaded:
             pytest.skip("No program loaded")
 
-        response = http_client.get("/list_data_types", params={"limit": 10})
+        response = http_client.get("/find_data_types", params={"limit": 10})
         assert response.status_code == 200
 
     @pytest.mark.requires_program

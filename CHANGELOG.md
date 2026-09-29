@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**234 endpoints**, 233 of them advertised as MCP tools — 230 served by the GUI
-plugin, 213 by the headless server, 209 by both. One endpoint,
+**221 endpoints**, 220 of them advertised as MCP tools — 217 served by the GUI
+plugin, 202 by the headless server, 198 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
@@ -155,6 +155,24 @@ thousands of per-function MCP round trips. `Read` / `Grep` / `Glob` are the
 client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
+
+- **Seventeen tools folded into siblings** (the migration guide's "Folds after the
+  consolidation" table has every old call and its replacement). Each survivor keeps its
+  single-item call and gains the removed tool's job:
+  `modify_struct_field` takes `new_type` for what `modify_struct_field_type` and
+  `embed_struct_field` did; `create_derived_type(kind=typedef|array|pointer)` replaces the
+  three creators; `find_data_types` replaces `list_data_types`, `search_data_types` and
+  `list_data_type_categories`, and returns one record per type (`name`, `kind`,
+  `category`, `size`, `path`) instead of `name | category | size | path` strings, with
+  `pattern`, `category` and `kind` filters; `get_comment(addresses=...)` is
+  `batch_get_comments`; `get_function_hash` with no `function` is
+  `get_bulk_function_hashes`; `get_program_options` with no `group` is
+  `list_option_groups`; `list_properties` with no `map` is `list_property_maps`;
+  `debugger_step(kind=into|over|out)` replaces the three GUI step routes (the bridge's own
+  proxies to the external debugger are untouched); `decompile_checkout_run(action=start|stop)`
+  replaces `decompile_checkout_start` and `decompile_checkout_stop`. Nothing was left behind
+  as an alias. The tag-read fold (`get_function_tags` absorbing `list_function_tags` and
+  `search_functions_by_tag`) is not done: fun-doc calls all three and needs a matching change.
 
 - **GZF export/import and GAR archive/restore are served by the GUI too.** They were
   headless-only because they lived in `HeadlessProgramProvider`, though nothing in them

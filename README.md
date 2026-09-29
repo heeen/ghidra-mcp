@@ -22,13 +22,13 @@
 >
 > If Ghidra MCP saves you time, consider [sponsoring the project](https://github.com/sponsors/bethington). One-time and recurring support both help fund compatibility updates, production hardening, docs, and new tooling.
 
-A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **233 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
+A production-ready Model Context Protocol (MCP) server that bridges Ghidra's powerful reverse engineering capabilities with modern AI tools and automation frameworks. **220 MCP tools**, battle-tested AI workflows, and the most comprehensive Ghidra-MCP integration available — now including P-code emulation, live debugger integration, and PCode-graph data flow analysis.
 
 ## Why Ghidra MCP?
 
 Most Ghidra MCP implementations give you a handful of read-only tools and call it a day. This project is different — it was built by a reverse engineer who uses it daily on real binaries, not as a demo.
 
-- **233 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
+- **220 MCP tools** — 3x more than any competing implementation. Not just read operations — full write access for renaming, typing, commenting, structure creation, script execution, P-code emulation, and live debugging.
 - **Battle-tested AI workflows** — Proven documentation workflows (V5) refined across hundreds of functions. Includes step-by-step prompts, Hungarian notation reference, batch processing guides, and orphaned code discovery.
 - **Production-grade reliability** — Atomic transactions, batch operations (93% API call reduction), configurable timeouts, and graceful error handling. No silent failures.
 - **Cross-binary documentation transfer** — SHA-256 function hash matching propagates documentation across binary versions automatically. Document once, apply everywhere.
@@ -59,7 +59,7 @@ v5.0 moves conventions from "things to remember" into the tool layer, where they
 ### Core MCP Integration
 
 - **Full MCP Compatibility** — Complete implementation of Model Context Protocol
-- **233 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
+- **220 MCP tools** — Comprehensive API surface covering every aspect of binary analysis
 - **Production-Ready Reliability** — Atomic transactions, batch operations, configurable timeouts
 - **Real-time Analysis** — Live integration with Ghidra's analysis engine
 
@@ -444,7 +444,7 @@ uv run bridge-mcp-ghidra --transport sse --mcp-host 127.0.0.1 --mcp-port 8081
 
 #### Lazy tool loading is the default (issue #440)
 
-Advertising all 234 endpoints in a single `tools/list` is over a hard limit for
+Advertising all 221 endpoints in a single `tools/list` is over a hard limit for
 at least one major provider. Gemini compiles function declarations into a
 constrained-decoding state machine and rejects the whole request before any tool
 is ever called:
@@ -860,7 +860,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 ## 📊 Production Performance
 
-- **MCP Tools**: 233 tools fully implemented (the whole catalog; the GUI plugin serves 230 of them and the headless server 213)
+- **MCP Tools**: 220 tools fully implemented (the whole catalog; the GUI plugin serves 217 of them and the headless server 202)
 - **Speed**: Sub-second response for most operations
 - **Efficiency**: 93% reduction in API calls via batch operations
 - **Reliability**: Atomic transactions with all-or-nothing semantics
@@ -871,9 +871,9 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 
 <!-- BEGIN GENERATED API REFERENCE (tools/gen_readme_api_reference.py) -->
 
-233 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
+220 MCP tools backed by HTTP endpoints, grouped by catalog category. Generated from [tests/endpoints.json](tests/endpoints.json) by `python -m tools.gen_readme_api_reference --write`; the live schema at `/mcp/schema` is authoritative at runtime. Usage patterns: [docs/prompts/TOOL_USAGE_GUIDE.md](docs/prompts/TOOL_USAGE_GUIDE.md).
 
-208 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (21) or **(headless only)** (4) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
+197 of these are served by both the GUI plugin and the standalone headless server. The rest are marked **(GUI only)** (19) or **(headless only)** (4) — calling one against the other server returns a 404, not an error message. See `python -m tools.audit_server_scope` for how the split is derived.
 
 ### Program & Session Management
 
@@ -893,10 +893,8 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 - `import_file` - Import a binary file from disk into the current Ghidra project and open it
 - `list_bookmarks` - List bookmarks
 - `list_open_programs` - List open programs
-- `list_option_groups` - List program option groups (e.g
 - `list_project_files` - List project files
 - `list_properties` - List (address, value) entries stored in a property map, with pagination
-- `list_property_maps` - List user-defined property maps â€” typed per-address keyâ†’value stores
 - `list_scripts` - List available Ghidra scripts
 - `open_program` - Open program from project
 - `read_memory` - Read raw memory
@@ -1012,33 +1010,27 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `audit_global` - Audit a global variable's documentation state
 - `audit_globals_in_function` - Audit every global variable referenced from within a function in one call
 - `clone_data_type` - Clone data type
-- `create_array_type` - Create array type
 - `create_data_type_category` - Create data type category
+- `create_derived_type` - Create a type built on another: a typedef alias, an array or a pointer
 - `create_enum` - Create enumeration
 - `create_function_signature` - Create function signature type
-- `create_pointer_type` - Create pointer type
 - `create_struct` - Create structure
-- `create_typedef` - Create typedef
 - `create_union` - Create union
 - `delete_data_type` - Delete data type
-- `embed_struct_field` - Replace a structure field with an embedded struct type by value (e.g
+- `find_data_types` - Find data types by name or path pattern, category and kind, one record per type (name, kind, category, size, path)
 - `find_type_users` - Functions whose decompilation references a data type (or one of its fields)
 - `get_enum_values` - Get enumeration values
 - `get_struct_layout` - Get structure layout
 - `get_type_size` - Get data type size and info
 - `get_valid_data_types` - Get valid data type names
 - `import_data_types` - Import data types from GDT
-- `list_data_type_categories` - List data type categories
-- `list_data_types` - List data types
 - `modify_struct_field` - Modify struct field
-- `modify_struct_field_type` - Set a structure field's type by name or offset (offset:N)
 - `move_data_type_to_category` - Move data type to category
 - `recreate_struct` - Replace a structure in one step: optionally remove an existing same-named type, then create with fields JSON (same shape as create_struct)
 - `remove_struct_field` - Remove struct field
 - `rename_data_type` - Rename a data type (struct, union, enum, typedef) in place, preserving existing applications of it
 - `resize_struct` - Grow or shrink an existing structure by total byte size
 - `resolve_duplicate_type` - Find duplicate data types by simple name; delete unused /Demangler size-1 stubs when a larger canonical type exists
-- `search_data_types` - Search data types
 - `set_global` - Atomically apply name + type + plate-comment + array length to a global variable
 - `suggest_field_names` - Suggest field names
 - `validate_data_type` - Validate data type syntax
@@ -1046,7 +1038,6 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 ### Comments
 
-- `batch_get_comments` - Get listing comments (plate/pre/eol/post/repeatable) at MANY addresses in one call
 - `batch_set_comments` - Set multiple comments
 - `clear_function_comments` - Clear all comments for a function
 - `get_comment` - Get listing comments (plate/pre/eol/post/repeatable) at ANY address, including data addresses (works on functions and data globals alike)
@@ -1094,7 +1085,6 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `diff_functions` - Diff two functions
 - `find_similar_functions_fuzzy` - Cross-binary fuzzy function matching
 - `find_undocumented_by_string` - Find undocumented functions referencing string
-- `get_bulk_function_hashes` - Get bulk function hashes
 - `get_function_documentation` - Export function documentation
 - `get_function_hash` - Get function hash
 - `merge_program_documentation` - Bulk merge: copy all RE documentation (function names, signatures, plate comments, instruction comments at EOL/PRE/POST, non-default labels & global symbols) from one program to another at matching addresses
@@ -1150,9 +1140,7 @@ On Windows hosts where the bridge's WinDbg debugger proxy is active (`GHIDRA_DEB
 - `debugger_stack_trace` - Get the call stack backtrace for the current thread **(GUI only)**
 - `debugger_static_to_dynamic` - Translate a static Ghidra program address to a runtime dynamic address in the current trace **(GUI only)**
 - `debugger_status` - Get debugger status: active trace, thread, execution state, module count **(GUI only)**
-- `debugger_step_into` - Single-step into the next instruction (follows calls) **(GUI only)**
-- `debugger_step_out` - Step out of the current function (run to return) **(GUI only)**
-- `debugger_step_over` - Step over the next instruction (does not follow calls) **(GUI only)**
+- `debugger_step` - Single-step the debugged process: into the next instruction (follows calls), over it (does not follow calls), or out of the current function (run to return) **(GUI only)**
 - `debugger_traces` - List all open debug traces **(GUI only)**
 
 ### System
@@ -1165,9 +1153,8 @@ On Windows hosts where the bridge's WinDbg debugger proxy is active (`GHIDRA_DEB
 - `decompile_checkout_create` - Create a decompilation checkout: a program's decompiled C materialised as a file tree you can Grep and Glob
 - `decompile_checkout_delete` - Deregister a checkout; with delete_files=true also remove its on-disk tree (containment-checked)
 - `decompile_checkout_pin_module` - Pin a function to a checkout compartment forever
-- `decompile_checkout_start` - Enqueue the sweep that fills a checkout's tree, then poll decompile_checkout_status
+- `decompile_checkout_run` - Start or stop the sweep that fills a checkout's tree
 - `decompile_checkout_status` - Status, config and root path of a decompilation checkout — poll this after decompile_checkout_start, then Grep the reported root
-- `decompile_checkout_stop` - Cancel a queued or running sweep
 
 ### Bridge Static Tools
 
@@ -1201,9 +1188,9 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ### Components
 
-- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (234 catalog entries)
-- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (230 endpoints)
-- **GhidraMCPHeadlessServer** — Standalone headless server — 213 endpoints, no GUI required
+- **python/bridge_mcp_ghidra/** — Python MCP server package (ships as the `ghidra-mcp-bridge` wheel; `bridge-mcp-ghidra` console script) that translates MCP protocol to HTTP calls (221 catalog entries)
+- **GhidraMCP.jar** — Ghidra plugin that exposes analysis capabilities via HTTP (217 endpoints)
+- **GhidraMCPHeadlessServer** — Standalone headless server — 202 endpoints, no GUI required
 - **ghidra_scripts/** — Collection of automation scripts for common tasks
 
 ## 🔧 Development
@@ -1283,11 +1270,11 @@ python -m tools.setup --help
 ```text
 ghidra-mcp/
 ├── pyproject.toml           # uv project (ghidra-mcp-bridge wheel + dependency groups)
-├── python/bridge_mcp_ghidra/ # MCP server package (Python, 234 catalog entries)
+├── python/bridge_mcp_ghidra/ # MCP server package (Python, 221 catalog entries)
 ├── src/main/java/           # Ghidra plugin + headless server (Java)
 │   └── com/xebyte/
-│       ├── GhidraMCPPlugin.java         # GUI plugin (230 endpoints)
-│       ├── headless/                    # Headless server (213 endpoints)
+│       ├── GhidraMCPPlugin.java         # GUI plugin (217 endpoints)
+│       ├── headless/                    # Headless server (202 endpoints)
 │       └── core/                        # Shared service layer (14 services)
 ├── ghidra_scripts/          # Automation scripts for batch workflows
 ├── tests/                   # Python unit tests + endpoint catalog
@@ -1479,9 +1466,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 | Metric | Value |
 | -------- | ------- |
 | **Version** | 7.0.0 |
-| **MCP Tools** | 234 fully implemented |
-| **GUI Endpoints** | 230 (GhidraMCPPlugin) |
-| **Headless Endpoints** | 213 (GhidraMCPHeadlessServer) |
+| **MCP Tools** | 221 fully implemented |
+| **GUI Endpoints** | 217 (GhidraMCPPlugin) |
+| **Headless Endpoints** | 202 (GhidraMCPHeadlessServer) |
 | **Compilation** | ✅ 100% success |
 | **Batch Efficiency** | 93% API call reduction |
 | **AI Workflows** | 7 proven documentation workflows |

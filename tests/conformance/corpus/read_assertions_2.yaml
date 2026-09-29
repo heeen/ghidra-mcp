@@ -62,7 +62,7 @@ tool_cases:
 
   # `category` is a filter and is now optional (it was required, so listing
   # every data type was impossible). Omitting it here is the regression test.
-  - tool: list_data_types
+  - tool: find_data_types
     name: curated_no_filter
     tier: read
     snapshot: false

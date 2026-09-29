@@ -1281,7 +1281,7 @@ public final class SweepJob implements Runnable {
     }
 
     private void publish(SweepProgress progress, String state, Long sweptAt) {
-        // /decompile_checkout_stop may have already stamped CANCELLED; never let a mid-sweep
+        // decompile_checkout_run(action=stop) may have already stamped CANCELLED; never let a mid-sweep
         // DECOMPILING publish clobber that — the agent is polling for cancel.
         if (cancel.isCancelled()) {
             SweepProgress.Phase p = progress.phase();

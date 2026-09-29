@@ -63,9 +63,8 @@ def require_server_and_checkout(server_available, server_url):
     }
     required = {
         "/decompile_checkout_create",
-        "/decompile_checkout_start",
+        "/decompile_checkout_run",
         "/decompile_checkout_status",
-        "/decompile_checkout_stop",
         "/decompile_checkout_delete",
         "/decompile_checkout_refresh",
     }
@@ -157,7 +156,7 @@ def _status(http_client, checkout_id):
 
 def _start(http_client, checkout_id):
     resp = _post_json(
-        http_client, "/decompile_checkout_start", body={"checkout": checkout_id}
+        http_client, "/decompile_checkout_run", body={"checkout": checkout_id, "action": "start"}
     )
     assert resp.status_code == 200, resp.text[:500]
     data = resp.json()
@@ -167,7 +166,7 @@ def _start(http_client, checkout_id):
 
 def _stop(http_client, checkout_id):
     resp = _post_json(
-        http_client, "/decompile_checkout_stop", body={"checkout": checkout_id}
+        http_client, "/decompile_checkout_run", body={"checkout": checkout_id, "action": "stop"}
     )
     assert resp.status_code == 200, resp.text[:500]
     data = resp.json()

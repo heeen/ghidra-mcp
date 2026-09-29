@@ -117,6 +117,35 @@ fails on a descriptor with no registered route, which is what caught the leftove
 `apply_documentation` also takes `entries=[...]` for many functions at once, plus the
 prototype, variable-type and variable-rename fields that used to need separate calls.
 
+## Folds after the consolidation
+
+Seventeen more tools folded into a sibling, still within one permission tier. Each survivor
+keeps its own single-item call unchanged and gains the removed tool's job.
+
+| REMOVE | SURVIVOR | Transform |
+| --- | --- | --- |
+| `modify_struct_field_type(struct_name, field_name, new_type)` | `modify_struct_field` | `modify_struct_field(struct_name, field_name, new_type=...)` |
+| `embed_struct_field(parent_struct, field_name, embedded_struct)` | `modify_struct_field` | `modify_struct_field(struct_name=parent_struct, field_name, new_type=embedded_struct)` |
+| `create_typedef(name, base_type)` | `create_derived_type` | `create_derived_type(kind="typedef", name, base_type)` |
+| `create_array_type(base_type, length, name)` | `create_derived_type` | `create_derived_type(kind="array", base_type, length, name)` |
+| `create_pointer_type(base_type, name)` | `create_derived_type` | `create_derived_type(kind="pointer", base_type, name)` |
+| `list_data_types(category)` | `find_data_types` | `find_data_types(category=...)`; entries are now records (`name`, `kind`, `category`, `size`, `path`) under `data_types`, not `name \| category \| size \| path` strings |
+| `search_data_types(pattern)` | `find_data_types` | `find_data_types(pattern=...)`; same record shape, sorted by path |
+| `list_data_type_categories()` | `find_data_types` | `find_data_types(categories=true)` |
+| `batch_get_comments(addresses, only_with_comments)` | `get_comment` | `get_comment(addresses="a,b,c", only_with_comments=...)` |
+| `get_bulk_function_hashes(offset, limit, filter)` | `get_function_hash` | `get_function_hash(offset, limit, filter)`, omitting `function` |
+| `list_option_groups()` | `get_program_options` | `get_program_options()`, omitting `group` |
+| `list_property_maps()` | `list_properties` | `list_properties()`, omitting `map` |
+| `debugger_step_into()` | `debugger_step` | `debugger_step(kind="into")` |
+| `debugger_step_over()` | `debugger_step` | `debugger_step(kind="over")` |
+| `debugger_step_out()` | `debugger_step` | `debugger_step(kind="out")` |
+| `decompile_checkout_start(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="start")` |
+| `decompile_checkout_stop(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="stop")` |
+
+The bridge's own `debugger_step_into` / `debugger_step_over` proxies, which forward to the
+external debugger server, are unaffected: only the GUI plugin's `/debugger/step_*` routes
+folded.
+
 ## Call-shape changes worth knowing
 
 - **`analyze_function_completeness` bulk mode is a GET** with `addresses` as a

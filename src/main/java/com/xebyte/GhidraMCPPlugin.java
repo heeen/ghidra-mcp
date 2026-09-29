@@ -52,7 +52,7 @@ import java.util.concurrent.TimeUnit;
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 230 endpoints for reverse engineering automation. " +
+                  "Provides 217 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -878,18 +878,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      */
     public String analyzeCallGraph(String startFunction, String endFunction, String analysisType, String programName) {
         return xrefCallGraphService.analyzeCallGraph(startFunction, endFunction, analysisType, programName).toJson();
-    }
-
-    /**
-     * List all data types available in the program with optional category filtering
-     */
-    public String listDataTypes(String category, int offset, int limit, String programName) {
-        return dataTypeService.listDataTypes(category, offset, limit, programName).toJson();
-    }
-
-    // Backward compatibility overload
-    public String listDataTypes(String category, int offset, int limit) {
-        return dataTypeService.listDataTypes(category, offset, limit).toJson();
     }
 
     /**
