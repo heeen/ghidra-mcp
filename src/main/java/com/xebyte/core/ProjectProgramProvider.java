@@ -658,6 +658,11 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
             }
         }
         String filePath = file.getPathname();
+        // The same containment every other project-path endpoint applies: a scoped server
+        // must not check in what it may not open.
+        if (!SecurityConfig.getInstance().isPathInProjectScope(filePath)) {
+            return failure(out, "Path is outside this server's project-folder scope: " + filePath);
+        }
         if (!file.isVersioned()) {
             return failure(out, "File is not under version control: " + filePath
                 + " (add it first, or check out a versioned file)");

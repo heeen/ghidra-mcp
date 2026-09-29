@@ -145,8 +145,10 @@ public class HardeningWiringTest extends TestCase {
     public void testRequestBodiesAreBounded() throws IOException {
         assertTrue("JsonHelper.parseBody must bound the read via readNBytes",
                 read("core", "JsonHelper.java").contains("readNBytes"));
-        assertTrue("GUI parsePostParams must bound the read",
-                read("GhidraMCPPlugin.java").contains("readNBytes"));
+        assertTrue("GUI hand-coded routes must read bodies through the bounded JsonHelper.parseBody",
+                read("GhidraMCPPlugin.java").contains("JsonHelper.parseBody("));
+        assertTrue("headless parsePostParams must bound the read",
+                read("headless", "GhidraMCPHeadlessServer.java").contains("readNBytes"));
         assertTrue("McpHttpServer must reject an oversized Content-Length (413)",
                 read("core", "McpHttpServer.java").contains("exceedsMaxBody"));
         assertTrue("UDS must reject oversized Content-Length (413)",
@@ -173,6 +175,31 @@ public class HardeningWiringTest extends TestCase {
         assertTrue("Expected create/export/import/archive to each call "
                 + "resolveWithinRootOrLog (>=4 uses incl. helper def), found " + helperUses,
                 helperUses >= 5);
+    }
+
+    /** /open_project takes a filesystem path on both servers, so both contain it. */
+    public void testOpenProjectEnforcesFileRootOnBothServers() throws IOException {
+        String headless = body(read("headless", "HeadlessManagementService.java"), "/open_project");
+        assertTrue("headless /open_project must resolve a local path within the file root",
+                headless.contains("resolveWithinRootOrLog("));
+        assertTrue("a ghidra:// URL is a repository, not a filesystem path",
+                headless.contains("ghidra://"));
+        String gui = read("GhidraMCPPlugin.java");
+        int at = gui.indexOf("private String openProject(String projectPath, boolean headless");
+        assertTrue("GUI openProject not found", at >= 0);
+        assertTrue("GUI /open_project must resolve the path within the file root",
+                gui.substring(at, at + 2500).contains("resolveWithinFileRoot("));
+    }
+
+    /** A scoped server must not check in outside its scope either. */
+    public void testCheckinEnforcesProjectFolderScope() throws IOException {
+        String src = read("core", "ProjectProgramProvider.java");
+        int at = src.indexOf("public Map<String, Object> checkinProgram(");
+        assertTrue("checkinProgram not found", at >= 0);
+        String method = src.substring(at);
+        assertTrue("checkinProgram must call isPathInProjectScope before touching the file",
+                method.indexOf("isPathInProjectScope(") >= 0
+                && method.indexOf("isPathInProjectScope(") < method.indexOf("file.checkin("));
     }
 
     private static int countOccurrences(String s, String sub) {

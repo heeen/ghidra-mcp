@@ -146,6 +146,15 @@ public class HeadlessManagementService {
         if (projectPath == null || projectPath.isEmpty()) {
             return Response.err("Project path required");
         }
+        // A local path is a filesystem path, so it stays under GHIDRA_MCP_FILE_ROOT like the
+        // other filesystem endpoints; a ghidra:// URL names a server repository instead.
+        if (!projectPath.startsWith("ghidra://")) {
+            File local = resolveWithinRootOrLog(projectPath, "/open_project");
+            if (local == null) {
+                return Response.err(FILE_ROOT_DENY);
+            }
+            projectPath = local.getPath();
+        }
         HeadlessProgramProvider.OpenProjectResult result =
             programProvider.openProject(projectPath, serverManager);
         if (result.success) {

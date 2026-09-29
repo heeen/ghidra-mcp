@@ -3,48 +3,18 @@ package com.xebyte;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressSet;
-import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
-import ghidra.program.model.listing.Bookmark;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
-import ghidra.program.model.symbol.ReferenceManager;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceIterator;
-import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.pcode.HighFunction;
-import ghidra.program.model.pcode.HighSymbol;
-import ghidra.program.model.pcode.LocalSymbolMap;
-import ghidra.program.model.pcode.HighFunctionDBUtil;
-import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
-import ghidra.app.decompiler.DecompInterface;
-import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.app.services.GoToService;
 
-import ghidra.app.script.GhidraScriptUtil;
-import ghidra.app.script.GhidraScript;
-import ghidra.app.script.GhidraScriptProvider;
-import ghidra.app.plugin.core.script.GhidraScriptMgrPlugin;
-
-import ghidra.program.model.symbol.SourceType;
-
 import ghidra.program.model.data.*;
-import ghidra.program.model.mem.Memory;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.trace.model.Trace;
-import ghidra.program.model.pcode.HighVariable;
-import ghidra.program.model.data.DataType;
-import ghidra.program.model.data.DataTypeManager;
-import ghidra.program.model.data.PointerDataType;
 
 import ghidra.framework.options.Options;
 
@@ -53,14 +23,8 @@ import docking.action.MenuData;
 import docking.ActionContext;
 
 // Block model for control flow analysis
-import ghidra.program.model.block.BasicBlockModel;
-import ghidra.program.model.block.CodeBlock;
-import ghidra.program.model.block.CodeBlockIterator;
-import ghidra.program.model.block.CodeBlockReference;
-import ghidra.program.model.block.CodeBlockReferenceIterator;
 
 import com.xebyte.core.VersionInfo;
-import com.xebyte.core.BinaryComparisonService;
 import com.xebyte.core.AnnotationScanner;
 import com.xebyte.core.McpHttpServer;
 import com.xebyte.core.FrontEndProgramProvider;
@@ -80,25 +44,19 @@ import ghidra.framework.store.ItemCheckoutStatus;
 import ghidra.framework.client.RepositoryAdapter;
 import ghidra.framework.main.AppInfo;
 
-import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.util.task.TaskMonitor;
 
 import com.xebyte.core.HttpExchange;
-import com.xebyte.core.SunHttpExchangeAdapter;
 import com.sun.net.httpserver.Headers;
 
 import javax.swing.SwingUtilities;
 import java.io.*;
-import java.lang.reflect.InvocationTargetException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Pattern;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -153,34 +111,13 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // bridge can discover it without hard-coding 8089.
     private static final int TCP_PORT_FALLBACK_RANGE = 16;
 
-    // Field analysis constants (v1.4.0)
-    private static final int MAX_FUNCTIONS_TO_ANALYZE = 100;
-    private static final int MIN_FUNCTIONS_TO_ANALYZE = 1;
-    private static final int MAX_STRUCT_FIELDS = 256;
-    private static final int MAX_FIELD_EXAMPLES = 50;
-    private static final int DECOMPILE_TIMEOUT_SECONDS = 60;  // Increased from 30s to 60s for large functions
-    private static final int MIN_TOKEN_LENGTH = 3;
-    private static final int MAX_FIELD_OFFSET = 65536;
-
-    // HTTP server timeout constants (v1.6.1)
-    private static final int HTTP_CONNECTION_TIMEOUT_SECONDS = 180;  // 3 minutes for connection timeout
-    private static final int HTTP_IDLE_TIMEOUT_SECONDS = 300;        // 5 minutes for idle connections
-    private static final int BATCH_OPERATION_CHUNK_SIZE = 20;        // Process batch operations in chunks of 20
+    private static final int HTTP_IDLE_TIMEOUT_SECONDS = 300;  // 5 minutes for idle connections
 
     // Menu actions for Tools > GhidraMCP submenu
     private DockingAction startServerAction;
     private DockingAction stopServerAction;
     private DockingAction restartServerAction;
     private DockingAction serverStatusAction;
-
-    // C language keywords to filter from field name suggestions
-    private static final Set<String> C_KEYWORDS = Set.of(
-        "if", "else", "for", "while", "do", "switch", "case", "default",
-        "break", "continue", "return", "goto", "int", "void", "char",
-        "float", "double", "long", "short", "struct", "union", "enum",
-        "typedef", "sizeof", "const", "static", "extern", "auto", "register",
-        "signed", "unsigned", "volatile", "inline", "restrict"
-    );
 
     // Program provider for on-demand program access (FrontEnd mode)
     private final FrontEndProgramProvider programProvider;
@@ -541,21 +478,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return listingService.listProgramItems(kind, offset, limit, null).toJson();
     }
 
-    private String listDataItemsByXrefs(int offset, int limit, String format, String programName) {
-        return listingService.listDataItemsByXrefs(offset, limit, format, programName).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // Logic for rename, decompile, etc.
     // ----------------------------------------------------------------------------------
-
-    private String decompileFunctionByName(String name) {
-        return functionService.decompileFunctionByName(name).toJson();
-    }
-
-    private String renameFunction(String oldName, String newName, String programName) {
-        return functionService.renameFunctionByAddress(oldName, newName, programName).toJson();
-    }
 
     private String renameDataAtAddress(String addressStr, String newName, String programName) {
         return symbolLabelService.renameDataAtAddress(addressStr, newName, programName).toJson();
@@ -563,10 +488,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     private String renameDataAtAddress(String addressStr, String newName) {
         return symbolLabelService.renameDataAtAddress(addressStr, newName).toJson();
-    }
-
-    private String renameVariableInFunction(String functionName, String oldVarName, String newVarName, String programName) {
-        return functionService.renameVariableInFunction(functionName, oldVarName, newVarName, programName).toJson();
     }
 
     // ----------------------------------------------------------------------------------
@@ -583,18 +504,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // Backward compatibility overload
     private String getFunctionByAddress(String addressStr) {
         return functionService.getFunctionByAddress(addressStr).toJson();
-    }
-
-    /**
-     * Gets a function at the given address or containing the address
-     * @return the function or null if not found
-     */
-    private Function getFunctionForAddress(Program program, Address addr) {
-        Function func = program.getFunctionManager().getFunctionAt(addr);
-        if (func == null) {
-            func = program.getFunctionManager().getFunctionContaining(addr);
-        }
-        return func;
     }
 
     private String decompileFunctionByAddress(String addressStr, String programName, int timeoutSeconds) {
@@ -615,14 +524,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
 
     private String disassembleFunction(String addressStr) {
         return functionService.disassembleFunction(addressStr).toJson();
-    }
-
-    /**
-     * Set a comment using the specified comment type (PRE_COMMENT or EOL_COMMENT)
-     */
-    @SuppressWarnings("deprecation")
-    private String setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
-        return commentService.setCommentAtAddress(addressStr, comment, commentType, transactionName).toJson();
     }
 
     private String renameFunctionByAddress(String functionAddrStr, String newName, String programName) {
@@ -704,360 +605,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return programScriptService.runGhidraScript(scriptPath, scriptArgs).toJson();
     }
 
-    /**
-     * List available Ghidra scripts (v1.7.0)
-     *
-     * @param filter Optional filter string to match script names
-     * @return JSON list of available scripts
-     */
-    private String listGhidraScripts(String filter) {
-        return programScriptService.listGhidraScripts(filter).toJson();
-    }
-
-    /**
-     * Force decompiler reanalysis for a function (v1.7.0)
-     *
-     * Clears cached decompilation results and forces a fresh analysis.
-     * Useful after making changes to function signatures, variables, or data types.
-     *
-     * @param functionAddrStr Function address to reanalyze
-     * @return Success message with new decompilation
-     */
-    private String forceDecompile(String functionAddrStr) {
-        return functionService.forceDecompile(functionAddrStr).toJson();
-    }
-
-    /**
-     * Get all references to a specific address (xref to)
-     */
-    private String getXrefsTo(String addressStr, int offset, int limit, String programName) {
-        return xrefCallGraphService.getXrefsTo(addressStr, null, offset, limit, programName).toJson();
-    }
-
-    /**
-     * Get all references from a specific address (xref from)
-     */
-    private String getXrefsFrom(String addressStr, int offset, int limit, String programName) {
-        return xrefCallGraphService.getXrefsFrom(addressStr, offset, limit, programName).toJson();
-    }
-
-    /**
-     * Get all references to a specific function by name
-     */
-    private String getFunctionXrefs(String functionName, int offset, int limit, String programName) {
-        return xrefCallGraphService.getFunctionXrefs(functionName, offset, limit, programName).toJson();
-    }
-
-/**
- * List all defined strings in the program with their addresses
- */
-    private String listDefinedStrings(int offset, int limit, String filter, String programName) {
-        return listingService.listDefinedStrings(offset, limit, filter, programName).toJson();
-    }
-
-    private String getFunctionCount(String programName) {
-        return listingService.getFunctionCount(programName).toJson();
-    }
-
-    private String searchStrings(String query, int minLength, String encoding, int offset, int limit, String programName) {
-        return listingService.searchStrings(query, minLength, encoding, offset, limit, programName).toJson();
-    }
-
-    /**
-     * List all registered analyzers and their enabled/disabled state.
-     */
-    private String listAnalyzers(String programName) {
-        return analysisService.listAnalyzers(programName).toJson();
-    }
-
-    /**
-     * Trigger auto-analysis on the current or named program.
-     */
-    private String runAnalysis(String programName) {
-        return analysisService.runAnalysis(programName).toJson();
-    }
-
-    /**
-     * Check if the given data is a string type
-     */
-    private boolean isStringData(Data data) {
-        if (data == null) return false;
-
-        DataType dt = data.getDataType();
-        String typeName = dt.getName().toLowerCase();
-        return typeName.contains("string") || typeName.contains("char") || typeName.equals("unicode");
-    }
-
-    /**
-     * Check if a string meets quality criteria for listing
-     * - Minimum length of 4 characters
-     * - At least 80% printable ASCII characters
-     */
-    private boolean isQualityString(String str) {
-        if (str == null || str.length() < 4) {
-            return false;
-        }
-
-        int printableCount = 0;
-        for (int i = 0; i < str.length(); i++) {
-            char c = str.charAt(i);
-            // Printable ASCII: space (32) to tilde (126), plus common whitespace
-            if ((c >= 32 && c < 127) || c == '\n' || c == '\r' || c == '\t') {
-                printableCount++;
-            }
-        }
-
-        double printableRatio = (double) printableCount / str.length();
-        return printableRatio >= 0.80;
-    }
-
-    /**
-     * Escape special characters in a string for display
-     */
-    /**
-     * Maps common C type names to Ghidra built-in DataType instances.
-     * These types exist as Java classes but may not be in the per-program DTM.
-     */
-    private DataType resolveWellKnownType(String typeName) {
-        switch (typeName.toLowerCase()) {
-            case "int":        return ghidra.program.model.data.IntegerDataType.dataType;
-            case "uint":       return ghidra.program.model.data.UnsignedIntegerDataType.dataType;
-            case "short":      return ghidra.program.model.data.ShortDataType.dataType;
-            case "ushort":     return ghidra.program.model.data.UnsignedShortDataType.dataType;
-            case "long":       return ghidra.program.model.data.LongDataType.dataType;
-            case "ulong":      return ghidra.program.model.data.UnsignedLongDataType.dataType;
-            case "longlong":
-            case "long long":  return ghidra.program.model.data.LongLongDataType.dataType;
-            case "char":       return ghidra.program.model.data.CharDataType.dataType;
-            case "uchar":      return ghidra.program.model.data.UnsignedCharDataType.dataType;
-            case "float":      return ghidra.program.model.data.FloatDataType.dataType;
-            case "double":     return ghidra.program.model.data.DoubleDataType.dataType;
-            case "bool":
-            case "boolean":    return ghidra.program.model.data.BooleanDataType.dataType;
-            case "void":       return ghidra.program.model.data.VoidDataType.dataType;
-            case "byte":       return ghidra.program.model.data.ByteDataType.dataType;
-            case "sbyte":      return ghidra.program.model.data.SignedByteDataType.dataType;
-            case "word":       return ghidra.program.model.data.WordDataType.dataType;
-            case "dword":      return ghidra.program.model.data.DWordDataType.dataType;
-            case "qword":      return ghidra.program.model.data.QWordDataType.dataType;
-            case "int8_t":
-            case "int8":       return ghidra.program.model.data.SignedByteDataType.dataType;
-            case "uint8_t":
-            case "uint8":      return ghidra.program.model.data.ByteDataType.dataType;
-            case "int16_t":
-            case "int16":      return ghidra.program.model.data.ShortDataType.dataType;
-            case "uint16_t":
-            case "uint16":     return ghidra.program.model.data.UnsignedShortDataType.dataType;
-            case "int32_t":
-            case "int32":      return ghidra.program.model.data.IntegerDataType.dataType;
-            case "uint32_t":
-            case "uint32":     return ghidra.program.model.data.UnsignedIntegerDataType.dataType;
-            case "int64_t":
-            case "int64":      return ghidra.program.model.data.LongLongDataType.dataType;
-            case "uint64_t":
-            case "uint64":     return ghidra.program.model.data.UnsignedLongLongDataType.dataType;
-            case "size_t":     return ghidra.program.model.data.UnsignedIntegerDataType.dataType;
-            case "unsigned int": return ghidra.program.model.data.UnsignedIntegerDataType.dataType;
-            case "unsigned short": return ghidra.program.model.data.UnsignedShortDataType.dataType;
-            case "unsigned long": return ghidra.program.model.data.UnsignedLongDataType.dataType;
-            case "unsigned char": return ghidra.program.model.data.UnsignedCharDataType.dataType;
-            case "signed char": return ghidra.program.model.data.SignedByteDataType.dataType;
-            default:           return null;
-        }
-    }
-
-    /**
-     * Resolves a data type by name, handling common types and pointer types
-     * @param dtm The data type manager
-     * @param typeName The type name to resolve
-     * @return The resolved DataType, or null if not found
-     */
-    private DataType resolveDataType(DataTypeManager dtm, String typeName) {
-        // ZERO: Map common C type names to Ghidra built-in DataType instances
-        // These types exist as Java classes but may not be registered in the per-program DTM
-        DataType wellKnown = resolveWellKnownType(typeName);
-        if (wellKnown != null) {
-            Msg.info(this, "Resolved well-known type: " + typeName + " -> " + wellKnown.getName());
-            return wellKnown;
-        }
-
-        // FIRST: Try Ghidra builtin types in root category (prioritize over Windows types)
-        // This ensures we use lowercase builtin types (uint, ushort, byte) instead of
-        // Windows SDK types (UINT, USHORT, BYTE) when the type name matches
-        DataType builtinType = dtm.getDataType("/" + typeName);
-        if (builtinType != null) {
-            Msg.info(this, "Found builtin data type: " + builtinType.getPathName());
-            return builtinType;
-        }
-
-        // SECOND: Try lowercase version of builtin types (handles "UINT" → "/uint")
-        DataType builtinTypeLower = dtm.getDataType("/" + typeName.toLowerCase());
-        if (builtinTypeLower != null) {
-            Msg.info(this, "Found builtin data type (lowercase): " + builtinTypeLower.getPathName());
-            return builtinTypeLower;
-        }
-
-        // THIRD: Search all categories as fallback (for Windows types, custom types, etc.)
-        DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
-        if (dataType != null) {
-            Msg.info(this, "Found data type in categories: " + dataType.getPathName());
-            return dataType;
-        }
-
-        // Check for array syntax: "type[count]"
-        if (typeName.contains("[") && typeName.endsWith("]")) {
-            int bracketPos = typeName.indexOf('[');
-            String baseTypeName = typeName.substring(0, bracketPos);
-            String countStr = typeName.substring(bracketPos + 1, typeName.length() - 1);
-
-            try {
-                int count = Integer.parseInt(countStr);
-                DataType baseType = resolveDataType(dtm, baseTypeName);  // Recursive call
-
-                if (baseType != null && count > 0) {
-                    // Create array type on-the-fly
-                    ArrayDataType arrayType = new ArrayDataType(baseType, count, baseType.getLength());
-                    Msg.info(this, "Auto-created array type: " + typeName +
-                            " (base: " + baseType.getName() + ", count: " + count +
-                            ", total size: " + arrayType.getLength() + " bytes)");
-                    return arrayType;
-                } else if (baseType == null) {
-                    Msg.error(this, "Cannot create array: base type '" + baseTypeName + "' not found");
-                    return null;
-                }
-            } catch (NumberFormatException e) {
-                Msg.error(this, "Invalid array count in type: " + typeName);
-                return null;
-            }
-        }
-
-        // Check for C-style pointer types (type*)
-        if (typeName.endsWith("*")) {
-            String baseTypeName = typeName.substring(0, typeName.length() - 1).trim();
-
-            // Special case for void*
-            if (baseTypeName.equals("void") || baseTypeName.isEmpty()) {
-                Msg.info(this, "Creating void* pointer type");
-                return new PointerDataType(dtm.getDataType("/void"));
-            }
-
-            // Try to resolve the base type recursively (handles nested types)
-            DataType baseType = resolveDataType(dtm, baseTypeName);
-            if (baseType != null) {
-                Msg.info(this, "Creating pointer type: " + typeName +
-                        " (base: " + baseType.getName() + ")");
-                return new PointerDataType(baseType);
-            }
-
-            // If base type not found, warn and default to void*
-            Msg.warn(this, "Base type not found for " + typeName + ", defaulting to void*");
-            return new PointerDataType(dtm.getDataType("/void"));
-        }
-
-        // Check for Windows-style pointer types (PXXX)
-        if (typeName.startsWith("P") && typeName.length() > 1) {
-            String baseTypeName = typeName.substring(1);
-
-            // Special case for PVOID
-            if (baseTypeName.equals("VOID")) {
-                return new PointerDataType(dtm.getDataType("/void"));
-            }
-
-            // Try to find the base type
-            DataType baseType = findDataTypeByNameInAllCategories(dtm, baseTypeName);
-            if (baseType != null) {
-                return new PointerDataType(baseType);
-            }
-
-            Msg.warn(this, "Base type not found for " + typeName + ", defaulting to void*");
-            return new PointerDataType(dtm.getDataType("/void"));
-        }
-
-        // Handle common built-in types
-        switch (typeName.toLowerCase()) {
-            case "int":
-            case "long":
-                return dtm.getDataType("/int");
-            case "uint":
-            case "unsigned int":
-            case "unsigned long":
-            case "dword":
-                return dtm.getDataType("/uint");
-            case "short":
-                return dtm.getDataType("/short");
-            case "ushort":
-            case "unsigned short":
-            case "word":
-                return dtm.getDataType("/ushort");
-            case "char":
-            case "byte":
-                return dtm.getDataType("/char");
-            case "uchar":
-            case "unsigned char":
-                return dtm.getDataType("/uchar");
-            case "longlong":
-            case "__int64":
-                return dtm.getDataType("/longlong");
-            case "ulonglong":
-            case "unsigned __int64":
-                return dtm.getDataType("/ulonglong");
-            case "bool":
-            case "boolean":
-                return dtm.getDataType("/bool");
-            case "float":
-                return dtm.getDataType("/dword");  // Use dword as 4-byte float substitute
-            case "double":
-                return dtm.getDataType("/double");
-            case "void":
-                return dtm.getDataType("/void");
-            default:
-                // Try as a direct path
-                DataType directType = dtm.getDataType("/" + typeName);
-                if (directType != null) {
-                    return directType;
-                }
-
-                // Return null if type not found - let caller handle error
-                Msg.error(this, "Unknown type: " + typeName);
-                return null;
-        }
-    }
-
-    /**
-     * Find a data type by name in all categories/folders of the data type manager
-     * This searches through all categories rather than just the root
-     */
-    private DataType findDataTypeByNameInAllCategories(DataTypeManager dtm, String typeName) {
-        // Try exact match first
-        DataType result = searchByNameInAllCategories(dtm, typeName);
-        if (result != null) {
-            return result;
-        }
-
-        // Try lowercase
-        return searchByNameInAllCategories(dtm, typeName.toLowerCase());
-    }
-
-    /**
-     * Helper method to search for a data type by name in all categories
-     */
-    private DataType searchByNameInAllCategories(DataTypeManager dtm, String name) {
-        // Get all data types from the manager
-        Iterator<DataType> allTypes = dtm.getAllDataTypes();
-        while (allTypes.hasNext()) {
-            DataType dt = allTypes.next();
-            // Check if the name matches exactly (case-sensitive)
-            if (dt.getName().equals(name)) {
-                return dt;
-            }
-            // For case-insensitive, we want an exact match except for case
-            if (dt.getName().equalsIgnoreCase(name)) {
-                return dt;
-            }
-        }
-        return null;
-    }
-
     // ----------------------------------------------------------------------------------
     // Utility: parse query params, parse post params, pagination, etc.
     // ----------------------------------------------------------------------------------
@@ -1088,35 +635,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * Parse post body form params, e.g. oldName=foo&newName=bar
-     */
-    private Map<String, String> parsePostParams(HttpExchange exchange) throws IOException {
-        // Bounded read: never let a lying/absent Content-Length force an
-        // unbounded allocation. Oversized bodies are truncated to empty.
-        int cap = (int) com.xebyte.core.SecurityConfig.MAX_REQUEST_BODY_BYTES;
-        byte[] body = exchange.getRequestBody().readNBytes(cap + 1);
-        if (body.length > com.xebyte.core.SecurityConfig.MAX_REQUEST_BODY_BYTES) {
-            return new HashMap<>();
-        }
-        String bodyStr = new String(body, StandardCharsets.UTF_8);
-        Map<String, String> params = new HashMap<>();
-        for (String pair : bodyStr.split("&")) {
-            String[] kv = pair.split("=");
-            if (kv.length == 2) {
-                // URL decode parameter values
-                try {
-                    String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
-                    String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                    params.put(key, value);
-                } catch (Exception e) {
-                    Msg.error(this, "Error decoding URL parameter", e);
-                }
-            }
-        }
-        return params;
-    }
-
-    /**
      * Parse JSON from POST request body using Gson.
      */
     private Map<String, Object> parseJsonParams(HttpExchange exchange) throws IOException {
@@ -1129,32 +647,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      */
     private List<Map<String, String>> convertToMapList(Object obj) {
         return com.xebyte.core.JsonHelper.toMapStringList(obj);
-    }
-
-    /**
-     * Convert a list of strings into one big newline-delimited string, applying offset & limit.
-     */
-    /**
-     * Parse an integer from a string, or return defaultValue if null/invalid.
-     */
-    private int parseIntOrDefault(String val, int defaultValue) {
-        if (val == null) return defaultValue;
-        try {
-            return Integer.parseInt(val);
-        }
-        catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    private double parseDoubleOrDefault(String val, double defaultValue) {
-        if (val == null) return defaultValue;
-        try {
-            return Double.parseDouble(val);
-        }
-        catch (NumberFormatException e) {
-            return defaultValue;
-        }
     }
 
     /**
@@ -1212,13 +704,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // ----------------------------------------------------------------------------------
     // Program Management Methods
     // ----------------------------------------------------------------------------------
-
-    /**
-     * List all currently open programs in Ghidra
-     */
-    private String saveCurrentProgram(String programName) {
-        return programScriptService.saveCurrentProgram(programName).toJson();
-    }
 
     private Map<String, Object> saveEverythingBeforeExit() {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -1370,24 +855,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         }
     }
 
-    private String listOpenPrograms() {
-        return programScriptService.listOpenPrograms().toJson();
-    }
-
-    /**
-     * Switch MCP context to a different open program by name
-     */
-    private String switchProgram(String programName) {
-        return programScriptService.switchProgram(programName).toJson();
-    }
-
-    /**
-     * List all files in the current Ghidra project
-     */
-    private String listProjectFiles(String folderPath) {
-        return programScriptService.listProjectFiles(folderPath).toJson();
-    }
-
     // ====================================================================================
     // FUNCTION HASH INDEX - Cross-binary documentation propagation
     // ====================================================================================
@@ -1417,17 +884,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // Backward compatibility overload
     private String getBulkFunctionHashes(int offset, int limit, String filter) {
         return documentationHashService.getBulkFunctionHashes(offset, limit, filter).toJson();
-    }
-
-    /**
-     * Export all documentation for a function (for use in cross-binary propagation)
-     */
-    private String getFunctionDocumentation(String functionAddress, String programName) {
-        return documentationHashService.getFunctionDocumentation(functionAddress, programName).toJson();
-    }
-
-    private String applyFunctionDocumentation(String jsonBody, String programName) {
-        return documentationHashService.applyFunctionDocumentation(jsonBody, programName).toJson();
     }
 
     /**
@@ -1879,20 +1335,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return dataTypeService.applyDataType(addressStr, typeName, clearExisting).toJson();
     }
 
-    /**
-     * Get metadata about the current program
-     */
-    private String getMetadata() {
-        return programScriptService.getMetadata().toJson();
-    }
-
-    /**
-     * List global variables/symbols with optional filtering
-     */
-    private String listGlobals(int offset, int limit, String filter, String programName) {
-        return listingService.listGlobals(offset, limit, filter, programName).toJson();
-    }
-
     private String renameGlobalVariable(String oldName, String newName, String programName) {
         return symbolLabelService.renameGlobalVariable(oldName, newName, programName).toJson();
     }
@@ -1901,78 +1343,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return symbolLabelService.renameGlobalVariable(oldName, newName).toJson();
     }
 
-    /**
-     * Get all entry points in the program
-     */
-    private String getEntryPoints() {
-        return listingService.getEntryPoints(null).toJson();
-    }
-
     // ----------------------------------------------------------------------------------
     // Data Type Analysis and Management Methods
     // ----------------------------------------------------------------------------------
-
-    /**
-     * Create a union data type with simplified approach for testing
-     */
-    /**
-     * Create a union data type directly from fields object
-     */
-    /**
-     * Create a union data type (legacy method)
-     */
-    private String createUnion(String name, String fieldsJson) {
-        return dataTypeService.createUnion(name, fieldsJson, null).toJson();
-    }
-
-    /**
-     * Get the size of a data type
-     */
-    private String getTypeSize(String typeName) {
-        return dataTypeService.getTypeSize(typeName).toJson();
-    }
-
-    /**
-     * Get the layout of a structure
-     */
-    private String getStructLayout(String structName) {
-        return dataTypeService.getStructLayout(structName).toJson();
-    }
-
-    /**
-     * Search for data types by pattern
-     */
-    private String searchDataTypes(String pattern, int offset, int limit) {
-        return dataTypeService.searchDataTypes(pattern, offset, limit).toJson();
-    }
-
-    /**
-     * Get all values in an enumeration
-     */
-    private String getEnumValues(String enumName) {
-        return dataTypeService.getEnumValues(enumName).toJson();
-    }
-
-    /**
-     * Create a typedef (type alias)
-     */
-    private String createTypedef(String name, String baseType) {
-        return dataTypeService.createTypedef(name, baseType).toJson();
-    }
-
-    /**
-     * Clone/copy a data type with a new name
-     */
-    private String cloneDataType(String sourceType, String newName) {
-        return dataTypeService.cloneDataType(sourceType, newName).toJson();
-    }
-
-    /**
-     * Validate if a data type fits at a given address
-     */
-    private String validateDataType(String addressStr, String typeName) {
-        return dataTypeService.validateDataType(addressStr, typeName).toJson();
-    }
 
     /**
      * Read memory at a specific address
@@ -1987,22 +1360,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * Create an uninitialized memory block (e.g., for MMIO/peripheral regions).
-     */
-    private String createMemoryBlock(String name, String addressStr, long size,
-                                     boolean read, boolean write, boolean execute,
-                                     boolean isVolatile, String comment) {
-        return programScriptService.createMemoryBlock(name, addressStr, size, read, write, execute, isVolatile, comment).toJson();
-    }
-
-    /**
-     * Import data types from various sources
-     */
-    private String importDataTypes(String source, String format) {
-        return dataTypeService.importDataTypes(source, format).toJson();
-    }
-
-    /**
      * Helper method to extract JSON values from simple JSON strings
      */
     /**
@@ -2012,89 +1369,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // NEW DATA STRUCTURE MANAGEMENT METHODS
     // ===================================================================================
 
-    /**
-     * Delete a data type from the program
-     */
-    private String deleteDataType(String typeName) {
-        return dataTypeService.deleteDataType(typeName).toJson();
-    }
-
-    /**
-     * Modify a field in an existing structure
-     */
-    private String modifyStructField(String structName, String fieldName, String newType, String newName) {
-        return dataTypeService.modifyStructField(structName, fieldName, newType, newName).toJson();
-    }
-
-    /**
-     * Add a new field to an existing structure
-     */
-    private String addStructField(String structName, String fieldName, String fieldType, int offset) {
-        return dataTypeService.addStructField(structName, fieldName, fieldType, offset).toJson();
-    }
-
-    /**
-     * Remove a field from an existing structure
-     */
-    private String removeStructField(String structName, String fieldName) {
-        return dataTypeService.removeStructField(structName, fieldName).toJson();
-    }
-
-    /**
-     * Create an array data type
-     */
-    private String createArrayType(String baseType, int length, String name) {
-        return dataTypeService.createArrayType(baseType, length, name).toJson();
-    }
-
-    /**
-     * Create a pointer data type
-     */
-    private String createPointerType(String baseType, String name) {
-        return dataTypeService.createPointerType(baseType, name).toJson();
-    }
-
-    /**
-     * Create a new data type category
-     */
-    private String createDataTypeCategory(String categoryPath) {
-        return dataTypeService.createDataTypeCategory(categoryPath).toJson();
-    }
-
-    /**
-     * Move a data type to a different category
-     */
-    private String moveDataTypeToCategory(String typeName, String categoryPath) {
-        return dataTypeService.moveDataTypeToCategory(typeName, categoryPath).toJson();
-    }
-
-    /**
-     * List all data type categories
-     */
-    private String listDataTypeCategories(int offset, int limit) {
-        return dataTypeService.listDataTypeCategories(offset, limit).toJson();
-    }
-
-    /**
-     * Create a function signature data type
-     */
-    private String createFunctionSignature(String name, String returnType, String parametersJson) {
-        return dataTypeService.createFunctionSignature(name, returnType, parametersJson).toJson();
-    }
-
     // ==========================================================================
     // HIGH-PERFORMANCE DATA ANALYSIS METHODS (v1.3.0)
     // ==========================================================================
-
-    /**
-     * Helper to parse boolean from Object (can be Boolean or String "true"/"false")
-     */
-    private boolean parseBoolOrDefault(Object obj, boolean defaultValue) {
-        if (obj == null) return defaultValue;
-        if (obj instanceof Boolean) return (Boolean) obj;
-        if (obj instanceof String) return Boolean.parseBoolean((String) obj);
-        return defaultValue;
-    }
 
     /**
      * Helper to escape strings for JSON
@@ -2109,192 +1386,12 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * Check if a function name is auto-generated (not user-assigned).
-     * Covers FUN_, Ordinal_, and thunk variants of both.
-     */
-    private static boolean isAutoGeneratedName(String name) {
-        return name.startsWith("FUN_") || name.startsWith("Ordinal_") ||
-               name.startsWith("thunk_FUN_") || name.startsWith("thunk_Ordinal_");
-    }
-
-    /**
-     * 1. GET_BULK_XREFS - Retrieve xrefs for multiple addresses in one call
-     */
-    /**
-     * 2. ANALYZE_DATA_REGION - Comprehensive single-call data analysis
-     */
-    private String analyzeDataRegion(String startAddressStr, int maxScanBytes,
-                                      boolean includeXrefMap,
-                                      boolean includeBoundaryDetection) {
-        return analysisService.analyzeDataRegion(startAddressStr, maxScanBytes, includeXrefMap, includeBoundaryDetection).toJson();
-    }
-
-    /**
-     * 3. DETECT_ARRAY_BOUNDS - Array/table size detection
-     */
-    private String detectArrayBounds(String addressStr, int maxScanRange) {
-        return analysisService.detectArrayBounds(addressStr, maxScanRange).toJson();
-    }
-
-    /**
-     * 4. GET_ASSEMBLY_CONTEXT - Assembly pattern analysis
-     */
-    private String getAssemblyContext(Object xrefSourcesObj, int contextInstructions) {
-        return xrefCallGraphService.getAssemblyContext(xrefSourcesObj, contextInstructions).toJson();
-    }
-
-    /**
-     * 6. APPLY_DATA_CLASSIFICATION - Atomic type application
-     */
-    private String applyDataClassification(String addressStr, String classification,
-                                           String name, String comment,
-                                           Object typeDefinitionObj) {
-        return dataTypeService.applyDataClassification(addressStr, classification, name, comment, typeDefinitionObj).toJson();
-    }
-
-    /**
      * === FIELD-LEVEL ANALYSIS IMPLEMENTATIONS (v1.4.0) ===
      */
-
-    /**
-     * ANALYZE_STRUCT_FIELD_USAGE - Analyze how structure fields are accessed in decompiled code
-     *
-     * This method decompiles all functions that reference a structure and extracts usage patterns
-     * for each field, including variable names, access types, and purposes.
-     *
-     * @param addressStr Address of the structure instance
-     * @param structName Name of the structure type (optional - can be inferred if null)
-     * @param maxFunctionsToAnalyze Maximum number of referencing functions to analyze
-     * @return JSON string with field usage analysis
-     */
-    private String analyzeStructFieldUsage(String addressStr, String structName, int maxFunctionsToAnalyze) {
-        return dataTypeService.analyzeStructFieldUsage(addressStr, structName, maxFunctionsToAnalyze).toJson();
-    }
-
-    /**
-     * GET_FIELD_ACCESS_CONTEXT - Get assembly/decompilation context for specific field offsets
-     *
-     * @param structAddressStr Address of the structure instance
-     * @param fieldOffset Offset of the field within the structure
-     * @param numExamples Number of usage examples to return
-     * @return JSON string with field access contexts
-     */
-    private String getFieldAccessContext(String structAddressStr, int fieldOffset, int numExamples) {
-        return analysisService.getFieldAccessContext(structAddressStr, fieldOffset, numExamples).toJson();
-    }
-
-    /**
-     * SUGGEST_FIELD_NAMES - AI-assisted field name suggestions based on usage patterns
-     *
-     * @param structAddressStr Address of the structure instance
-     * @param structSize Size of the structure in bytes (0 for auto-detect)
-     * @return JSON string with field name suggestions
-     */
-    private String suggestFieldNames(String structAddressStr, int structSize) {
-        return dataTypeService.suggestFieldNames(structAddressStr, structSize).toJson();
-    }
-
-    /**
-     * 7. INSPECT_MEMORY_CONTENT - Memory content inspection with string detection
-     *
-     * Reads raw memory bytes and provides hex/ASCII representation with string detection hints.
-     * This helps prevent misidentification of strings as numeric data.
-     */
-    private String inspectMemoryContent(String addressStr, int length, boolean detectStrings) {
-        return analysisService.inspectMemoryContent(addressStr, length, detectStrings).toJson();
-    }
 
     // ============================================================================
     // MALWARE ANALYSIS IMPLEMENTATION METHODS
     // ============================================================================
-
-    /**
-     * Detect cryptographic constants in the binary (AES S-boxes, SHA constants, etc.)
-     */
-    private String detectCryptoConstants() {
-        return analysisService.detectCryptoConstants().toJson();
-    }
-
-    /**
-     * Search for byte patterns with optional wildcards
-     */
-    private String searchBytePatterns(String pattern, String mask) {
-        return analysisService.searchBytePatterns(pattern, mask).toJson();
-    }
-
-    /**
-     * Find functions structurally similar to the target function
-     * Uses basic block count, instruction count, call count, and cyclomatic complexity
-     */
-    private String findSimilarFunctions(String targetFunction, double threshold) {
-        return analysisService.findSimilarFunctions(targetFunction, threshold).toJson();
-    }
-
-
-    /**
-     * Analyze function control flow complexity
-     * Calculates cyclomatic complexity, basic blocks, edges, and detailed metrics
-     */
-    private String analyzeControlFlow(String functionName) {
-        return analysisService.analyzeControlFlow(functionName).toJson();
-    }
-
-    /**
-     * Detect anti-analysis and anti-debugging techniques
-     * Scans for known anti-debug APIs, timing checks, VM detection, and SEH tricks
-     */
-    private String findAntiAnalysisTechniques() {
-        return malwareSecurityService.findAntiAnalysisTechniques().toJson();
-    }
-
-
-    /**
-     * Batch decompile multiple functions
-     */
-    private String batchDecompileFunctions(String functionsParam) {
-        return functionService.batchDecompileFunctions(functionsParam).toJson();
-    }
-
-    /**
-     * Find potentially unreachable code blocks
-     */
-    private String findDeadCode(String functionName) {
-        return analysisService.findDeadCode(functionName).toJson();
-    }
-
-    /**
-     * Automatically identify and decrypt obfuscated strings
-     */
-    private String autoDecryptStrings() {
-        return malwareSecurityService.autoDecryptStrings().toJson();
-    }
-
-    /**
-     * Identify and analyze suspicious API call chains
-     * Detects threat patterns like process injection, persistence, credential theft
-     */
-    private String analyzeAPICallChains() {
-        return malwareSecurityService.analyzeAPICallChains().toJson();
-    }
-
-
-
-    /**
-     * Enhanced IOC extraction with context and confidence scoring
-     */
-    private String extractIOCsWithContext() {
-        return malwareSecurityService.extractIOCsWithContext().toJson();
-    }
-
-
-
-    /**
-     * Detect common malware behaviors and techniques
-     */
-    private String detectMalwareBehaviors() {
-        return malwareSecurityService.detectMalwareBehaviors().toJson();
-    }
-
 
     /**
      * v1.5.0: Batch set multiple comments in a single operation
@@ -2304,10 +1401,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private String batchSetComments(String functionAddress, List<Map<String, String>> decompilerComments,
                                     List<Map<String, String>> disassemblyComments, String plateComment) {
         return commentService.batchSetComments(functionAddress, decompilerComments, disassemblyComments, plateComment).toJson();
-    }
-
-    private String clearFunctionComments(String functionAddress, boolean clearPlate, boolean clearPre, boolean clearEol) {
-        return commentService.clearFunctionComments(functionAddress, clearPlate, clearPre, clearEol).toJson();
     }
 
     /**
@@ -2322,24 +1415,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     @SuppressWarnings("deprecation")
     private String getFunctionVariables(String functionName) {
         return functionService.getFunctionVariables(functionName).toJson();
-    }
-
-    /**
-     * v1.5.0: Batch rename function and all its components atomically
-     */
-    @SuppressWarnings("deprecation")
-    private String batchRenameFunctionComponents(String functionAddress, String functionName,
-                                                Map<String, String> parameterRenames,
-                                                Map<String, String> localRenames,
-                                                String returnType) {
-        return functionService.batchRenameFunctionComponents(functionAddress, functionName, parameterRenames, localRenames, returnType).toJson();
-    }
-
-    /**
-     * v1.5.0: Get valid Ghidra data type strings
-     */
-    private String getValidDataTypes(String category) {
-        return dataTypeService.getValidDataTypes(category).toJson();
     }
 
     /**
@@ -2586,103 +1661,10 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     }
 
     /**
-     * v1.5.0: Batch set variable types
-     */
-    @SuppressWarnings("deprecation")
-    /**
-     * Individual variable type setting using setLocalVariableType (fallback method)
-     * NOW USES OPTIMIZED SINGLE-DECOMPILE METHOD
-     * This method was refactored to use batchSetVariableTypesOptimized() which decompiles
-     * the function ONCE and applies all type changes within that single decompilation,
-     * avoiding the repeated decompilation timeout issues that plagued the previous approach.
-     */
-    private String batchSetVariableTypesIndividual(String functionAddress, Map<String, String> variableTypes) {
-        // Delegate to the optimized batch method that decompiles once
-        // This fixes the issue where each setLocalVariableType() call caused its own decompilation
-        return batchSetVariableTypesOptimized(functionAddress, variableTypes);
-    }
-
-    /**
-     * OPTIMIZED: Batch set variable types - simple wrapper that calls setLocalVariableType
-     * sequentially with proper spacing to avoid thread issues
-     */
-    private String batchSetVariableTypesOptimized(String functionAddress, Map<String, String> variableTypes) {
-        if (variableTypes == null || variableTypes.isEmpty()) {
-            return "{\"success\": true, \"method\": \"optimized\", \"variables_typed\": 0, \"variables_failed\": 0}";
-        }
-
-        final AtomicInteger variablesTyped = new AtomicInteger(0);
-        final AtomicInteger variablesFailed = new AtomicInteger(0);
-        final List<String> errors = new ArrayList<>();
-
-        // Call setLocalVariableType for each variable with small delay between calls
-        for (Map.Entry<String, String> entry : variableTypes.entrySet()) {
-            String varName = entry.getKey();
-            String newType = entry.getValue();
-
-            try {
-                // Call the working setLocalVariableType method
-                String result = setLocalVariableType(functionAddress, varName, newType);
-
-                if (result.toLowerCase().contains("success")) {
-                    variablesTyped.incrementAndGet();
-                } else {
-                    errors.add(varName + ": " + result);
-                    variablesFailed.incrementAndGet();
-                }
-
-                // Small delay to allow Ghidra to process
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
-            } catch (Exception e) {
-                errors.add(varName + ": " + e.getMessage());
-                variablesFailed.incrementAndGet();
-            }
-        }
-
-        // Build response
-        StringBuilder result = new StringBuilder();
-        result.append("{");
-        result.append("\"success\": ").append(variablesFailed.get() == 0 && variablesTyped.get() > 0).append(", ");
-        result.append("\"method\": \"optimized\", ");
-        result.append("\"variables_typed\": ").append(variablesTyped.get()).append(", ");
-        result.append("\"variables_failed\": ").append(variablesFailed.get());
-
-        if (!errors.isEmpty()) {
-            result.append(", \"errors\": [");
-            for (int i = 0; i < errors.size(); i++) {
-                if (i > 0) result.append(", ");
-                result.append("\"").append(errors.get(i).replace("\"", "\\\"")).append("\"");
-            }
-            result.append("]");
-        }
-
-        result.append("}");
-        return result.toString();
-    }
-
-    /**
      * NEW v1.6.0: Batch rename variables with partial success reporting and fallback
      */
     private String batchRenameVariables(String functionAddress, Map<String, String> variableRenames, boolean forceIndividual) {
         return functionService.batchRenameVariables(functionAddress, variableRenames, forceIndividual).toJson();
-    }
-
-    /**
-     * Validate that batch operations actually persisted by checking current state
-     */
-    private String validateBatchOperationResults(String functionAddress, Map<String, String> expectedRenames, Map<String, String> expectedTypes) {
-        return functionService.validateBatchOperationResults(functionAddress, expectedRenames, expectedTypes).toJson();
-    }
-
-    /**
-     * NEW v1.6.0: Validate function prototype before applying
-     */
-    private String validateFunctionPrototype(String functionAddress, String prototype, String callingConvention) {
-        return dataTypeService.validateFunctionPrototype(functionAddress, prototype, callingConvention).toJson();
     }
 
     /**
@@ -2711,70 +1693,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         return analysisService.analyzeFunctionComplete(name, includeXrefs, includeCallees, includeCallers, includeDisasm, includeVariables).toJson();
     }
 
-    /**
-     * NEW v1.7.1: Disassemble a range of bytes
-     */
-    private String disassembleBytes(String startAddress, String endAddress, Integer length,
-                                   boolean restrictToExecuteMemory) {
-        return functionService.disassembleBytes(startAddress, endAddress, length, restrictToExecuteMemory).toJson();
-    }
-
-    /**
-     * Create a function at the specified address.
-     * Optionally disassembles bytes first and assigns a custom name.
-     *
-     * @param addressStr Starting address in hex format
-     * @param name Optional function name (null for auto-generated)
-     * @param disassembleFirst If true, disassemble bytes at address before creating function
-     * @return JSON result with function creation status
-     */
-    private String deleteFunctionAtAddress(String addressStr) {
-        return functionService.deleteFunctionAtAddress(addressStr).toJson();
-    }
-
-    private String createFunctionAtAddress(String addressStr, String name, boolean disassembleFirst) {
-        return functionService.createFunctionAtAddress(addressStr, name, disassembleFirst).toJson();
-    }
-
-    /**
-     * Execute a Ghidra script and capture all output, errors, and warnings (v1.9.1)
-     * This enables automatic troubleshooting by providing comprehensive error information.
-     *
-     * Note: Since Ghidra scripts are typically run through the GUI via Script Manager,
-     * this endpoint provides script discovery and validation. Full execution with output
-     * capture should be done through Ghidra's Script Manager UI or headless mode.
-     */
-    private String runGhidraScriptWithCapture(String scriptName, String scriptArgs, int timeoutSeconds, boolean captureOutput) {
-        return programScriptService.runGhidraScriptWithCapture(scriptName, scriptArgs, timeoutSeconds, captureOutput).toJson();
-    }
-
     // ===================================================================================
     // BOOKMARK METHODS (v1.9.4) - Progress tracking via Ghidra bookmarks
     // ===================================================================================
-
-    /**
-     * Set a bookmark at an address with category and comment.
-     * Creates or updates the bookmark if one already exists at the address with the same category.
-     */
-    private String setBookmark(String addressStr, String category, String comment) {
-        return programScriptService.setBookmark(addressStr, category, comment).toJson();
-    }
-
-    /**
-     * List bookmarks, optionally filtered by category and/or address.
-     */
-    private String listBookmarks(String category, String addressStr) {
-        return programScriptService.listBookmarks(category, addressStr).toJson();
-    }
-
-    /**
-     * Delete a bookmark at an address with optional category filter.
-     */
-    private String deleteBookmark(String addressStr, String category) {
-        return programScriptService.deleteBookmark(addressStr, category).toJson();
-    }
-
-
 
     /**
      * List all external locations (imports, ordinal imports, etc.)
@@ -2815,41 +1736,9 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // CROSS-VERSION MATCHING TOOLS
     // ==================================================================================
 
-    /**
-     * Compare documentation status across all open programs.
-     * Returns documented/undocumented function counts for each program.
-     */
-    private String compareProgramsDocumentation() {
-        return documentationHashService.compareProgramsDocumentation().toJson();
-    }
-
-    private String findUndocumentedByString(String stringAddress, String programName) {
-        return documentationHashService.findUndocumentedByString(stringAddress, programName).toJson();
-    }
-
-    private String batchStringAnchorReport(String pattern, String programName) {
-        return documentationHashService.batchStringAnchorReport(pattern, programName).toJson();
-    }
-
     // ==========================================================================
     // FUZZY MATCHING & DIFF HANDLERS
     // ==========================================================================
-
-    private String handleFindSimilarFunctionsFuzzy(String addressStr, String sourceProgramName,
-            String targetProgramName, double threshold, int limit) {
-        return documentationHashService.handleFindSimilarFunctionsFuzzy(addressStr, sourceProgramName,
-            targetProgramName, threshold, limit).toJson();
-    }
-
-    private String handleBulkFuzzyMatch(String sourceProgramName, String targetProgramName,
-            double threshold, int offset, int limit, String filter) {
-        return documentationHashService.handleBulkFuzzyMatch(sourceProgramName, targetProgramName,
-            threshold, offset, limit, filter).toJson();
-    }
-
-    private String handleDiffFunctions(String addressA, String addressB, String programAName, String programBName) {
-        return documentationHashService.handleDiffFunctions(addressA, addressB, programAName, programBName).toJson();
-    }
 
     // ==========================================================================
     // PROJECT VERSION CONTROL HELPER METHODS
@@ -3314,7 +2203,16 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         //   F:/proj/MyProj.gpr   — marker file
         //   F:/proj/MyProj.rep   — project data directory
         //   F:/proj/MyProj       — bare name, sibling .gpr/.rep expected
-        File pathFile = new File(projectPath);
+        // GHIDRA_MCP_FILE_ROOT, like every other endpoint that takes a filesystem path.
+        // Without it this route opened any .gpr on disk.
+        com.xebyte.core.SecurityConfig security = com.xebyte.core.SecurityConfig.getInstance();
+        java.nio.file.Path allowed = security.resolveWithinFileRoot(projectPath);
+        if (allowed == null) {
+            Msg.warn(this, "Rejected /open_project for '" + projectPath
+                + "': outside configured GHIDRA_MCP_FILE_ROOT (" + security.getFileRoot() + ")");
+            return "{\"error\": \"Access denied: path is outside the configured file root\"}";
+        }
+        File pathFile = allowed.toFile();
         String location;
         String name;
         String projExt = ProjectLocator.getProjectExtension();   // ".gpr"
