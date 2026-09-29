@@ -408,9 +408,8 @@ public class XrefCallGraphService {
         Program program = pe.program();
 
         try {
-            FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
-            if (!resolved.isSuccess()) return Response.err("Function not found: " + functionRef);
-            Function function = resolved.function();
+            ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionRef);
+            if (resolved.hasError()) return resolved.error();Function function = resolved.function();
 
             List<Map<String, Object>> refs = new ArrayList<>();
             FunctionManager funcManager = program.getFunctionManager();
@@ -472,10 +471,8 @@ public class XrefCallGraphService {
         FunctionManager functionManager = program.getFunctionManager();
 
         // Find the function by name or address
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
-        if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionRef);
-        }
+        ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionRef);
+        if (resolved.hasError()) return resolved.error();
         Function function = resolved.function();
 
         Set<Function> callees = new HashSet<>();
@@ -549,10 +546,8 @@ public class XrefCallGraphService {
 
         // Find the function by name or address
         Function targetFunction = null;
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
-        if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionRef);
-        }
+        ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionRef);
+        if (resolved.hasError()) return resolved.error();
         targetFunction = resolved.function();
 
         Set<Function> callers = new HashSet<>();
@@ -609,10 +604,8 @@ public class XrefCallGraphService {
 
         // Find the function by name or address
         Function rootFunction = null;
-        FunctionRef.Result resolved = FunctionRef.ofNameOrAddress(functionRef, null).tryResolve(program);
-        if (!resolved.isSuccess()) {
-            return Response.err("Function not found: " + functionRef);
-        }
+        ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionRef);
+        if (resolved.hasError()) return resolved.error();
         rootFunction = resolved.function();
 
         Set<String> visited = new HashSet<>();
@@ -664,8 +657,8 @@ public class XrefCallGraphService {
      */
     private static String resolveToGraphKey(Program program, String nameOrAddr) {
         if (nameOrAddr == null || nameOrAddr.isEmpty()) return nameOrAddr;
-        FunctionRef.Result r = FunctionRef.ofNameOrAddress(nameOrAddr, null).tryResolve(program);
-        return r.isSuccess() ? graphKey(r.function()) : nameOrAddr;
+        Function resolved = ServiceUtils.resolveFunction(program, nameOrAddr);
+        return resolved != null ? graphKey(resolved) : nameOrAddr;
     }
 
     private void buildCallGraphCallees(Function function, int depth, Set<String> visited,

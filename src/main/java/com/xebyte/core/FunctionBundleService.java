@@ -112,8 +112,7 @@ public class FunctionBundleService {
             + "NOT included — call analyze_function_completeness for that.",
         category = "function", access = ToolAccess.READ_ONLY)
     public Response getFunctions(
-            @Param(value = "function", paramType = "address", defaultValue = "",
-                   aliases = {"name", "address", "function_address", "function_name"},
+            @Param(value = "function", paramType = Param.FUNCTION_REF, defaultValue = "",
                    description = "Single mode: function name or address (0x<hex> or "
                                + "<space>:<hex>). Ignored when functions= is set.") String functionRef,
             @Param(value = "functions", defaultValue = "",
@@ -175,12 +174,9 @@ public class FunctionBundleService {
             return Response.err("function name or address required (or pass functions= for bulk)");
         }
 
-        Function func = ServiceUtils.resolveFunction(program, functionRef);
-        if (func == null) {
-            String parseError = ServiceUtils.getLastParseError();
-            return Response.err("Function not found: " + functionRef
-                + (parseError != null && !parseError.isEmpty() ? " (" + parseError + ")" : ""));
-        }
+        ServiceUtils.FunctionOrError lookup = ServiceUtils.getFunctionOrError(program, functionRef);
+        if (lookup.hasError()) return lookup.error();
+        Function func = lookup.function();
 
         try {
             return Response.ok(buildBundle(program, func, resolvedFields, includeCallContext,
@@ -217,15 +213,12 @@ public class FunctionBundleService {
                 continue;
             }
             requested++;
-            Function func = ServiceUtils.resolveFunction(program, funcRef);
-            if (func == null) {
-                String parseError = ServiceUtils.getLastParseError();
-                Map<String, Object> err = new LinkedHashMap<>();
-                err.put("error", "Function not found: " + funcRef
-                    + (parseError != null && !parseError.isEmpty() ? " (" + parseError + ")" : ""));
-                functions.put(funcRef, err);
+            ServiceUtils.FunctionOrError lookup = ServiceUtils.getFunctionOrError(program, funcRef);
+            if (lookup.hasError()) {
+                functions.put(funcRef, new LinkedHashMap<>(Map.of("error", lookup.message())));
                 continue;
             }
+            Function func = lookup.function();
             try {
                 functions.put(funcRef, buildBundle(program, func, fields, includeCallContext,
                     callContextLimit, callContextLines, includeDisasm));

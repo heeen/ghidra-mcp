@@ -971,11 +971,8 @@ public class AnalysisService {
             // Build the address set we'll iterate.
             AddressSetView searchSet;
             if (functionScope != null && !functionScope.trim().isEmpty()) {
-                FunctionRef.Result resolved =
-                    FunctionRef.ofNameOrAddress(functionScope, "").tryResolve(program);
-                if (!resolved.isSuccess()) {
-                    return Response.err("Function not found: " + functionScope);
-                }
+                ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionScope);
+                if (resolved.hasError()) return resolved.error();
                 Function f = resolved.function();
                 searchSet = f.getBody();
             } else {
@@ -1090,10 +1087,8 @@ public class AnalysisService {
             FunctionManager functionManager = program.getFunctionManager();
 
             // Find the target function by name or address
-            FunctionRef.Result resolved = FunctionRef.of(targetFunction).tryResolve(program);
-            if (!resolved.isSuccess()) {
-                return Response.err("Function not found: " + targetFunction);
-            }
+            ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, targetFunction);
+            if (resolved.hasError()) return resolved.error();
             Function targetFunc = resolved.function();
 
             // Calculate metrics for target function
@@ -1172,10 +1167,8 @@ public class AnalysisService {
             FunctionManager functionManager = program.getFunctionManager();
 
             // Find the function by name or address
-            FunctionRef.Result resolved = FunctionRef.of(functionName).tryResolve(program);
-            if (!resolved.isSuccess()) {
-                return Response.err("Function not found: " + functionName);
-            }
+            ServiceUtils.FunctionOrError resolved = ServiceUtils.getFunctionOrError(program, functionName);
+            if (resolved.hasError()) return resolved.error();
             Function func = resolved.function();
 
             BasicBlockModel blockModel = new BasicBlockModel(program);
@@ -1370,7 +1363,7 @@ public class AnalysisService {
      */
     @McpTool(path = "/analyze_function_completeness", description = "Check documentation completeness for ONE function (function_address) OR MANY (addresses=comma-separated list). On programs with multiple address spaces, prefix addresses with the space name (mem:1000). Replaces batch_analyze_completeness.", category = "analysis", access = ToolAccess.READ_ONLY)
     public Response analyzeFunctionCompleteness(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", defaultValue = "",
+            @Param(value = "function", paramType = Param.FUNCTION_REF, defaultValue = "",
                    description = "Function address (single mode). 0x<hex> or <space>:<hex>. Omit when using addresses=.") String functionAddress,
             @Param(value = "compact", defaultValue = "false", description = "Compact output (single mode)") boolean compact,
             @Param(value = "addresses", defaultValue = "",
@@ -2270,12 +2263,12 @@ public class AnalysisService {
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
-                    Function func = ServiceUtils.resolveFunction(program, name);
-
-                    if (func == null) {
-                        errorMsg.set("Function not found: " + name);
+                    ServiceUtils.FunctionOrError lookup = ServiceUtils.getFunctionOrError(program, name);
+                    if (lookup.hasError()) {
+                        errorMsg.set(lookup.message());
                         return;
                     }
+                    Function func = lookup.function();
 
                     // Build structured data for Gson serialization
                     Map<String, Object> data = new LinkedHashMap<>();
@@ -4167,7 +4160,7 @@ public class AnalysisService {
      */
     @McpTool(path = "/analyze_for_documentation", description = "Composite analysis for RE documentation workflow. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "analysis", access = ToolAccess.READ_ONLY)
     public Response analyzeForDocumentation(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
                                + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
                                + "embedded/microcontroller targets — are not address-space-agnostic; "
@@ -4938,7 +4931,7 @@ public class AnalysisService {
              description = "Dump raw P-code for a function (issue #192). Returns low (basic-iter) and high (HighFunction) P-code with basic blocks and varnodes. Granularity controls output: 'basic' = basic-block iter only (less memory), 'high' = HighFunction graph (default; includes both BB iter and op-iter). For P-code emulators / ML pipelines / alternative decompilers.",
              category = "analysis", access = ToolAccess.READ_ONLY)
     public Response getFunctionPcode(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address",
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
                    description = "Function entry address (0x<hex> or <space>:<hex>).") String functionAddress,
             @Param(value = "granularity", defaultValue = "high",
                    description = "'basic' = raw PcodeOps from basic-block iter only; 'high' = HighFunction P-code graph (default; richer, includes varnode SSA info).") String granularity,

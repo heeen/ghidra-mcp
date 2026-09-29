@@ -64,12 +64,16 @@ public class SchemaAliasPublicationTest extends TestCase {
     public void testFunctionSelectorPublishesItsAliases() {
         AnnotationScanner.ParamDescriptor p = findParam("/get_functions", "function");
         assertNotNull("/get_functions has no 'function' parameter", p);
-        assertEquals("declared aliases must be published verbatim, in declaration order",
-            List.of("name", "address", "function_address", "function_name"), p.aliases());
+        // paramType = FUNCTION_REF implies the standard aliases, in the one order every
+        // function reference uses (see FunctionRefParamTest). /get_functions used to
+        // declare them by hand, name first, unlike most other endpoints.
+        assertEquals("a function reference must publish the standard aliases",
+            List.of("address", "name", "function_address", "function_name"), p.aliases());
+        assertEquals("function_ref", p.paramType());
 
         String json = p.toJson();
         assertTrue("ParamDescriptor.toJson must emit an aliases array; got: " + json,
-            json.contains("\"aliases\": [\"name\", \"address\", \"function_address\", \"function_name\"]"));
+            json.contains("\"aliases\": [\"address\", \"name\", \"function_address\", \"function_name\"]"));
     }
 
     /**

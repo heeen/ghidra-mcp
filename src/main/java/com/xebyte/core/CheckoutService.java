@@ -590,8 +590,7 @@ public class CheckoutService {
             + "(or reconcile) honours the pin ahead of the whole partitioner cascade.",
         category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutPinModule(
-            @Param(value = "function", aliases = {"address", "name", "function_address",
-                    "function_name"}, paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", paramType = Param.FUNCTION_REF, source = ParamSource.BODY,
                    description = "Function name or entry address to pin.")
             String function,
             @Param(value = "module", source = ParamSource.BODY, defaultValue = "",
@@ -611,10 +610,9 @@ public class CheckoutService {
         if (function == null || function.isBlank()) {
             return Response.err("function is required (name or address)");
         }
-        Function func = ServiceUtils.resolveFunction(program, function.trim());
-        if (func == null) {
-            return Response.err("Function not found: " + function.trim());
-        }
+        ServiceUtils.FunctionOrError funcLookup = ServiceUtils.getFunctionOrError(program, function.trim());
+        if (funcLookup.hasError()) return funcLookup.error();
+        Function func = funcLookup.function();
 
         String slug = module != null ? module.trim() : "";
         boolean unpin = slug.isEmpty();

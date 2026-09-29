@@ -81,7 +81,7 @@ public class EmulationService {
                     "hash functions, crypto routines, or any pure-computation code path.",
             category = "emulation", access = ToolAccess.READ_ONLY)
     public Response emulateFunction(
-            @Param(value = "function", aliases = {"address", "name", "function_address", "function_name"}, paramType = "address", source = ParamSource.BODY,
+            @Param(value = "function", paramType = Param.FUNCTION_REF, source = ParamSource.BODY,
                     description = "Entry point address of the function to emulate") String addressStr,
             @Param(value = "registers", source = ParamSource.BODY, fieldsJson = true,
                     description = "Initial register values as JSON: {\"EAX\": \"0x1234\", \"ECX\": \"0x7FFE0000\"}") String registersJson,
