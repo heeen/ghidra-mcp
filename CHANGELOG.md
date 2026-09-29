@@ -156,6 +156,54 @@ client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
 
+- **One meaning for a function reference, in every tool.** `FunctionRef` had a
+  case-insensitive fallback and `ServiceUtils.resolveFunction` did not, so a name typed in
+  the wrong case worked in the call-graph tools and failed in the function tools; neither
+  noticed a name two functions share, an address-first order sent a function named `add`
+  or `dead` to whatever sat at `0xadd`, and a miss said one of seven things.
+  `ServiceUtils.getFunctionOrError` is now the only rule: a bare token that exactly names
+  a function is that function (an `0x` or `space:offset` value is always an address);
+  otherwise an address; otherwise a case-insensitive name, only when nothing matched
+  exactly; a name several functions share is an error listing their addresses, a non-thunk
+  beating a thunk; one not-found message that says what was tried. `FunctionRef` is gone.
+  `paramType = Param.FUNCTION_REF` marks a name-or-address parameter and implies the
+  standard alias spellings in one order (25 endpoints repeated the list by hand in two),
+  and the bridge normalises only `paramType = address`, so a function name is never
+  rewritten. Also: `batch_rename_function_components` looked the return type up by exact
+  path, so `int` or `char*` was skipped while the call reported success; it now refuses an
+  unknown type before writing anything.
+- **One version-control service for both servers.** The `/server/*` routes were
+  implemented twice (about 400 lines of `DomainFile` helpers in the plugin, a near
+  line-for-line copy in `GhidraServerManager`, a third copy of checkin in the provider) and
+  had drifted: headless ignored `exclusive`, `keep` and `keepCheckedOut`; its JSON parser
+  split on commas, so the checkin comment `fix, retry` was recorded as `fix`; a checkin of
+  an open file silently kept the checkout; `terminate_checkout` defaulted the id to 0; none
+  applied the project-folder scope. `ProjectVersionControl` is now the one copy, and
+  `VersionControlService` serves it over a `ServerSession` (headless's
+  `GhidraServerManager`, the GUI's `ProjectServerSession`), so the GUI gains real
+  repositories, users and `set_permissions` on a shared project. **Breaking:** parameters and
+  responses are snake_case only (`keep_checked_out`, `checkout_id`, `access_level`);
+  `/server/version_control/checkin` is retired for `/checkin_program`, which saves and closes
+  the open program first; `/server/repository/files` and `/file` mean the server's
+  repository on both servers, and the project tree is `/list_project_files`, which now
+  carries each file's version-control state. `set_permissions` listed a 0-3 scale that does
+  not exist and defaulted to 1, silently granting write access while claiming read-only;
+  `access_level` is now required and takes a name or Ghidra's real 0-2.
+- **`/server/authenticate`, `/exit_ghidra` and the
+  CodeBrowser tools are services.** `authenticate` lets a headless server take credentials
+  at runtime; every place that registered a `GhidraMCPAuthenticator` shares
+  `GhidraMCPAuthenticator.register`. `/exit_ghidra` is `ServerLifecycleService` over a
+  `ServerLifecycle` carrying only the differences (the GUI answers Ghidra's prompts, saves
+  debugger traces and closes tools without writing layouts back; headless used to exit
+  without saving and leave it to its shutdown hook, after the caller was told it was
+  done). `/tool/running_tools` and `/tool/goto_address` are `GuiToolService`;
+  `/tool/launch_codebrowser` is retired because it took a program reference under the
+  plugin as consumer and never released it, the same leak that once stranded 140
+  checkouts, and `/open_program` already shows a program in a CodeBrowser.
+- **About 1,500 lines of unreferenced code deleted**, found by reference analysis rather
+  than by compiler: 130-odd private delegators in `GhidraMCPPlugin` (3,651 lines to about
+  1,200), the comma-splitting JSON parser, and unreferenced helpers across the services.
+
 - **Shared services no longer touch Swing or a `PluginTool`.** Forty-odd direct
   `SwingUtilities.invokeAndWait` calls in seven services now go through
   `ThreadingStrategy.runOnUi`: the event thread on the GUI (and inline when already on it),
