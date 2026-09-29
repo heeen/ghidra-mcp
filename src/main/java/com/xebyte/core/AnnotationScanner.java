@@ -66,11 +66,6 @@ public class AnnotationScanner {
                 program.endTransaction(tx, success);
             }
         }
-
-        @Override
-        public boolean isHeadless() {
-            return true;
-        }
     };
 
     private final List<EndpointDef> endpoints = new ArrayList<>();

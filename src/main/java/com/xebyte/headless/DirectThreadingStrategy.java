@@ -81,9 +81,4 @@ public class DirectThreadingStrategy implements ThreadingStrategy {
             globalLock.unlock();
         }
     }
-
-    @Override
-    public boolean isHeadless() {
-        return true;
-    }
 }

@@ -473,7 +473,7 @@ pytest tests/unit/test_published_counts.py         # any published count vs the 
 - **Max ~5 shared server programs open at once** -- opening 20+ crashes Ghidra
 - **`switch_program` matches by name** -- for multi-version work, use the `program` query parameter on individual endpoints instead
 - **Plate comment `\n` creates literal text**, not newlines -- use actual multi-line text
-- **GUI operations from HTTP threads** must use `SwingUtilities.invokeAndWait()`
+- **GUI operations from HTTP threads** must go through `threadingStrategy.runOnUi(...)` (the Swing event thread on the GUI, the calling thread headless) or `executeWrite`, never `SwingUtilities` directly in a shared service; the analyst's windows are reached only through `ProgramProvider.workbench()`, which is null headless
 
 ## Cross-version doc archive (optional re-kb service)
 

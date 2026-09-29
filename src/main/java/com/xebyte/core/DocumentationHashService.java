@@ -12,7 +12,6 @@ import ghidra.program.model.symbol.*;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 
-import javax.swing.SwingUtilities;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
@@ -1260,7 +1259,7 @@ public class DocumentationHashService {
         };
 
         try {
-            SwingUtilities.invokeAndWait(mergeTask);
+            threadingStrategy.runOnUi(mergeTask);
         } catch (Throwable t) {
             return Response.err("Merge invocation failed: " + t.getMessage());
         }

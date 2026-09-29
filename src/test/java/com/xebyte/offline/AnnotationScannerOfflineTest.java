@@ -553,10 +553,6 @@ public class AnnotationScannerOfflineTest extends TestCase {
                 }
             }
 
-            @Override
-            public boolean isHeadless() {
-                return true;
-            }
         };
 
         Program program = mock(Program.class);
