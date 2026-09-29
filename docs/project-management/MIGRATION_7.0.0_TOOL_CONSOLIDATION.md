@@ -146,6 +146,28 @@ The bridge's own `debugger_step_into` / `debugger_step_over` proxies, which forw
 external debugger server, are unaffected: only the GUI plugin's `/debugger/step_*` routes
 folded.
 
+## For consumers outside this repository (fun-doc, d2-game-exe)
+
+This repository no longer contains fun-doc, so nothing here catches a break on that side.
+Search the consumer for each item.
+
+- **Retired and never coming back:** `/decompile_function` (use `get_functions`),
+  `/health`, `/project/info`, `/load_program*`, `/tool/launch_codebrowser`,
+  `/server/version_control/checkin` (use `/checkin_program`).
+- **`/check_connection` is JSON now** (`status`, `server_kind`, `version`, `program`), not
+  plain text; a client comparing it to a literal breaks.
+- **`/server/*` is snake_case only** and answers the same way on both servers:
+  `keep_checked_out`, `checkout_id`, `access_level`. `/server/repository/files` is the
+  server's repository, not the project tree.
+- **A name shared by several functions is an error** that lists their addresses, and a name
+  typed in the wrong case resolves everywhere instead of in some tools.
+- **Every tool listed under "Folds after the consolidation"** and `apply_function_documentation`
+  (use `apply_documentation`; it takes the same export) are gone. `find_data_types` returns
+  records under `data_types`, not preformatted strings.
+- **Still present, and worth a look before the next fold:** the tag tools
+  (`list_function_tags`, `search_functions_by_tag`), which fun-doc calls and which were
+  deliberately left unfolded until the consumer can change with them.
+
 ## Call-shape changes worth knowing
 
 - **`analyze_function_completeness` bulk mode is a GET** with `addresses` as a
