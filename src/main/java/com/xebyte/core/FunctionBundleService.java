@@ -187,14 +187,6 @@ public class FunctionBundleService {
         }
     }
 
-    /** Internal/tests: single-function entry with the pre-consolidation name. */
-    public Response getFunctionBundle(String functionRef, String fieldsParam,
-            boolean includeCallContext, int callContextLimit, int callContextLines,
-            boolean includeDisasm, String programName) {
-        return getFunctions(functionRef, "", fieldsParam, includeCallContext, callContextLimit,
-            callContextLines, includeDisasm, programName);
-    }
-
     private Response getFunctionsBulk(Program program, String functionsParam, Set<String> fields,
             boolean includeCallContext, int callContextLimit, int callContextLines,
             boolean includeDisasm) {

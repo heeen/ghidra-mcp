@@ -89,42 +89,6 @@ public final class BlockSplicer {
     }
 
     /**
-     * Body after the nine-line header — what {@link SweepJob#shortContentHash}
-     * fingerprints. Missing header ⇒ whole block (defensive).
-     */
-    public static String bodyAfterHeader(String block) {
-        if (block == null) {
-            return "";
-        }
-        String[] lines = block.split("\n", -1);
-        int consumed = 0;
-        int idx = 0;
-        // Header is exactly HEADER_LINES // lines; stop early if a non-comment appears.
-        while (idx < lines.length && consumed < SweepJob.HEADER_LINES
-                && lines[idx].startsWith("// ")) {
-            idx++;
-            consumed++;
-        }
-        if (consumed < SweepJob.HEADER_LINES) {
-            return block;
-        }
-        StringBuilder sb = new StringBuilder();
-        for (; idx < lines.length; idx++) {
-            if (sb.length() > 0 || !lines[idx].isEmpty() || idx + 1 < lines.length) {
-                if (sb.length() > 0) {
-                    sb.append('\n');
-                }
-                sb.append(lines[idx]);
-            }
-        }
-        // Preserve a trailing newline when the original block had one after the header.
-        if (block.endsWith("\n") && (sb.length() == 0 || !sb.toString().endsWith("\n"))) {
-            // body may be empty for a header-only chunk
-        }
-        return sb.toString();
-    }
-
-    /**
      * Replace only the {@code // calls:} / {@code // callers:} lines. Inserts
      * them after {@code // fn:} when an older seven-line header lacks them —
      * never touches the body or fp/dts/mod/uri/see.

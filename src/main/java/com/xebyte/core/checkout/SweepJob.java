@@ -90,10 +90,6 @@ public final class SweepJob implements Runnable {
         return checkout.id();
     }
 
-    public boolean isCancelRequested() {
-        return cancel.isCancelled();
-    }
-
     /**
      * Three cancel levers: the volatile flag (checked between functions), the
      * {@link TaskMonitor} whose {@code isCancelled()} returns it (so the C++

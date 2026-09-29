@@ -225,10 +225,6 @@ public class GhidraServerManager implements ServerSession {
         return user;
     }
 
-    public RepositoryServerAdapter getServerAdapter() {
-        return serverAdapter;
-    }
-
     /**
      * Wire the open-project handle so version-control endpoints can resolve
      * {@link DomainFile}s. Called once from {@code GhidraMCPHeadlessServer} startup.
