@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**235 endpoints**, 234 of them advertised as MCP tools — 227 served by the GUI
-plugin, 214 by the headless server, 206 by both. One endpoint,
+**234 endpoints**, 233 of them advertised as MCP tools — 226 served by the GUI
+plugin, 213 by the headless server, 205 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
@@ -155,6 +155,23 @@ thousands of per-function MCP round trips. `Read` / `Grep` / `Glob` are the
 client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
+
+- **`apply_documentation` is the one tool for writing a function's documentation.**
+  It merges `/apply_function_documentation` (a JSON *string* read with a flat
+  regex extractor, whose failures to rename, retype or set a convention were only
+  logged) and `/batch_apply_documentation` (typed fields, but no labels, offsets
+  or return type). It takes the fields `get_function_documentation` exports
+  (`target_address`, `function_name`, `parameters`, `comments` and `labels` by
+  `relative_offset`, `pre_comment`/`eol_comment`) plus prototype, variable types and
+  renames, and applies them through the same services the single tools use, so the
+  naming rules hold and every step reports its own result. Pass the fields at the
+  top level for one function or `entries=[...]` for many: each entry gets its own
+  result, one failing does not stop the rest, and `score` defaults to on for one
+  function and off for many. Exported placeholders (`param_N`, `undefined*`) are
+  skipped so an export applies back without reverting anything. It is a shared
+  service, so it runs on headless too; only `goto` needs a window. **Breaking:**
+  `/apply_function_documentation` and `/batch_apply_documentation` are gone (see the
+  migration guide).
 
 - **`program` is required when more than one program is open.** Omitting it
   used to silently answer as whichever program was "current" — a measured

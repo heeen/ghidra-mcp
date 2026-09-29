@@ -109,7 +109,6 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/add_function_tag": InvalidationTier.LOCAL,
     "/remove_function_tag": InvalidationTier.LOCAL,
     "/set_function_tag_comment": InvalidationTier.LOCAL,
-    "/apply_function_documentation": InvalidationTier.LOCAL,
     "/batch_rename_function_components": InvalidationTier.LOCAL,
     "/clear_instruction_flow_override": InvalidationTier.LOCAL,
     "/add_memory_reference": InvalidationTier.LOCAL,
@@ -121,7 +120,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/delete_label": InvalidationTier.CALLERS,
     "/set_function_prototype": InvalidationTier.CALLERS,
     # Renames and re-types the function, so the widest tier of the steps it composes.
-    "/batch_apply_documentation": InvalidationTier.CALLERS,
+    "/apply_documentation": InvalidationTier.CALLERS,
     "/set_function_this_type": InvalidationTier.CALLERS,
     "/set_function_no_return": InvalidationTier.CALLERS,
     "/apply_data_type": InvalidationTier.CALLERS,
