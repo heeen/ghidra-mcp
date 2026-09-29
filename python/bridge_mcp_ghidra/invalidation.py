@@ -120,6 +120,8 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/create_label": InvalidationTier.CALLERS,
     "/delete_label": InvalidationTier.CALLERS,
     "/set_function_prototype": InvalidationTier.CALLERS,
+    # Renames and re-types the function, so the widest tier of the steps it composes.
+    "/batch_apply_documentation": InvalidationTier.CALLERS,
     "/set_function_this_type": InvalidationTier.CALLERS,
     "/set_function_no_return": InvalidationTier.CALLERS,
     "/apply_data_type": InvalidationTier.CALLERS,

@@ -2,6 +2,7 @@ package com.xebyte.offline;
 
 import com.xebyte.core.CoreServices;
 import com.xebyte.core.DebuggerService;
+import com.xebyte.core.DocumentationBatchService;
 import com.xebyte.core.GuiToolService;
 import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.ProjectServerSession;
@@ -37,7 +38,8 @@ public final class ServiceFactory {
             new VersionControlService(provider, new ProjectServerSession(provider)),
             new ServerLifecycleService(core.programScript(), () -> { }),
             // Like DebuggerService, only reflected on: a PluginTool is a runtime concern.
-            new GuiToolService(null));
+            new GuiToolService(null),
+            new DocumentationBatchService(core.function(), core.comment(), core.analysis(), null));
     }
 
     /** Convenience: build a {@link StubProgramProvider}. */

@@ -311,9 +311,7 @@ class TestJavaArchitecture(unittest.TestCase):
 
         # /check_connection, /mcp/health and /mcp/instance_info are McpHttpServer's own,
         # served by both servers and registered via http.route by neither.
-        gui_only_expected = {
-            "/batch_apply_documentation",
-        }
+        gui_only_expected: set[str] = set()
             # /health was the last one: headless-only liveness, retired for the
             # shared /mcp/health.
             # /configure_analyzer, /list_projects and /delete_project were hand-routed
