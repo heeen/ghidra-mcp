@@ -1,6 +1,6 @@
 package com.xebyte.core.checkout;
 
-import com.xebyte.headless.HeadlessPaths;
+import com.xebyte.core.SafePaths;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -61,7 +61,7 @@ public final class CheckoutKey {
      * Basename alone is not unique across project folders; the hash is.
      */
     public String directoryName(String programName) {
-        return HeadlessPaths.safeBasename(programName) + "-" + shortHash();
+        return SafePaths.safeBasename(programName) + "-" + shortHash();
     }
 
     public String domainPath() {

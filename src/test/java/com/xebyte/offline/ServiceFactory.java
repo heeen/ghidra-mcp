@@ -5,6 +5,7 @@ import com.xebyte.core.DebuggerService;
 import com.xebyte.core.DocumentationApplyService;
 import com.xebyte.core.GuiToolService;
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.ProjectLifecycleService;
 import com.xebyte.core.ProjectServerSession;
 import com.xebyte.core.ServerLifecycleService;
 import com.xebyte.core.PromptPolicyService;
@@ -37,6 +38,7 @@ public final class ServiceFactory {
             new PromptPolicyService(),
             new VersionControlService(provider, new ProjectServerSession(provider)),
             new ServerLifecycleService(core.programScript(), () -> { }),
+            new ProjectLifecycleService(new HeadlessProgramProvider()),
             // Like DebuggerService, only reflected on: a PluginTool is a runtime concern.
             new GuiToolService(null),
             new DocumentationApplyService(provider, core.function(), core.comment(), core.symbolLabel(), core.analysis(), null));

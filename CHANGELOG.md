@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**234 endpoints**, 233 of them advertised as MCP tools — 226 served by the GUI
-plugin, 213 by the headless server, 205 by both. One endpoint,
+**234 endpoints**, 233 of them advertised as MCP tools — 230 served by the GUI
+plugin, 213 by the headless server, 209 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
@@ -155,6 +155,21 @@ thousands of per-function MCP round trips. `Read` / `Grep` / `Glob` are the
 client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
+
+- **GZF export/import and GAR archive/restore are served by the GUI too.** They were
+  headless-only because they lived in `HeadlessProgramProvider`, though nothing in them
+  needs headless: both providers hold a `Project`. They are now `ProjectLifecycle` over
+  `ProjectProgramProvider`, with `ProjectLifecycleService` (category `project`) registered
+  by both servers. Only `create_project`, `close_project`, `delete_project` and
+  `list_projects` stay headless-only, since on the GUI they would replace the project the
+  user has open. Three behaviour changes came with the move: `archive_project` refuses
+  while an open program has unsaved changes (the archive would silently lack them);
+  `restore_project` no longer closes the open project, since it only writes a new
+  directory, so it drops to the WRITE tier; and `restore_project` now applies
+  `GHIDRA_MCP_FILE_ROOT` to `gar_path` and `parent_dir`, which it never did while
+  `export_program` and `import_program` did. `HeadlessPaths` became `SafePaths` in `core`
+  (the checkout code already depended on it from there) and `HeadlessArchiveBridge` became
+  `ArchiveBridge`.
 
 - **`apply_documentation` is the one tool for writing a function's documentation.**
   It merges `/apply_function_documentation` (a JSON *string* read with a flat

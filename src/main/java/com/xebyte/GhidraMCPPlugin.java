@@ -52,7 +52,7 @@ import java.util.concurrent.TimeUnit;
     category = PluginCategoryNames.COMMON,
     shortDescription = "GhidraMCP - HTTP server plugin",
     description = "GhidraMCP - Starts an embedded HTTP server to expose program data via REST API and MCP bridge. " +
-                  "Provides 226 endpoints for reverse engineering automation. " +
+                  "Provides 230 endpoints for reverse engineering automation. " +
                   "Port configurable via Tool Options. " +
                   "Features: function analysis, decompilation, symbol management, cross-references, label operations, " +
                   "high-performance batch data analysis, field-level structure analysis, advanced call graph analysis, " +
@@ -409,6 +409,7 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private AnnotationScanner buildScanner() {
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
             services.plus(debuggerService, promptPolicyService,
+                new com.xebyte.core.ProjectLifecycleService(programProvider),
                 new com.xebyte.core.VersionControlService(programProvider,
                     new com.xebyte.core.ProjectServerSession(programProvider)),
                 new com.xebyte.core.ServerLifecycleService(services.programScript(), guiLifecycle()),
