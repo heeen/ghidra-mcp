@@ -326,14 +326,16 @@ docs = get_function_documentation("0x6FAB1234")
 # Returns: name, prototype, plate_comment, parameters, locals, comments, labels
 
 # Apply documentation to another function with matching hash
-apply_function_documentation(
-    target_address="0x6FAC0000",
-    function_name="ProcessPlayerData",
+apply_documentation(
+    address="0x6FAC0000",
+    name="ProcessPlayerData",
     return_type="int",
     calling_convention="__fastcall",
     plate_comment="Processes player data structures.",
     parameters=[{"ordinal": 0, "name": "pPlayer", "type": "Player *"}]
 )
+# Or pass the export straight back: apply_documentation(**docs, target_address="0x6FAC0000")
+# Many functions at once: apply_documentation(entries=[{"address": ..., "name": ...}, ...])
 ```
 
 ### Index Management (High-Level Workflow)

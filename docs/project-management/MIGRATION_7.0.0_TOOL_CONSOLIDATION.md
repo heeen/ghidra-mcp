@@ -108,6 +108,15 @@ fails on a descriptor with no registered route, which is what caught the leftove
    `tests/performance/` set are green. **Open:** deploy → confirm live `/mcp/schema` = 253
    → integration tiers + the four live-Ghidra performance files → fun-doc benchmark.
 
+## One tool for applying documentation
+
+| REMOVE | SURVIVOR | Transform |
+| --- | --- | --- |
+| `apply_function_documentation(json_body)` | `apply_documentation` | Pass the export's fields as parameters instead of one JSON string: `apply_documentation(target_address=..., name=..., parameters=[...], comments=[...], labels=[...])`. |
+
+`apply_documentation` also takes `entries=[...]` for many functions at once, plus the
+prototype, variable-type and variable-rename fields that used to need separate calls.
+
 ## Call-shape changes worth knowing
 
 - **`analyze_function_completeness` bulk mode is a GET** with `addresses` as a
