@@ -54,11 +54,9 @@ public final class ManualToolDescriptors {
     public static final List<String> SHARED_ROUTES = List.of(
         "/batch_apply_documentation",
         "/check_connection",
-        "/exit_ghidra",
         "/mcp/health",
         "/mcp/schema",
         "/open_project",
-        "/server/authenticate",
         "/tool/goto_address",
         "/tool/launch_codebrowser",
         "/tool/running_tools"
@@ -124,7 +122,6 @@ public final class ManualToolDescriptors {
             "Liveness probe: {status, server_kind (gui/headless), version, program when one is current}. Cheap and\n"
             + " token-less, unlike the fuller /mcp/health; both servers answer it identically.",
             ToolAccess.READ_ONLY);
-        add(m, "/exit_ghidra", "POST", "program", "Save and exit Ghidra", ToolAccess.DESTRUCTIVE);
         add(m, "/mcp/health", "GET", "utility", "Server health: kind (gui/headless), build, current program, uptime, HTTP pool, memory, endpoint count", ToolAccess.READ_ONLY);
         add(m, "/mcp/schema", "GET", "utility", "Machine-readable API schema with endpoint metadata", ToolAccess.READ_ONLY);
         // /move_file and /move_folder used to live here: manually routed in the
@@ -143,9 +140,6 @@ public final class ManualToolDescriptors {
             "path", "Path to the project: its .gpr file or the project directory holding it.",
             "headless", "GUI mode only. True (the default) loads the project into the FrontEnd tool without opening a CodeBrowser window; false launches one for `program`. The headless server ignores it.",
             "program", "GUI mode only, and only when headless=false: the DomainFile path to open in the launched CodeBrowser.");
-        add(m, "/server/authenticate", "POST", "server", "Register server credentials for programmatic authentication", ToolAccess.WRITE,
-            "username", "Server username. Omit to fall back to Ghidra's stored PasswordPrompt.Name, then to the OS user name.",
-            "password", "Server password. Required — the call is refused without it.");
         add(m, "/tool/goto_address", "POST", "utility", "Navigate CodeBrowser listing and decompiler to a specific address", ToolAccess.WRITE,
             "address", "Address to navigate to, as 0x<hex> or <space>:<hex>. GUI mode only — it moves a CodeBrowser window.");
         add(m, "/tool/launch_codebrowser", "POST", "utility", "Open a file in CodeBrowser, launching a new one if needed", ToolAccess.WRITE,

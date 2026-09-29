@@ -47,14 +47,13 @@ public class GhidraServerManager implements ServerSession {
 
     private final String host;
     private final int port;
-    private final String user;
-    private final char[] password;
+    private volatile String user;
+    private volatile char[] password;
 
     private RepositoryServerAdapter serverAdapter;
     private final Map<String, RepositoryAdapter> repositoryCache = new HashMap<>();
     private volatile boolean connected = false;
     private String lastError;
-    private static volatile boolean authenticatorRegistered = false;
     /** Open project — DomainFile VC ops need this, not RepositoryAdapter alone. */
 
     public GhidraServerManager() {
@@ -77,25 +76,25 @@ public class GhidraServerManager implements ServerSession {
         registerAuthenticator();
     }
 
-    /**
-     * Register custom authenticator for headless server connections.
-     */
-    private synchronized void registerAuthenticator() {
-        if (authenticatorRegistered) {
+    /** Register the credentials the environment configured, if it configured any. */
+    private void registerAuthenticator() {
+        if (user == null || password == null) {
+            System.out.println("No credentials configured - server connection will use anonymous/default auth");
             return;
         }
-        
-        if (user != null && password != null) {
-            try {
-                ClientUtil.setClientAuthenticator(new GhidraMCPAuthenticator(user, password));
-                authenticatorRegistered = true;
-                System.out.println("Registered GhidraMCP authenticator for user: " + user);
-            } catch (Exception e) {
-                System.err.println("Failed to register authenticator: " + e.getMessage());
-            }
-        } else {
-            System.out.println("No credentials configured - server connection will use anonymous/default auth");
+        try {
+            GhidraMCPAuthenticator.register(user, password);
+            System.out.println("Registered GhidraMCP authenticator for user: " + user);
+        } catch (Exception e) {
+            System.err.println("Failed to register authenticator: " + e.getMessage());
         }
+    }
+
+    @Override
+    public synchronized void useCredentials(String username, char[] newPassword) {
+        this.user = username;
+        this.password = newPassword;
+        registerAuthenticator();
     }
 
     /**

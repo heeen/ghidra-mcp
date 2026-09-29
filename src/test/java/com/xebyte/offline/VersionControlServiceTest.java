@@ -1,6 +1,9 @@
 package com.xebyte.offline;
 
+import com.xebyte.core.Response;
+import com.xebyte.core.ServerSession;
 import com.xebyte.core.VersionControlService;
+import ghidra.framework.client.RepositoryServerAdapter;
 import ghidra.framework.remote.User;
 import junit.framework.TestCase;
 
@@ -71,5 +74,49 @@ public class VersionControlServiceTest extends TestCase {
         assertNull(VersionControlService.parseAccessLevel(""));
         assertNull(VersionControlService.parseAccessLevel(null));
         assertNull(VersionControlService.parseAccessLevel("root"));
+    }
+
+    /** A session that records what it is given and never touches Ghidra's client. */
+    private static final class RecordingSession implements ServerSession {
+        String user;
+        char[] password;
+
+        @Override public RepositoryServerAdapter server() { return null; }
+        @Override public Response connect() { return Response.ok(java.util.Map.of()); }
+        @Override public Response disconnect() { return Response.ok(java.util.Map.of()); }
+        @Override public java.util.Map<String, Object> status() { return java.util.Map.of(); }
+        @Override public void useCredentials(String username, char[] pw) { user = username; password = pw; }
+    }
+
+    public void testAuthenticateHandsTheCredentialsToTheSession() {
+        RecordingSession session = new RecordingSession();
+        VersionControlService svc = new VersionControlService(new StubProgramProvider(), session);
+
+        Response r = svc.authenticate("alice", "s3cret");
+
+        assertTrue(r.toString(), r instanceof Response.Ok);
+        assertEquals("alice", session.user);
+        assertEquals("s3cret", new String(session.password));
+        assertFalse("the password must not be echoed back", r.toJson().contains("s3cret"));
+        assertTrue(r.toJson().contains("alice"));
+    }
+
+    public void testAuthenticateRefusesWithoutAPassword() {
+        RecordingSession session = new RecordingSession();
+        VersionControlService svc = new VersionControlService(new StubProgramProvider(), session);
+
+        assertTrue(svc.authenticate("alice", "") instanceof Response.Err);
+        assertTrue(svc.authenticate("alice", null) instanceof Response.Err);
+        assertNull("nothing may be registered on a refused call", session.user);
+    }
+
+    public void testServerRoutesSayNotConnectedWhenThereIsNoServer() {
+        VersionControlService svc = new VersionControlService(new StubProgramProvider(), new RecordingSession());
+        for (Response r : new Response[] {svc.repositories(), svc.users(),
+                svc.repositoryFiles("r", "/"), svc.repositoryFile("r", "/a"),
+                svc.createRepository("r"), svc.setPermissions("r", "u", "admin")}) {
+            assertTrue(r.toString(), r instanceof Response.Err);
+            assertTrue(r.toString(), r.toString().contains("Not connected to server"));
+        }
     }
 }

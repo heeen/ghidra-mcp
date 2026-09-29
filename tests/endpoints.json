@@ -3132,7 +3132,8 @@
         "password"
       ],
       "servers": [
-        "gui"
+        "gui",
+        "headless"
       ],
       "description": "Register server credentials for programmatic authentication"
     },

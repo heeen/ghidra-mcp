@@ -313,7 +313,6 @@ class TestJavaArchitecture(unittest.TestCase):
         # served by both servers and registered via http.route by neither.
         gui_only_expected = {
             "/batch_apply_documentation",
-            "/server/authenticate",
             "/tool/goto_address",
             "/tool/launch_codebrowser",
             "/tool/running_tools",

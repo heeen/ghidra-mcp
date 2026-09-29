@@ -394,16 +394,18 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
         // ==========================================================================
 
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
-            services.plus(managementService, new VersionControlService(programProvider, serverManager)));
+            services.plus(managementService, new VersionControlService(programProvider, serverManager),
+                new com.xebyte.core.ServerLifecycleService(services.programScript(),
+                    () -> System.exit(0))));
 
         http.endpoints(scanner);
 
-        // The routes with no @McpTool method: /exit_ghidra is registered below, and the
-        // other three are McpHttpServer's own. All are live and callable, but without a
-        // descriptor they stayed out of /mcp/schema and so out of the bridge's dynamic
-        // tool discovery. ManualToolDescriptors is the shared metadata source.
+        // These three are McpHttpServer's own routes, with no @McpTool method. They are live
+        // and callable, but without a descriptor they stayed out of /mcp/schema and so out
+        // of the bridge's dynamic tool discovery. ManualToolDescriptors is the shared
+        // metadata source.
         com.xebyte.core.ManualToolDescriptors.addAll(scanner,
-            "/check_connection", "/exit_ghidra", "/mcp/health", "/mcp/schema");
+            "/check_connection", "/mcp/health", "/mcp/schema");
         // Store scanner size for dynamic endpoint count reporting. Now includes
         // both the dispatch-table (@McpTool-scanned) endpoints and the manually-
         // registered routes just added to the schema above -- countEndpoints()
@@ -433,28 +435,7 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
 
         // --- Exit ---
 
-        http.route("/exit_ghidra", exchange -> {
-            sendResponse(exchange, exitServer());
-        });
-
         System.out.println("Registered " + countEndpoints() + " REST API endpoints");
-    }
-
-    /**
-     * Save every open program, answer with what was saved, then exit. The GUI's
-     * /exit_ghidra always did this; headless used to exit and leave the saving to the
-     * shutdown hook, after the caller had already been told it was done.
-     */
-    private String exitServer() {
-        Object saved = services.programScript().saveAllOpenPrograms().asEmbeddable();
-        new Thread(() -> {
-            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-            System.exit(0);
-        }).start();
-        return JsonHelper.toJson(JsonHelper.mapOf(
-            "success", true,
-            "message", "Saving all open programs, then exiting",
-            "save", JsonHelper.mapOf("programs", saved)));
     }
 
     private int countEndpoints() {

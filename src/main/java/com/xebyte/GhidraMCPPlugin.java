@@ -121,8 +121,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // nest on the same thread (see AnnotationScanner.createHandler).
     private final com.xebyte.core.ThreadingStrategy threadingStrategy;
 
-    // Server authenticator for programmatic login (bypasses GUI password dialog)
-    private com.xebyte.core.GhidraMCPAuthenticator authenticator;
 
     // Service layer for delegated operations
     private final com.xebyte.core.CoreServices services;
@@ -173,7 +171,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             new com.xebyte.core.GhidraMCPAuthInitializer().run();
         }
         if (com.xebyte.core.GhidraMCPAuthInitializer.isRegistered()) {
-            this.authenticator = com.xebyte.core.GhidraMCPAuthInitializer.getAuthenticator();
             Msg.info(this, "GhidraMCP: Server authenticator registered — auto-login active");
         } else {
             Msg.info(this, "GhidraMCP: No server credentials configured — GUI auth will be used");
@@ -418,7 +415,8 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         AnnotationScanner scanner = new AnnotationScanner(programProvider, threadingStrategy,
             services.plus(debuggerService, promptPolicyService,
                 new com.xebyte.core.VersionControlService(programProvider,
-                    new com.xebyte.core.ProjectServerSession(programProvider))));
+                    new com.xebyte.core.ProjectServerSession(programProvider)),
+                new com.xebyte.core.ServerLifecycleService(services.programScript(), guiLifecycle())));
         // The hand-coded routes are live on every transport, but the scanner only
         // knows annotated methods; without this they stay out of /mcp/schema and so
         // out of the bridge's dynamic tool discovery.
@@ -578,11 +576,28 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     // Program Management Methods
     // ----------------------------------------------------------------------------------
 
-    private Map<String, Object> saveEverythingBeforeExit() {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("programs", programScriptService.saveAllOpenPrograms().asEmbeddable());
-        result.put("traces", saveAllOpenDebuggerTraces());
-        return result;
+    /**
+     * What the GUI adds to the shared {@code /exit_ghidra}: answer Ghidra's own prompts while
+     * it saves, save the debugger traces too, and close the tools without writing their
+     * layouts back.
+     */
+    private com.xebyte.core.ServerLifecycle guiLifecycle() {
+        return new com.xebyte.core.ServerLifecycle() {
+            @Override
+            public void prepare() {
+                promptPolicyService.enableFor("exit_ghidra", 30);
+            }
+
+            @Override
+            public Map<String, Object> saveExtras() {
+                return Map.of("traces", saveAllOpenDebuggerTraces());
+            }
+
+            @Override
+            public void exit() {
+                SwingUtilities.invokeLater(GhidraMCPPlugin.this::closeGhidraWithoutSavingToolLayouts);
+            }
+        };
     }
 
     private void closeGhidraWithoutSavingToolLayouts() {
@@ -779,28 +794,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             sendResponse(exchange, openProject(projectPath, headless, programToLaunch));
         });
 
-        http.route("/exit_ghidra", exchange -> {
-            try {
-                promptPolicyService.enableFor("exit_ghidra", 30);
-                Map<String, Object> saveResult = saveEverythingBeforeExit();
-                sendResponse(exchange, JsonHelper.toJson(JsonHelper.mapOf(
-                    "success", true,
-                    "message", "Saving all open programs and traces, then exiting Ghidra",
-                    "save", saveResult
-                )));
-                // Schedule exit after response is sent
-                new Thread(() -> {
-                    try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                    SwingUtilities.invokeLater(() -> {
-                        closeGhidraWithoutSavingToolLayouts();
-                    });
-                }).start();
-            } catch (Throwable e) {
-                String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-                sendResponse(exchange, "{\"error\": \"" + msg.replace("\"", "\\\"") + "\"}");
-            }
-        });
-
         // The /server/* version-control and repository routes are @McpTools on
         // VersionControlService, over the open project and a ProjectServerSession.
 
@@ -830,12 +823,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             sendResponse(exchange, batchApplyDocumentation(params));
         });
 
-        http.route("/server/authenticate", exchange -> {
-            Map<String, Object> params = parseJsonParams(exchange);
-            String username = params.get("username") != null ? params.get("username").toString() : null;
-            String password = params.get("password") != null ? params.get("password").toString() : null;
-            sendResponse(exchange, authenticateServer(username, password));
-        });
     }
 
     private void sendResponse(HttpExchange exchange, String response) throws IOException {
@@ -1668,38 +1655,6 @@ public class GhidraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
             }
         } catch (Exception e) {
             return "{\"error\": \"Failed to navigate: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    private String authenticateServer(String username, String password) {
-        try {
-            if (password == null || password.isEmpty()) {
-                return "{\"error\": \"Password is required\"}";
-            }
-            // Resolve username if not provided
-            if (username == null || username.isEmpty()) {
-                username = ghidra.framework.preferences.Preferences.getProperty("PasswordPrompt.Name");
-            }
-            if (username == null || username.isEmpty()) {
-                username = System.getProperty("user.name");
-            }
-
-            char[] passwordChars = password.toCharArray();
-            if (this.authenticator != null) {
-                // Update existing authenticator
-                this.authenticator.updateCredentials(username, passwordChars);
-                Msg.info(this, "GhidraMCP: Updated server credentials for user: " + username);
-            } else {
-                // Create and register new authenticator
-                this.authenticator = new com.xebyte.core.GhidraMCPAuthenticator(username, passwordChars);
-                ghidra.framework.client.ClientUtil.setClientAuthenticator(this.authenticator);
-                Msg.info(this, "GhidraMCP: Registered server authenticator for user: " + username);
-            }
-
-            return "{\"success\": true, \"message\": \"Server credentials registered\", " +
-                "\"username\": \"" + escapeJson(username) + "\"}";
-        } catch (Exception e) {
-            return "{\"error\": \"Failed to register authenticator: " + escapeJson(e.getMessage()) + "\"}";
         }
     }
 
