@@ -16,21 +16,14 @@
 package com.xebyte.headless;
 
 import com.xebyte.core.GhidraMCPAuthenticator;
-import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.Response;
+import com.xebyte.core.ServerSession;
 import ghidra.framework.client.ClientUtil;
 import ghidra.framework.client.RepositoryAdapter;
 import ghidra.framework.client.RepositoryServerAdapter;
-import ghidra.framework.data.CheckinHandler;
-import ghidra.framework.model.DomainFile;
-import ghidra.framework.model.Project;
-import ghidra.framework.model.ProjectData;
-import ghidra.framework.remote.RepositoryItem;
-import ghidra.framework.remote.User;
-import ghidra.framework.store.ItemCheckoutStatus;
-import ghidra.framework.store.Version;
-import ghidra.util.task.ConsoleTaskMonitor;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.io.IOException;
 
@@ -47,7 +40,7 @@ import java.io.IOException;
  *   <li>GHIDRA_SERVER_PASSWORD - Service account password (required for auth)</li>
  * </ul>
  */
-public class GhidraServerManager {
+public class GhidraServerManager implements ServerSession {
 
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 13100;
@@ -63,7 +56,6 @@ public class GhidraServerManager {
     private String lastError;
     private static volatile boolean authenticatorRegistered = false;
     /** Open project — DomainFile VC ops need this, not RepositoryAdapter alone. */
-    private volatile ProgramProvider programProvider;
 
     public GhidraServerManager() {
         this.host = getEnvOrDefault("GHIDRA_SERVER_HOST", DEFAULT_HOST);
@@ -107,20 +99,18 @@ public class GhidraServerManager {
     }
 
     /**
-     * Connect to the configured Ghidra server.
-     *
-     * @return JSON string with connection result
+     * Connect with the credentials the environment configured. Already connected is
+     * reported, not repeated.
      */
-    public synchronized String connect() {
+    @Override
+    public synchronized Response connect() {
         if (connected && serverAdapter != null && serverAdapter.isConnected()) {
-            return "{\"status\": \"already_connected\", \"host\": \"" + escapeJson(host)
-                    + "\", \"port\": " + port + ", \"user\": \"" + escapeJson(user) + "\"}";
+            return Response.ok(connection("already_connected"));
         }
 
-        // Verify credentials are configured
         if (user == null || password == null) {
             lastError = "Credentials not configured. Set GHIDRA_SERVER_USER and GHIDRA_SERVER_PASSWORD";
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+            return Response.err(lastError);
         }
 
         try {
@@ -132,107 +122,72 @@ public class GhidraServerManager {
 
             if (connected) {
                 System.out.println("Connected to Ghidra server at " + host + ":" + port + " as " + user);
-                return "{\"status\": \"connected\", \"host\": \"" + escapeJson(host)
-                        + "\", \"port\": " + port + ", \"user\": \"" + escapeJson(user) + "\"}";
-            } else {
-                lastError = "Connection returned but server reports not connected";
-                return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+                return Response.ok(connection("connected"));
             }
+            lastError = "Connection returned but server reports not connected";
+            return Response.err(lastError);
         } catch (Exception e) {
             connected = false;
             lastError = e.getMessage();
             System.err.println("Failed to connect to Ghidra server at " + host + ":" + port
                     + " - " + e.getMessage());
             e.printStackTrace();
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError)
-                    + "\", \"host\": \"" + escapeJson(host) + "\", \"port\": " + port + "}";
+            return Response.err(lastError + " (" + host + ":" + port + ")");
         }
     }
 
-    /**
-     * Disconnect from the Ghidra server.
-     *
-     * @return JSON string with disconnect result
-     */
-    public synchronized String disconnect() {
+    private Map<String, Object> connection(String status) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", status);
+        out.put("host", host);
+        out.put("port", port);
+        out.put("user", user);
+        return out;
+    }
+
+    @Override
+    public synchronized Response disconnect() {
         if (!connected || serverAdapter == null) {
-            return "{\"status\": \"not_connected\"}";
+            return Response.ok(Map.of("status", "not_connected"));
         }
 
         try {
             serverAdapter.disconnect();
-            connected = false;
-            serverAdapter = null;
-            lastError = null;
             System.out.println("Disconnected from Ghidra server");
-            return "{\"status\": \"disconnected\"}";
+            lastError = null;
+            return Response.ok(Map.of("status", "disconnected"));
         } catch (Exception e) {
             lastError = e.getMessage();
+            return Response.err(lastError);
+        } finally {
             connected = false;
             serverAdapter = null;
-            return "{\"status\": \"error\", \"error\": \"" + escapeJson(lastError) + "\"}";
+            repositoryCache.clear();
         }
     }
 
-    /**
-     * Get the current connection status.
-     *
-     * @return JSON string with connection status details
-     */
-    public String getStatus() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"connected\": ").append(connected);
-        sb.append(", \"host\": \"").append(escapeJson(host)).append("\"");
-        sb.append(", \"port\": ").append(port);
-
+    @Override
+    public Map<String, Object> status() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("connected", connected);
+        out.put("host", host);
+        out.put("port", port);
         if (user != null && !user.isEmpty()) {
-            sb.append(", \"user\": \"").append(escapeJson(user)).append("\"");
+            out.put("user", user);
         }
-        
-        sb.append(", \"credentials_configured\": ").append(user != null && password != null);
-
+        out.put("credentials_configured", user != null && password != null);
         if (connected && serverAdapter != null) {
-            sb.append(", \"server_connected\": ").append(serverAdapter.isConnected());
+            out.put("server_connected", serverAdapter.isConnected());
         }
-
         if (lastError != null) {
-            sb.append(", \"last_error\": \"").append(escapeJson(lastError)).append("\"");
+            out.put("last_error", lastError);
         }
-
-        sb.append("}");
-        return sb.toString();
+        return out;
     }
 
-    /**
-     * List available repositories on the connected server.
-     *
-     * @return JSON string with repository list
-     */
-    public String listRepositories() {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-
-        if (!serverAdapter.isConnected()) {
-            connected = false;
-            return "{\"error\": \"Server connection lost. Reconnect with /server/connect.\"}";
-        }
-
-        try {
-            String[] repoNames = serverAdapter.getRepositoryNames();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repositories\": [");
-            for (int i = 0; i < repoNames.length; i++) {
-                if (i > 0) sb.append(", ");
-                sb.append("\"").append(escapeJson(repoNames[i])).append("\"");
-            }
-            sb.append("], \"count\": ").append(repoNames.length).append("}");
-            return sb.toString();
-        } catch (IOException e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to list repositories: " + escapeJson(e.getMessage()) + "\"}";
-        }
+    @Override
+    public RepositoryServerAdapter server() {
+        return isConnected() ? serverAdapter : null;
     }
 
     /**
@@ -252,671 +207,6 @@ public class GhidraServerManager {
             }
         }
         return repo;
-    }
-
-    /**
-     * List files and folders in a repository path.
-     * 
-     * @param repoName Repository name (e.g., "pd2")
-     * @param path Folder path (e.g., "/Classic/1.00" or "/" for root)
-     * @return JSON string with file/folder listing
-     */
-    public String listRepositoryFiles(String repoName, String path) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        
-        if (repoName == null || repoName.isEmpty()) {
-            return "{\"error\": \"Repository name required.\"}";
-        }
-        
-        if (path == null || path.isEmpty()) {
-            path = "/";
-        }
-        
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            
-            // List folder contents
-            String[] subfolders = repo.getSubfolderList(path);
-            RepositoryItem[] items = repo.getItemList(path);
-            
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(path)).append("\"");
-            
-            // Folders
-            sb.append(", \"folders\": [");
-            if (subfolders != null) {
-                for (int i = 0; i < subfolders.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append("\"").append(escapeJson(subfolders[i])).append("\"");
-                }
-            }
-            sb.append("]");
-            
-            // Files
-            sb.append(", \"files\": [");
-            if (items != null) {
-                for (int i = 0; i < items.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    RepositoryItem item = items[i];
-                    sb.append("{");
-                    sb.append("\"name\": \"").append(escapeJson(item.getName())).append("\"");
-                    sb.append(", \"path\": \"").append(escapeJson(item.getPathName())).append("\"");
-                    sb.append(", \"type\": \"").append(escapeJson(item.getContentType())).append("\"");
-                    sb.append(", \"version\": ").append(item.getVersion());
-                    sb.append("}");
-                }
-            }
-            sb.append("]");
-            
-            int totalCount = (subfolders != null ? subfolders.length : 0) + (items != null ? items.length : 0);
-            sb.append(", \"total_count\": ").append(totalCount);
-            sb.append("}");
-            
-            return sb.toString();
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to list files: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Get file metadata for a specific file in the repository.
-     */
-    public String getFileInfo(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        
-        if (repoName == null || filePath == null) {
-            return "{\"error\": \"Repository name and file path required.\"}";
-        }
-        
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            
-            // Parse path to get parent folder and file name
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            
-            RepositoryItem item = repo.getItem(parentPath, fileName);
-            if (item == null) {
-                return "{\"error\": \"File not found: " + escapeJson(filePath) + "\"}";
-            }
-            
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"name\": \"").append(escapeJson(item.getName())).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(item.getPathName())).append("\"");
-            sb.append(", \"type\": \"").append(escapeJson(item.getContentType())).append("\"");
-            sb.append(", \"version\": ").append(item.getVersion());
-            sb.append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to get file info: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Create a new repository on the connected server.
-     *
-     * @param name Repository name
-     * @return JSON string with result
-     */
-    public synchronized String createRepository(String name) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server. Use /server/connect first.\"}";
-        }
-        if (name == null || name.trim().isEmpty()) {
-            return "{\"error\": \"Repository name required.\"}";
-        }
-        try {
-            RepositoryAdapter repo = serverAdapter.createRepository(name.trim());
-            if (repo != null) {
-                repo.connect();
-                repositoryCache.put(name.trim(), repo);
-                return "{\"status\": \"created\", \"repository\": \"" + escapeJson(name.trim()) + "\"}";
-            } else {
-                return "{\"error\": \"Failed to create repository: server returned null\"}";
-            }
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to create repository: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Check out a file from the open shared project into a local working copy.
-     *
-     * <p>RepositoryAdapter.checkout only takes a server-side lock — without a
-     * bound project there is nowhere to put the working copy. Requires
-     * {@code /open_project} with a {@code ghidra://} URL (or a GUI-created
-     * shared .gpr) first.
-     *
-     * @param repoName Repository name (must match the open project's repo when set)
-     * @param filePath File path within the project (e.g. {@code /gnutrue})
-     * @return JSON string with result
-     */
-    public String checkoutFile(String repoName, String filePath) {
-        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
-        if (resolved.errorJson != null) {
-            return resolved.errorJson;
-        }
-        DomainFile file = resolved.file;
-        try {
-            boolean success = file.checkout(/*exclusive*/ true, new ConsoleTaskMonitor());
-            return vcStatusJson(success ? "checked_out" : "checkout_failed",
-                    resolved.repoName, filePath, file, null);
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Checkout failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Check in a file's local working copy to the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the project
-     * @param comment Check-in comment
-     * @param keepCheckedOut If true, file remains checked out after check-in
-     * @return JSON string with result
-     */
-    public String checkinFile(String repoName, String filePath, String comment, boolean keepCheckedOut) {
-        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
-        if (resolved.errorJson != null) {
-            return resolved.errorJson;
-        }
-        DomainFile file = resolved.file;
-        if (!file.isCheckedOut()) {
-            return "{\"error\": \"File is not checked out: " + escapeJson(filePath) + "\"}";
-        }
-        final String cmt = comment != null ? comment : "";
-        final boolean keep = keepCheckedOut;
-        try {
-            file.checkin(new CheckinHandler() {
-                @Override public boolean keepCheckedOut() { return keep; }
-                @Override public String getComment() { return cmt; }
-                @Override public boolean createKeepFile() { return false; }
-            }, new ConsoleTaskMonitor());
-            return vcStatusJson("checked_in", resolved.repoName, filePath, file,
-                    ", \"comment\": \"" + escapeJson(cmt) + "\", \"keep_checked_out\": " + keep);
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Checkin failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Undo a checkout, discarding local changes.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the project
-     * @return JSON string with result
-     */
-    public String undoCheckout(String repoName, String filePath) {
-        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
-        if (resolved.errorJson != null) {
-            return resolved.errorJson;
-        }
-        DomainFile file = resolved.file;
-        if (!file.isCheckedOut()) {
-            return "{\"error\": \"File is not checked out: " + escapeJson(filePath) + "\"}";
-        }
-        try {
-            file.undoCheckout(/*keep*/ false);
-            return vcStatusJson("checkout_undone", resolved.repoName, filePath, file, null);
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Undo checkout failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Add a project file to version control on the bound repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the project
-     * @param comment Initial version comment
-     * @return JSON string with result
-     */
-    public String addToVersionControl(String repoName, String filePath, String comment) {
-        DomainFileResolution resolved = resolveDomainFile(repoName, filePath);
-        if (resolved.errorJson != null) {
-            return resolved.errorJson;
-        }
-        DomainFile file = resolved.file;
-        if (file.isVersioned()) {
-            return "{\"error\": \"File already under version control: " + escapeJson(filePath) + "\"}";
-        }
-        String cmt = comment != null ? comment : "";
-        try {
-            file.addToVersionControl(cmt, /*keepCheckedOut*/ false, new ConsoleTaskMonitor());
-            return vcStatusJson("added", resolved.repoName, filePath, file,
-                    ", \"comment\": \"" + escapeJson(cmt) + "\"");
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Add to version control failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Resolve a DomainFile from the open shared project. VC bookkeeping lives
-     * on the DomainFile, not on RepositoryAdapter.
-     */
-    private DomainFileResolution resolveDomainFile(String repoName, String filePath) {
-        if (filePath == null || filePath.isBlank()) {
-            return DomainFileResolution.error("{\"error\": \"'path' parameter required\"}");
-        }
-        if (programProvider == null) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"Program provider not wired — cannot resolve DomainFile\"}");
-        }
-        Project project = programProvider.getProject();
-        if (project == null) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"No shared project open. Call /open_project with a "
-                            + "ghidra://host[:port]/repo URL first.\"}");
-        }
-        ProjectData data;
-        try {
-            data = project.getProjectData();
-        } catch (Exception e) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"Could not access project data: "
-                            + escapeJson(e.getMessage()) + "\"}");
-        }
-        RepositoryAdapter projectRepo = data.getRepository();
-        if (projectRepo == null) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"Open project is local-only (not server-bound). "
-                            + "Re-open via /open_project with a ghidra:// URL.\"}");
-        }
-        String boundRepo = projectRepo.getName();
-        if (repoName != null && !repoName.isBlank() && !repoName.equals(boundRepo)) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"Repository mismatch: open project is bound to '"
-                            + escapeJson(boundRepo) + "' but request named '"
-                            + escapeJson(repoName) + "'\"}");
-        }
-        String normalized = filePath.startsWith("/") ? filePath : "/" + filePath;
-        DomainFile file = data.getFile(normalized);
-        if (file == null) {
-            return DomainFileResolution.error(
-                    "{\"error\": \"File not found in project: " + escapeJson(normalized)
-                            + "\", \"hint\": \"list paths via /get_project_info; "
-                            + "do not auto-open every repository file\"}");
-        }
-        return DomainFileResolution.ok(file, boundRepo);
-    }
-
-    private String vcStatusJson(String status, String repoName, String filePath,
-                                DomainFile file, String extraFields) {
-        // Re-read the file after the operation rather than reporting off the
-        // instance we just acted on, whose version-control state is cached.
-        //
-        // Note what this does NOT claim: a checkin with keepCheckedOut=false
-        // answering "isCheckedOut": true is not necessarily stale. Measured
-        // against a live server, the checkout genuinely survived that checkin
-        // (/server/checkouts still listed it, and a re-checkout failed with
-        // "private file exists"). Refreshing is what makes the field mean
-        // "the state now" either way, which is the only way to tell the two
-        // apart.
-        DomainFile current = refreshed(file, filePath);
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"status\": \"").append(escapeJson(status)).append("\"");
-        sb.append(", \"repository\": \"").append(escapeJson(repoName)).append("\"");
-        sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
-        sb.append(", \"isCheckedOut\": ").append(current.isCheckedOut());
-        sb.append(", \"canCheckin\": ").append(current.canCheckin());
-        sb.append(", \"modifiedSinceCheckout\": ").append(current.modifiedSinceCheckout());
-        sb.append(", \"isVersioned\": ").append(current.isVersioned());
-        if (extraFields != null) {
-            sb.append(extraFields);
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    /**
-     * Re-resolve a DomainFile through its project so post-operation state is
-     * read fresh. Falls back to the original instance when the project or the
-     * path cannot be re-read — a stale-but-present answer beats an exception in
-     * a status payload.
-     */
-    private DomainFile refreshed(DomainFile file, String filePath) {
-        try {
-            ghidra.framework.model.ProjectData data = file.getParent().getProjectData();
-            data.refresh(true);
-            DomainFile again = data.getFile(filePath);
-            return again != null ? again : file;
-        } catch (Exception e) {
-            return file;
-        }
-    }
-
-    private static final class DomainFileResolution {
-        final DomainFile file;
-        final String repoName;
-        final String errorJson;
-
-        private DomainFileResolution(DomainFile file, String repoName, String errorJson) {
-            this.file = file;
-            this.repoName = repoName;
-            this.errorJson = errorJson;
-        }
-
-        static DomainFileResolution ok(DomainFile file, String repoName) {
-            return new DomainFileResolution(file, repoName, null);
-        }
-
-        static DomainFileResolution error(String json) {
-            return new DomainFileResolution(null, null, json);
-        }
-    }
-
-    /**
-     * Get the version history of a file in the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with version history
-     */
-    public String getVersionHistory(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            Version[] versions = repo.getVersions(parentPath, fileName);
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
-            sb.append(", \"versions\": [");
-            if (versions != null) {
-                for (int i = 0; i < versions.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    Version v = versions[i];
-                    sb.append("{\"version\": ").append(v.getVersion());
-                    sb.append(", \"user\": \"").append(escapeJson(v.getUser())).append("\"");
-                    sb.append(", \"comment\": \"").append(escapeJson(v.getComment())).append("\"");
-                    sb.append(", \"date\": \"").append(v.getCreateTime()).append("\"");
-                    sb.append("}");
-                }
-            }
-            sb.append("], \"count\": ").append(versions != null ? versions.length : 0).append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to get version history: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Get current checkouts for a file in the repository.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @return JSON string with checkout list
-     */
-    public String getCheckouts(String repoName, String filePath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            ItemCheckoutStatus[] checkouts = repo.getCheckouts(parentPath, fileName);
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"repository\": \"").append(escapeJson(repoName)).append("\"");
-            sb.append(", \"path\": \"").append(escapeJson(filePath)).append("\"");
-            sb.append(", \"checkouts\": [");
-            if (checkouts != null) {
-                for (int i = 0; i < checkouts.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    ItemCheckoutStatus cs = checkouts[i];
-                    sb.append("{\"checkout_id\": ").append(cs.getCheckoutId());
-                    sb.append(", \"user\": \"").append(escapeJson(cs.getUser())).append("\"");
-                    sb.append(", \"project_name\": \"").append(escapeJson(cs.getProjectName())).append("\"");
-                    sb.append(", \"checkout_version\": ").append(cs.getCheckoutVersion());
-                    sb.append("}");
-                }
-            }
-            sb.append("], \"count\": ").append(checkouts != null ? checkouts.length : 0).append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to get checkouts: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Admin: forcibly terminate another user's checkout.
-     *
-     * @param repoName Repository name
-     * @param filePath File path within the repository
-     * @param checkoutId The checkout ID to terminate
-     * @return JSON string with result
-     */
-    public String terminateCheckout(String repoName, String filePath, long checkoutId) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            int lastSlash = filePath.lastIndexOf('/');
-            String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-            String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-            repo.terminateCheckout(parentPath, fileName, checkoutId, false);
-            return "{\"status\": \"checkout_terminated\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"path\": \"" + escapeJson(filePath) + "\", \"checkout_id\": " + checkoutId + "}";
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Terminate checkout failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Admin: forcibly terminate every checkout under a repository folder.
-     *
-     * @param repoName Repository name
-     * @param folderPath Folder path within the repository
-     * @return JSON string with result summary
-     */
-    public String terminateAllCheckouts(String repoName, String folderPath) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        if (repoName == null || repoName.isEmpty()) {
-            return "{\"error\": \"Repository name required.\"}";
-        }
-        if (folderPath == null || folderPath.isEmpty()) {
-            folderPath = "/";
-        }
-
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-
-            StringBuilder details = new StringBuilder();
-            details.append("[");
-            int[] counts = {0, 0};
-            terminateCheckoutsRecursive(repo, folderPath, details, counts);
-            details.append("]");
-
-            return "{\"status\": \"terminated\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"folder\": \"" + escapeJson(folderPath) + "\"" +
-                   ", \"files_with_checkouts\": " + counts[0] +
-                   ", \"checkouts_terminated\": " + counts[1] +
-                   ", \"details\": " + details + "}";
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Terminate all checkouts failed: " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    private void terminateCheckoutsRecursive(
-            RepositoryAdapter repo, String folderPath, StringBuilder details, int[] counts)
-            throws IOException {
-        RepositoryItem[] items = repo.getItemList(folderPath);
-        if (items != null) {
-            for (RepositoryItem item : items) {
-                String filePath = item.getPathName();
-                int lastSlash = filePath.lastIndexOf('/');
-                String parentPath = lastSlash > 0 ? filePath.substring(0, lastSlash) : "/";
-                String fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
-                try {
-                    ItemCheckoutStatus[] checkouts = repo.getCheckouts(parentPath, fileName);
-                    if (checkouts == null || checkouts.length == 0) {
-                        continue;
-                    }
-
-                    int terminated = 0;
-                    for (ItemCheckoutStatus cs : checkouts) {
-                        try {
-                            repo.terminateCheckout(parentPath, fileName, cs.getCheckoutId(), false);
-                            terminated++;
-                        } catch (Exception ignored) {
-                            // Continue through the folder and report partial progress.
-                        }
-                    }
-
-                    if (counts[0] > 0) details.append(", ");
-                    details.append("{\"path\": \"").append(escapeJson(filePath)).append("\"");
-                    details.append(", \"terminated\": ").append(terminated);
-                    details.append(", \"total\": ").append(checkouts.length).append("}");
-                    counts[0]++;
-                    counts[1] += terminated;
-                } catch (Exception ignored) {
-                    // Skip files that disappear or reject checkout queries mid-walk.
-                }
-            }
-        }
-
-        String[] subfolders = repo.getSubfolderList(folderPath);
-        if (subfolders != null) {
-            for (String subfolder : subfolders) {
-                String childPath = "/".equals(folderPath)
-                    ? "/" + subfolder
-                    : folderPath + "/" + subfolder;
-                terminateCheckoutsRecursive(repo, childPath, details, counts);
-            }
-        }
-    }
-
-    /**
-     * Admin: list all users registered on the server.
-     *
-     * @return JSON string with user list
-     */
-    public String listServerUsers() {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        try {
-            String[] userNames = serverAdapter.getAllUsers();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"users\": [");
-            if (userNames != null) {
-                for (int i = 0; i < userNames.length; i++) {
-                    if (i > 0) sb.append(", ");
-                    sb.append("{\"name\": \"").append(escapeJson(userNames[i])).append("\"}");
-                }
-            }
-            sb.append("], \"count\": ").append(userNames != null ? userNames.length : 0).append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to list users (admin access required): " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Admin: set a user's access level for a repository.
-     *
-     * @param repoName Repository name
-     * @param userName User name
-     * @param accessLevel Access level (0=no_access, 1=read_only, 2=read_write, 3=admin)
-     * @return JSON string with result
-     */
-    public String setUserPermissions(String repoName, String userName, int accessLevel) {
-        if (!connected || serverAdapter == null) {
-            return "{\"error\": \"Not connected to server.\"}";
-        }
-        try {
-            RepositoryAdapter repo = getRepository(repoName);
-            if (repo == null) {
-                return "{\"error\": \"Repository not found: " + escapeJson(repoName) + "\"}";
-            }
-            // setUserList REPLACES the repository ACL wholesale — passing a
-            // single-element array would silently strip every other user
-            // (including admins) from the repo. Fetch the existing list,
-            // merge/replace the one entry, and preserve the current
-            // anonymous-access flag.
-            User[] existing = repo.getUserList();
-            boolean anon = repo.anonymousAccessAllowed();
-            User[] merged = mergeUserPermission(existing, userName, accessLevel);
-            repo.setUserList(merged, anon);
-            return "{\"status\": \"permissions_set\", \"repository\": \"" + escapeJson(repoName) +
-                   "\", \"user\": \"" + escapeJson(userName) + "\", \"access_level\": " + accessLevel +
-                   ", \"total_users\": " + merged.length +
-                   ", \"anonymous_access\": " + anon + "}";
-        } catch (Exception e) {
-            lastError = e.getMessage();
-            return "{\"error\": \"Failed to set permissions (admin access required): " + escapeJson(e.getMessage()) + "\"}";
-        }
-    }
-
-    /**
-     * Merge a single user's permission into an existing ACL array.
-     * <p>
-     * If a user with {@code userName} already exists, that entry is replaced
-     * with the new access level and all other entries are preserved in their
-     * original order. If no such user exists, a new entry is appended.
-     * Returns a fresh array; the input is not mutated.
-     */
-    public static User[] mergeUserPermission(User[] existing, String userName, int accessLevel) {
-        User updated = new User(userName, accessLevel);
-        if (existing == null || existing.length == 0) {
-            return new User[]{ updated };
-        }
-        for (int i = 0; i < existing.length; i++) {
-            if (existing[i] != null && userName.equals(existing[i].getName())) {
-                User[] out = existing.clone();
-                out[i] = updated;
-                return out;
-            }
-        }
-        User[] out = new User[existing.length + 1];
-        System.arraycopy(existing, 0, out, 0, existing.length);
-        out[existing.length] = updated;
-        return out;
     }
 
     public boolean isConnected() {
@@ -943,9 +233,6 @@ public class GhidraServerManager {
      * Wire the open-project handle so version-control endpoints can resolve
      * {@link DomainFile}s. Called once from {@code GhidraMCPHeadlessServer} startup.
      */
-    public void setProgramProvider(ProgramProvider programProvider) {
-        this.programProvider = programProvider;
-    }
 
     /**
      * Ensure a live {@link RepositoryServerAdapter} for the given host:port.
@@ -1004,12 +291,4 @@ public class GhidraServerManager {
         }
     }
 
-    private String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

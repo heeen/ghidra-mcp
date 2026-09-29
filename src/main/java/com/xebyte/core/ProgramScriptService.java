@@ -1576,7 +1576,7 @@ public class ProgramScriptService {
     /**
      * List all files in the current Ghidra project.
      */
-    @McpTool(path = "/list_project_files", description = "List files in the current project", category = "program", access = ToolAccess.READ_ONLY)
+    @McpTool(path = "/list_project_files", description = "List files in the current project, with each one's version-control state: whether it is versioned, checked out, and (when checked out) whether the checkout holds uncommitted work.", category = "program", access = ToolAccess.READ_ONLY)
     public Response listProjectFiles(
             @Param(value = "folder", description = "Project folder path") String folderPath) {
         ghidra.framework.model.Project project = resolveProject();
@@ -1614,14 +1614,10 @@ public class ProgramScriptService {
         ghidra.framework.model.DomainFile[] files = targetFolder.getFiles();
         List<Map<String, Object>> fileList = new ArrayList<>();
         for (ghidra.framework.model.DomainFile file : files) {
-            fileList.add(JsonHelper.mapOf(
-                "name", file.getName(),
-                "path", file.getPathname(),
-                "content_type", file.getContentType(),
-                "version", file.getVersion(),
-                "is_read_only", file.isReadOnly(),
-                "is_versioned", file.isVersioned()
-            ));
+            // With version-control state, so a checkout that still holds uncommitted work
+            // (modified_since_checkout) can be told from an idle one without reading icons
+            // in the Ghidra GUI. This is what the GUI's /server/repository/files reported.
+            fileList.add(ProjectVersionControl.fileState(file));
         }
 
         return Response.ok(JsonHelper.mapOf(
@@ -2213,23 +2209,6 @@ public class ProgramScriptService {
             info.put("codebrowser_active", codeBrowser);
         }
         return Response.ok(info);
-    }
-
-    @McpTool(path = "/checkin_program", method = "POST",
-            description = "Check a program in to the shared Ghidra Server as a new version. Saves pending "
-                + "edits and closes the program first (a file checked in while open must stay checked "
-                + "out). Requires a shared project and the file checked out. Returns "
-                + "version_before/version/version_bumped.",
-            category = "project", access = ToolAccess.WRITE)
-    public Response checkinProgram(
-            @Param(value = "path", source = ParamSource.BODY, description = "Project path of the file; empty uses the sole open program") String path,
-            @Param(value = "comment", source = ParamSource.BODY, defaultValue = "", description = "Checkin comment") String comment,
-            @Param(value = "keep_checked_out", source = ParamSource.BODY, defaultValue = "false", description = "Keep the file checked out after the new version lands") boolean keepCheckedOut) {
-        ProjectProgramProvider provider = projectProvider();
-        if (provider == null) {
-            return Response.err("This server has no project to check in from");
-        }
-        return Response.ok(provider.checkinProgram(path, comment, keepCheckedOut));
     }
 
     @McpTool(path = "/reanalyze", method = "POST", description = "Trigger full auto-analysis on a program", category = "program", access = ToolAccess.WRITE)

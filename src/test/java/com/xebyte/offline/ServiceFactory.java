@@ -3,8 +3,10 @@ package com.xebyte.offline;
 import com.xebyte.core.CoreServices;
 import com.xebyte.core.DebuggerService;
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.ProjectServerSession;
 import com.xebyte.core.PromptPolicyService;
 import com.xebyte.core.ThreadingStrategy;
+import com.xebyte.core.VersionControlService;
 import com.xebyte.headless.GhidraServerManager;
 import com.xebyte.headless.HeadlessManagementService;
 import com.xebyte.headless.HeadlessProgramProvider;
@@ -28,7 +30,8 @@ public final class ServiceFactory {
             new HeadlessManagementService(new HeadlessProgramProvider(), new GhidraServerManager()),
             // PluginTool is only used at runtime; the scanner reflects on signatures.
             new DebuggerService(provider, ts, null),
-            new PromptPolicyService());
+            new PromptPolicyService(),
+            new VersionControlService(provider, new ProjectServerSession(provider)));
     }
 
     /** Convenience: build a {@link StubProgramProvider}. */

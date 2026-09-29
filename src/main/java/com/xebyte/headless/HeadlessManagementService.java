@@ -368,8 +368,4 @@ public class HeadlessManagementService {
     // Server status
     // ========================================================================
 
-    @McpTool(path = "/server/status", description = "Whether a Ghidra Server is connected (not whether a project is open: see /get_project_info)", category = "headless", access = ToolAccess.READ_ONLY)
-    public Response serverStatus() {
-        return Response.text(serverManager.getStatus());
-    }
 }
