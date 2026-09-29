@@ -35,7 +35,6 @@ import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 
 import java.io.*;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -654,66 +653,46 @@ public class GhidraMCPHeadlessServer implements GhidraLaunchable {
     }
 
     private Map<String, String> parsePostParams(HttpExchange exchange) throws IOException {
+        byte[] bytes = exchange.getRequestBody().readNBytes(
+            (int) com.xebyte.core.SecurityConfig.MAX_REQUEST_BODY_BYTES + 1);
+        if (bytes.length > com.xebyte.core.SecurityConfig.MAX_REQUEST_BODY_BYTES) {
+            return new HashMap<>();  // oversized: treat as no params
+        }
+        return parsePostBody(new String(bytes, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * A flat JSON object or a form-urlencoded body, as string values.
+     *
+     * <p>The JSON case used to be parsed by splitting the body on commas, so a value
+     * containing one was cut off: a checkin comment "fix, retry" arrived as "fix".
+     */
+    public static Map<String, String> parsePostBody(String body) {
         Map<String, String> params = new HashMap<>();
-
-        // Get content type
-        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        if (contentType == null) {
-            contentType = "";
-        }
-
-        // Read body
-        String body;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-                // Bound accumulation so a huge body can't exhaust memory.
-                if (sb.length() > com.xebyte.core.SecurityConfig.MAX_REQUEST_BODY_BYTES) {
-                    return params;  // oversized — treat as no params
-                }
-            }
-            body = sb.toString();
-        }
-
-        if (body.isEmpty()) {
+        String text = body == null ? "" : body.trim();
+        if (text.isEmpty()) {
             return params;
         }
-
-        // Parse based on content type
-        if (contentType.contains("application/json")) {
-            // Simple JSON parsing for flat objects
-            body = body.trim();
-            if (body.startsWith("{") && body.endsWith("}")) {
-                body = body.substring(1, body.length() - 1);
-                for (String pair : body.split(",")) {
-                    String[] kv = pair.split(":", 2);
-                    if (kv.length == 2) {
-                        String key = kv[0].trim().replaceAll("^\"|\"$", "");
-                        String value = kv[1].trim().replaceAll("^\"|\"$", "");
-                        params.put(key, value);
-                    }
+        if (text.startsWith("{")) {
+            JsonHelper.parseJson(text).forEach((key, value) -> {
+                if (value != null) {
+                    params.put(key, jsonText(value));
                 }
-            }
+            });
         } else {
-            // Form-urlencoded
-            for (String param : body.split("&")) {
-                String[] pair = param.split("=", 2);
-                if (pair.length == 2) {
-                    try {
-                        String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
-                        String value = URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
-                        params.put(key, value);
-                    } catch (Exception e) {
-                        // Skip malformed param
-                    }
-                }
-            }
+            params.putAll(McpHttpServer.parseQuery(text));
         }
-
         return params;
+    }
+
+    /** A JSON value as text: integers without Gson's ".0", nested values as JSON. */
+    private static String jsonText(Object value) {
+        if (value instanceof Number n && n.doubleValue() == Math.rint(n.doubleValue())
+                && !Double.isInfinite(n.doubleValue())) {
+            return String.valueOf(n.longValue());
+        }
+        return value instanceof String || value instanceof Number || value instanceof Boolean
+            ? String.valueOf(value) : JsonHelper.toJson(value);
     }
 
     private int parseIntOrDefault(String value, int defaultValue) {

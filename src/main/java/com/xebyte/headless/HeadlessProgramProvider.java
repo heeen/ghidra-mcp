@@ -16,10 +16,7 @@
 package com.xebyte.headless;
 
 import com.xebyte.core.AmbiguousProgramException;
-import com.xebyte.core.ProgramProvider;
 import com.xebyte.core.ProjectProgramProvider;
-import com.xebyte.core.WriteTx;
-import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.plugin.core.archive.HeadlessArchiveBridge;
 import ghidra.base.project.GhidraProject;
 import ghidra.framework.client.RepositoryAdapter;
@@ -31,7 +28,6 @@ import ghidra.framework.model.ProjectLocator;
 import ghidra.framework.model.ProjectManager;
 import ghidra.framework.project.DefaultProjectManager;
 import ghidra.framework.store.LockException;
-import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 
@@ -760,85 +756,6 @@ public class HeadlessProgramProvider extends ProjectProgramProvider {
     }
 
     /**
-     * Run auto-analysis on a program.
-     *
-     * @param program The program to analyze
-     * @return AnalysisResult with statistics about the analysis
-     */
-    public AnalysisResult runAnalysis(Program program) {
-        if (program == null) {
-            return new AnalysisResult(false, "No program specified", 0, 0, 0);
-        }
-
-        long startTime = System.currentTimeMillis();
-        int functionsBefore = program.getFunctionManager().getFunctionCount();
-        
-        try {
-            // Get the auto analysis manager for this program
-            AutoAnalysisManager analysisManager = AutoAnalysisManager.getAnalysisManager(program);
-            
-            // Start a transaction for the analysis
-            WriteTx tx = WriteTx.begin(program, "Auto Analysis");
-            boolean success = false;
-            
-            try {
-                // Analyze all addresses in the program
-                AddressSetView addresses = program.getMemory().getLoadedAndInitializedAddressSet();
-                
-                // Initialize analysis options (use defaults)
-                analysisManager.initializeOptions();
-                
-                // Schedule analysis for the entire program
-                analysisManager.reAnalyzeAll(addresses);
-                
-                // Wait for analysis to complete
-                analysisManager.startAnalysis(monitor);
-                
-                success = true;
-            } finally {
-                tx.end(success);
-            }
-            
-            long duration = System.currentTimeMillis() - startTime;
-            int functionsAfter = program.getFunctionManager().getFunctionCount();
-            int newFunctions = functionsAfter - functionsBefore;
-            
-            Msg.info(this, "Analysis completed in " + duration + "ms. " +
-                "Functions: " + functionsBefore + " -> " + functionsAfter + 
-                " (+" + newFunctions + ")");
-            
-            return new AnalysisResult(true, "Analysis completed successfully", 
-                duration, functionsAfter, newFunctions);
-                
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            Msg.error(this, "Analysis failed: " + e.getMessage(), e);
-            return new AnalysisResult(false, "Analysis failed: " + e.getMessage(), 
-                duration, program.getFunctionManager().getFunctionCount(), 0);
-        }
-    }
-
-    /**
-     * Result of running analysis on a program.
-     */
-    public static class AnalysisResult {
-        public final boolean success;
-        public final String message;
-        public final long durationMs;
-        public final int totalFunctions;
-        public final int newFunctions;
-
-        public AnalysisResult(boolean success, String message, long durationMs,
-                              int totalFunctions, int newFunctions) {
-            this.success = success;
-            this.message = message;
-            this.durationMs = durationMs;
-            this.totalFunctions = totalFunctions;
-            this.newFunctions = newFunctions;
-        }
-    }
-
-    /**
      * Creates a new Ghidra project.
      *
      * @param parentDir The parent directory for the new project
@@ -938,199 +855,6 @@ public class HeadlessProgramProvider extends ProjectProgramProvider {
     }
 
     /**
-     * Create a folder inside the current project.
-     *
-     * @param folderPath The path of the folder to create (e.g., "/subfolder/nested")
-     * @return true if the folder was created successfully
-     */
-    public boolean createFolder(String folderPath) {
-        if (project == null) {
-            Msg.error(this, "No project open");
-            return false;
-        }
-        try {
-            ProjectData projectData = project.getProjectData();
-            DomainFolder root = projectData.getRootFolder();
-            // Split path and create each segment
-            String[] parts = folderPath.replaceAll("^/+", "").split("/");
-            DomainFolder current = root;
-            for (String part : parts) {
-                if (part.isEmpty()) continue;
-                DomainFolder existing = current.getFolder(part);
-                if (existing != null) {
-                    current = existing;
-                } else {
-                    current = current.createFolder(part);
-                }
-            }
-            Msg.info(this, "Created folder: " + folderPath);
-            return true;
-        } catch (Exception e) {
-            Msg.error(this, "Error creating folder: " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    /**
-     * Move a domain file to another folder within the current project.
-     *
-     * @param filePath The project-relative path of the file to move
-     * @param destFolderPath The project-relative path of the destination folder
-     * @return true if the file was moved successfully
-     */
-    public boolean moveFile(String filePath, String destFolderPath) {
-        if (project == null) {
-            Msg.error(this, "No project open");
-            return false;
-        }
-        try {
-            ProjectData projectData = project.getProjectData();
-            DomainFile domainFile = projectData.getFile(filePath);
-            if (domainFile == null) {
-                Msg.error(this, "File not found: " + filePath);
-                return false;
-            }
-            DomainFolder destFolder = projectData.getFolder(destFolderPath);
-            if (destFolder == null) {
-                Msg.error(this, "Destination folder not found: " + destFolderPath);
-                return false;
-            }
-            domainFile.moveTo(destFolder);
-            Msg.info(this, "Moved " + filePath + " to " + destFolderPath);
-            return true;
-        } catch (Exception e) {
-            Msg.error(this, "Error moving file: " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    /**
-     * Move a domain folder to another parent folder within the current project.
-     *
-     * @param sourcePath The project-relative path of the folder to move
-     * @param destParentPath The project-relative path of the destination parent folder
-     * @return true if the folder was moved successfully
-     */
-    public boolean moveFolder(String sourcePath, String destParentPath) {
-        if (project == null) {
-            Msg.error(this, "No project open");
-            return false;
-        }
-        try {
-            ProjectData projectData = project.getProjectData();
-            DomainFolder sourceFolder = projectData.getFolder(sourcePath);
-            if (sourceFolder == null) {
-                Msg.error(this, "Source folder not found: " + sourcePath);
-                return false;
-            }
-            DomainFolder destParent = projectData.getFolder(destParentPath);
-            if (destParent == null) {
-                Msg.error(this, "Destination parent not found: " + destParentPath);
-                return false;
-            }
-            sourceFolder.moveTo(destParent);
-            Msg.info(this, "Moved folder " + sourcePath + " to " + destParentPath);
-            return true;
-        } catch (Exception e) {
-            Msg.error(this, "Error moving folder: " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    /**
-     * Delete a domain file from the current project.
-     *
-     * @param filePath The project-relative path of the file to delete
-     * @return true if the file was deleted successfully
-     */
-    public boolean deleteProjectFile(String filePath) {
-        if (project == null) {
-            Msg.error(this, "No project open");
-            return false;
-        }
-        try {
-            ProjectData projectData = project.getProjectData();
-            DomainFile domainFile = projectData.getFile(filePath);
-            if (domainFile == null) {
-                Msg.error(this, "File not found: " + filePath);
-                return false;
-            }
-            // Close it if currently open
-            String fileName = domainFile.getName();
-            // Deleting it: nothing to save for.
-            closeProgramByPath(filePath);
-            domainFile.delete();
-            Msg.info(this, "Deleted file: " + filePath);
-            return true;
-        } catch (Exception e) {
-            Msg.error(this, "Error deleting file: " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    /**
-     * List available analyzers for a program.
-     *
-     * @param program The program to list analyzers for
-     * @return List of AnalyzerInfo objects describing each analyzer
-     */
-    public List<AnalyzerInfo> listAnalyzers(Program program) {
-        List<AnalyzerInfo> result = new ArrayList<>();
-        if (program == null) return result;
-        try {
-            ghidra.framework.options.Options opts = program.getOptions(Program.ANALYSIS_PROPERTIES);
-            List<String> names = opts.getOptionNames();
-            for (String name : names) {
-                try {
-                    boolean enabled = opts.getBoolean(name, false);
-                    result.add(new AnalyzerInfo(name, "", enabled, ""));
-                } catch (Exception ignored) {
-                    // Option exists but is not a boolean (e.g. string option)
-                }
-            }
-        } catch (Exception e) {
-            Msg.error(this, "Error listing analyzers: " + e.getMessage(), e);
-        }
-        return result;
-    }
-
-    /**
-     * Enable or disable an analyzer for a program.
-     *
-     * @param program The program to configure
-     * @param analyzerName The name of the analyzer
-     * @param enabled Whether to enable or disable the analyzer
-     * @return true if the analyzer was configured successfully
-     */
-    public boolean configureAnalyzer(Program program, String analyzerName, Boolean enabled) {
-        if (program == null || analyzerName == null) return false;
-        try {
-            ghidra.framework.options.Options opts = program.getOptions(Program.ANALYSIS_PROPERTIES);
-            if (!opts.contains(analyzerName)) {
-                Msg.error(this, "Analyzer not found: " + analyzerName);
-                return false;
-            }
-            WriteTx tx = WriteTx.begin(program, "Configure Analyzer");
-            boolean txSuccess = false;
-            try {
-                if (enabled != null) {
-                    opts.setBoolean(analyzerName, enabled);
-                }
-                txSuccess = true;
-                Msg.info(this, "Configured analyzer: " + analyzerName + " enabled=" + enabled);
-                return true;
-            } catch (Exception e) {
-                throw e;
-            } finally {
-                tx.end(txSuccess);
-            }
-        } catch (Exception e) {
-            Msg.error(this, "Error configuring analyzer: " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    /**
      * Information about a Ghidra project found on disk.
      */
     public static class ProjectInfo {
@@ -1152,23 +876,6 @@ public class HeadlessProgramProvider extends ProjectProgramProvider {
             if (children != null) for (java.io.File child : children) deleteRecursive(child);
         }
         f.delete();
-    }
-
-    /**
-     * Information about a Ghidra analyzer.
-     */
-    public static class AnalyzerInfo {
-        public final String name;
-        public final String description;
-        public final boolean enabled;
-        public final String priority;
-
-        public AnalyzerInfo(String name, String description, boolean enabled, String priority) {
-            this.name = name;
-            this.description = description;
-            this.enabled = enabled;
-            this.priority = priority;
-        }
     }
 
     /**
