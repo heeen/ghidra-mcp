@@ -94,7 +94,7 @@ public class CheckoutService {
 
     @McpTool(path = "/decompile_checkout_status", method = "GET",
         description = "Status, config and root path of a decompilation checkout — poll "
-            + "this after decompile_checkout_start, then Grep the reported root. READ_ONLY, "
+            + "this after decompile_checkout_run(action=start), then Grep the reported root. READ_ONLY, "
             + "so it is safe to call while planning. Reports phase, progress, and freshness "
             + "against the live program. Never errors when the program is closed or the root "
             + "is missing — reports program:\"closed\" / root_present:false instead, because "
@@ -144,7 +144,7 @@ public class CheckoutService {
             + "corpus-wide search — 'which functions reference this string, constant or "
             + "peripheral' — which is impractical one function at a time. Registers the "
             + "checkout and writes checkout.json / STATUS.md; does NOT sweep (call "
-            + "decompile_checkout_start). Adopts an existing tree at the derived root, "
+            + "decompile_checkout_run(action=start)). Adopts an existing tree at the derived root, "
             + "reconciling swept_at_modification_number against the live program. "
             + "Unrelated to Ghidra version-control checkouts (/server/version_control/*).",
         category = "decompile-checkout", access = ToolAccess.WRITE)
@@ -402,17 +402,40 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /decompile_checkout_start — WRITE, enqueue SweepJob
+    // /decompile_checkout_run — WRITE, start or stop the sweep
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_start", method = "POST",
-        description = "Enqueue the sweep that fills a checkout's tree, then poll "
-            + "decompile_checkout_status. Returns in milliseconds with phase queued and the "
-            + "resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and "
-            + "to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for "
-            + "a 3,200-function driver DLL, ~11 min for a 25,000-function static binary.",
+    @McpTool(path = "/decompile_checkout_run", method = "POST",
+        description = "Start or stop the sweep that fills a checkout's tree. action=start enqueues it "
+            + "(then poll decompile_checkout_status): returns in milliseconds with phase queued and "
+            + "the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to "
+            + "interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for a "
+            + "3,200-function driver DLL, ~11 min for a 25,000-function static binary. action=stop "
+            + "cancels a queued or running sweep and is idempotent: stopping an idle or complete "
+            + "checkout is success, not an error. The partial tree is left in place and STATUS.md "
+            + "records state: cancelled, so whatever was already written stays safe to Grep.",
         category = "decompile-checkout", access = ToolAccess.WRITE)
-    public Response checkoutStart(
+    public Response checkoutRun(
+            @Param(value = "checkout", source = ParamSource.BODY,
+                   description = "Checkout id, program name, or domain path.")
+            String checkoutSelector,
+            @Param(value = "action", source = ParamSource.BODY,
+                   description = "start (enqueue the sweep) or stop (cancel it).")
+            String action) {
+        String what = action == null ? "" : action.trim().toLowerCase();
+        return switch (what) {
+            case "start" -> startSweep(checkoutSelector);
+            case "stop" -> stopSweep(checkoutSelector);
+            default -> Response.err("action must be start or stop");
+        };
+    }
+
+    // =========================================================================
+    // decompile_checkout_run(action=start) — WRITE, enqueue SweepJob
+    // =========================================================================
+
+    /** Enqueue the sweep that fills a checkout's tree. */
+    private Response startSweep(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
             String checkoutSelector) {
@@ -451,16 +474,11 @@ public class CheckoutService {
     }
 
     // =========================================================================
-    // /decompile_checkout_stop — WRITE, idempotent
+    // decompile_checkout_run(action=stop) — WRITE, idempotent
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_stop", method = "POST",
-        description = "Cancel a queued or running sweep. Idempotent — stopping an idle or "
-            + "complete checkout is success, not an error. The partial tree is left in place "
-            + "and STATUS.md records state: cancelled, so whatever was already written stays "
-            + "safe to Grep.",
-        category = "decompile-checkout", access = ToolAccess.WRITE)
-    public Response checkoutStop(
+    /** Cancel a queued or running sweep; stopping an idle checkout is success. */
+    private Response stopSweep(
             @Param(value = "checkout", source = ParamSource.BODY,
                    description = "Checkout id, program name, or domain path.")
             String checkoutSelector) {
@@ -480,10 +498,10 @@ public class CheckoutService {
                 || phase == SweepProgress.Phase.DECOMPILING) {
             // Flag + stopProcess on the in-flight decompile — do not wait out the timeout.
             CheckoutRegistry.getInstance()
-                    .cancelSweep(checkout.id(), "cancelled by /decompile_checkout_stop");
+                    .cancelSweep(checkout.id(), "cancelled by decompile_checkout_run(action=stop)");
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.CANCELLED)
-                    .withLastError("cancelled by /decompile_checkout_stop"));
+                    .withLastError("cancelled by decompile_checkout_run(action=stop)"));
             cancelled = true;
             try {
                 CheckoutStatusMd.write(checkout, "cancelled", null);
@@ -1122,7 +1140,7 @@ public class CheckoutService {
                 checkout.setProgress(checkout.progress()
                         .withPhase(SweepProgress.Phase.STALE)
                         .withLastError(
-                                "config repartitions compartments; /decompile_checkout_start will wipe "
+                                "config repartitions compartments; /decompile_checkout_run start will wipe "
                                         + "modules/ and rewrite"));
                 out.put("action", "marked_stale_full_resweep");
                 out.put("requires_full_resweep", true);

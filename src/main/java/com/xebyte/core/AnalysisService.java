@@ -2990,7 +2990,7 @@ public class AnalysisService {
             recommendations.add("UNRESOLVED STRUCT FIELD ACCESSES - Apply struct types to eliminate raw offsets:");
             recommendations.add("1. Found " + unresolvedStructAccesses.size() + " raw pointer+offset dereference(s): "
                     + String.join(", ", unresolvedStructAccesses.subList(0, Math.min(5, unresolvedStructAccesses.size()))));
-            recommendations.add("2. Use search_data_types() to find existing struct definitions");
+            recommendations.add("2. Use find_data_types() to find existing struct definitions");
             recommendations.add("3. If no struct exists, use create_struct() with fields matching the observed offsets");
             recommendations.add("4. Apply struct type to variables with set_variable_type() or set_function_prototype()");
         }
@@ -3147,7 +3147,7 @@ public class AnalysisService {
                 recommendations.add("3. Mandatory Undefined Type Audit: examine BOTH decompiled code and disassembly for undefined types");
                 recommendations.add("4. Verify Decompiler vs Assembly: loops, type casts, pointer arithmetic, conditionals, early exits");
                 recommendations.add("5. Control Flow + Loop Mapping: return points, loop headers/bounds/stride, error paths");
-                recommendations.add("6. Structure Identification: search_data_types() or create_struct(), memory model docs");
+                recommendations.add("6. Structure Identification: find_data_types() or create_struct(), memory model docs");
                 recommendations.add("7. Rename + Prototype: rename_function() (PascalCase) + set_function_prototype()");
                 recommendations.add("8. Local Variable Renaming: set_variable_type() then rename_variables() with Hungarian notation");
                 recommendations.add("9. Global Data: rename_symbol() with g_ prefix for DAT_*/s_* references");

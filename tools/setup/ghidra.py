@@ -128,7 +128,7 @@ SMOKE_REQUIRED_TOOLS = {
     "save_all_programs",
     "set_function_prototype",
     "rename_function",
-    "search_data_types",
+    "find_data_types",
     "create_struct",
     "get_struct_layout",
     "list_open_programs",
@@ -1371,7 +1371,7 @@ def run_benchmark_read_test(repo_root: Path, mcp_url: str) -> None:
     address = _find_benchmark_function(repo_root, mcp_url)
     read_calls = [
         ("/list_open_programs", {"program": DEFAULT_BENCHMARK_PROGRAM}),
-        ("/search_data_types", {"program": DEFAULT_BENCHMARK_PROGRAM, "pattern": "int", "limit": 5}),
+        ("/find_data_types", {"program": DEFAULT_BENCHMARK_PROGRAM, "pattern": "int", "limit": 5}),
         ("/get_functions", {
             "program": DEFAULT_BENCHMARK_PROGRAM,
             "address": address,
@@ -2115,7 +2115,7 @@ def _bench_assert_endpoint_smoke(repo_root: Path, mcp_url: str, program_path: st
     # Auto-add program= for endpoints that take a target program (most do).
     # Skip for genuinely program-less endpoints.
     program_less = {"/check_connection", "/list_open_programs", "/list_calling_conventions",
-                    "/list_scripts", "/check_tools", "/list_data_type_categories"}
+                    "/list_scripts", "/check_tools"}
     if endpoint not in program_less and "program" not in params:
         params["program"] = program_path
 

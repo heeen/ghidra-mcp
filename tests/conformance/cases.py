@@ -109,7 +109,7 @@ class ProgramFacts:
 #    names for -- `function`, `limit`, `program` -- producing a structurally
 #    valid call that the endpoint correctly refuses.
 # 2. One name means different things in different tools. `pattern` is a type
-#    name for `/search_data_types` and a hex byte string for
+#    name for `/find_data_types` and a hex byte string for
 #    `/search_byte_patterns`; `source_type` is a Ghidra reference SourceType for
 #    `/add_memory_reference`, not a data type.
 #

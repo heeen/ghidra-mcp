@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 234,
+  "total_endpoints": 221,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -411,21 +411,6 @@
       "description": "Audit every global variable referenced from within a function in one call. Walks the function's instructions, collects unique data references, and returns the per-global audit (same shape as audit_global) plus a summary of how many are fully documented vs have issues. The killer per-function pre-flight tool â€” start every doc pass with this when the function has global xrefs."
     },
     {
-      "path": "/batch_get_comments",
-      "method": "GET",
-      "category": "comment",
-      "params": [
-        "addresses",
-        "only_with_comments",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get listing comments (plate/pre/eol/post/repeatable) at MANY addresses in one call. Same per-address shape as get_comment. Pass only_with_comments=true to omit addresses with no comment at all -- the common case for corpus-wide sweeps, where most functions are undocumented and only the documented subset is interesting. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution."
-    },
-    {
       "path": "/batch_rename_function_components",
       "method": "POST",
       "category": "function",
@@ -666,22 +651,6 @@
       "description": "Convert number between bases"
     },
     {
-      "path": "/create_array_type",
-      "method": "POST",
-      "category": "datatype",
-      "params": [
-        "base_type",
-        "length",
-        "name",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Create array type"
-    },
-    {
       "path": "/create_data_type_category",
       "method": "POST",
       "category": "datatype",
@@ -694,6 +663,23 @@
         "headless"
       ],
       "description": "Create data type category"
+    },
+    {
+      "path": "/create_derived_type",
+      "method": "POST",
+      "category": "datatype",
+      "params": [
+        "kind",
+        "base_type",
+        "name",
+        "length",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Create a type built on another: a typedef alias, an array or a pointer. An existing same-named type is replaced."
     },
     {
       "path": "/create_enum",
@@ -815,21 +801,6 @@
       "description": "Create memory block, optionally initialized with byte contents (hex or base64)"
     },
     {
-      "path": "/create_pointer_type",
-      "method": "POST",
-      "category": "datatype",
-      "params": [
-        "base_type",
-        "name",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Create pointer type"
-    },
-    {
       "path": "/create_project",
       "method": "POST",
       "category": "headless",
@@ -872,21 +843,6 @@
         "headless"
       ],
       "description": "Create structure. Body fields must be a JSON array of objects with name and type, plus optional decimal offset. Example fields: [{\"name\":\"dwId\",\"type\":\"uint\",\"offset\":0},{\"name\":\"pNext\",\"type\":\"void *\",\"offset\":4}]. Type may be any resolvable Ghidra data type or existing struct name."
-    },
-    {
-      "path": "/create_typedef",
-      "method": "POST",
-      "category": "datatype",
-      "params": [
-        "name",
-        "base_type",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Create typedef"
     },
     {
       "path": "/create_union",
@@ -1069,34 +1025,16 @@
       "description": "Get debugger status: active trace, thread, execution state, module count"
     },
     {
-      "path": "/debugger/step_into",
+      "path": "/debugger/step",
       "method": "POST",
       "category": "debugger",
-      "params": [],
+      "params": [
+        "kind"
+      ],
       "servers": [
         "gui"
       ],
-      "description": "Single-step into the next instruction (follows calls)"
-    },
-    {
-      "path": "/debugger/step_out",
-      "method": "POST",
-      "category": "debugger",
-      "params": [],
-      "servers": [
-        "gui"
-      ],
-      "description": "Step out of the current function (run to return)"
-    },
-    {
-      "path": "/debugger/step_over",
-      "method": "POST",
-      "category": "debugger",
-      "params": [],
-      "servers": [
-        "gui"
-      ],
-      "description": "Step over the next instruction (does not follow calls)"
+      "description": "Single-step the debugged process: into the next instruction (follows calls), over it (does not follow calls), or out of the current function (run to return)."
     },
     {
       "path": "/debugger/traces",
@@ -1200,17 +1138,18 @@
       "internal": true
     },
     {
-      "path": "/decompile_checkout_start",
+      "path": "/decompile_checkout_run",
       "method": "POST",
       "category": "decompile-checkout",
       "params": [
-        "checkout"
+        "checkout",
+        "action"
       ],
       "servers": [
         "gui",
         "headless"
       ],
-      "description": "Enqueue the sweep that fills a checkout's tree, then poll decompile_checkout_status. Returns in milliseconds with phase queued and the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for a 3,200-function driver DLL, ~11 min for a 25,000-function static binary."
+      "description": "Start or stop the sweep that fills a checkout's tree. action=start enqueues it (then poll decompile_checkout_status): returns in milliseconds with phase queued and the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for a 3,200-function driver DLL, ~11 min for a 25,000-function static binary. action=stop cancels a queued or running sweep and is idempotent: stopping an idle or complete checkout is success, not an error. The partial tree is left in place and STATUS.md records state: cancelled, so whatever was already written stays safe to Grep."
     },
     {
       "path": "/decompile_checkout_status",
@@ -1224,19 +1163,6 @@
         "headless"
       ],
       "description": "Status, config and root path of a decompilation checkout — poll this after decompile_checkout_start, then Grep the reported root. READ_ONLY, so it is safe to call while planning. Reports phase, progress, and freshness against the live program. Never errors when the program is closed or the root is missing — reports program:\"closed\" / root_present:false instead, because that is exactly when you are asking. With no selector, lists every checkout plus adoptable trees found on disk."
-    },
-    {
-      "path": "/decompile_checkout_stop",
-      "method": "POST",
-      "category": "decompile-checkout",
-      "params": [
-        "checkout"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Cancel a queued or running sweep. Idempotent — stopping an idle or complete checkout is success, not an error. The partial tree is left in place and STATUS.md records state: cancelled, so whatever was already written stays safe to Grep."
     },
     {
       "path": "/delete_bookmark",
@@ -1446,22 +1372,6 @@
       "description": "Disassemble function"
     },
     {
-      "path": "/embed_struct_field",
-      "method": "POST",
-      "category": "datatype",
-      "params": [
-        "parent_struct",
-        "field_name",
-        "embedded_struct",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Replace a structure field with an embedded struct type by value (e.g. Rectangle inside LayoutNode). Uses modify_struct_field internally."
-    },
-    {
       "path": "/emulate_function",
       "method": "POST",
       "category": "emulation",
@@ -1571,6 +1481,25 @@
         "headless"
       ],
       "description": "Find gaps of undefined bytes between functions in executable memory"
+    },
+    {
+      "path": "/find_data_types",
+      "method": "GET",
+      "category": "datatype",
+      "params": [
+        "pattern",
+        "category",
+        "kind",
+        "categories",
+        "offset",
+        "limit",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Find data types by name or path pattern, category and kind, one record per type (name, kind, category, size, path). With categories=true, list the category paths instead. With no filter it lists every type."
     },
     {
       "path": "/find_dead_code",
@@ -1747,22 +1676,6 @@
       "description": "Get assembly context"
     },
     {
-      "path": "/get_bulk_function_hashes",
-      "method": "GET",
-      "category": "documentation",
-      "params": [
-        "offset",
-        "limit",
-        "filter",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Get bulk function hashes"
-    },
-    {
       "path": "/get_change_token",
       "method": "GET",
       "category": "program",
@@ -1781,6 +1694,8 @@
       "category": "comment",
       "params": [
         "address",
+        "addresses",
+        "only_with_comments",
         "program"
       ],
       "servers": [
@@ -1923,6 +1838,9 @@
         "name",
         "function_address",
         "function_name",
+        "offset",
+        "limit",
+        "filter",
         "program"
       ],
       "servers": [
@@ -2291,37 +2209,6 @@
       "description": "List data sorted by xref count"
     },
     {
-      "path": "/list_data_type_categories",
-      "method": "GET",
-      "category": "datatype",
-      "params": [
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List data type categories"
-    },
-    {
-      "path": "/list_data_types",
-      "method": "GET",
-      "category": "datatype",
-      "params": [
-        "category",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List data types"
-    },
-    {
       "path": "/list_function_tags",
       "method": "GET",
       "category": "function",
@@ -2366,19 +2253,6 @@
         "headless"
       ],
       "description": "List open programs"
-    },
-    {
-      "path": "/list_option_groups",
-      "method": "GET",
-      "category": "program",
-      "params": [
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List program option groups (e.g. 'Program Information', 'Analyzers', 'Decompiler'). Each group holds typed keyâ†’value settings; use get_program_options to read a group's entries."
     },
     {
       "path": "/list_program_items",
@@ -2438,19 +2312,6 @@
         "headless"
       ],
       "description": "List (address, value) entries stored in a property map, with pagination. Optionally restrict to an inclusive address range with start/end."
-    },
-    {
-      "path": "/list_property_maps",
-      "method": "GET",
-      "category": "program",
-      "params": [
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List user-defined property maps â€” typed per-address keyâ†’value stores. Each map reports its name, value type (int|long|string|object|void), and the number of addresses holding a value."
     },
     {
       "path": "/list_scripts",
@@ -2550,22 +2411,6 @@
         "headless"
       ],
       "description": "Modify struct field"
-    },
-    {
-      "path": "/modify_struct_field_type",
-      "method": "POST",
-      "category": "datatype",
-      "params": [
-        "struct_name",
-        "field_name",
-        "new_type",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Set a structure field's type by name or offset (offset:N). Same as modify_struct_field with new_type only."
     },
     {
       "path": "/move_data_type_to_category",
@@ -2999,22 +2844,6 @@
         "headless"
       ],
       "description": "Search for byte patterns"
-    },
-    {
-      "path": "/search_data_types",
-      "method": "GET",
-      "category": "datatype",
-      "params": [
-        "pattern",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Search data types"
     },
     {
       "path": "/search_functions_by_tag",

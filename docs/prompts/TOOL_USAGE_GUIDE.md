@@ -209,7 +209,7 @@ XREF COUNT: 2 references
 
 - `create_struct(name, fields)` - Create a new structure type
 - `modify_struct_field(struct_name, field_name, new_type, new_name)` - Update fields
-- `search_data_types(pattern)` - Search for structures by name pattern
+- `find_data_types(pattern, kind="struct")` - Search for structures by name pattern
 
 **For analysis:**
 
@@ -233,7 +233,7 @@ Read or write any typed option in any group (Program Information, Analyzers,
 Decompiler, …).
 
 ```text
-list_option_groups(program="")                       -> group names
+get_program_options(program="")                       -> group names (no group given)
 get_program_options(group, program="")               -> {name: value} in that group
 set_program_option(group, name, value, type="", program="")
 remove_program_option(group, name, program="")
@@ -250,7 +250,7 @@ Where a comment is prose, a property is data. Use these when you need
 structured per-address values you can query back exactly.
 
 ```text
-list_property_maps(program="")                       -> existing maps + types
+list_properties(program="")                       -> existing maps + types (no map given)
 create_property_map(name, type, program="")          -> type: int|long|string|void
 set_property(name, address, value, program="")
 get_property(name, address, program="")
@@ -314,8 +314,8 @@ hash_info = get_function_hash("0x6FAB1234")
 # Returns: {"hash": "abc123...", "instruction_count": 63, "has_custom_name": true}
 
 # Get hashes for many functions (paginated)
-result = get_bulk_function_hashes(offset=0, limit=500, filter="documented")
-# filter options: "documented", "undocumented", "all"
+result = get_function_hash(offset=0, limit=500, filter="documented")  # omit `function` for bulk mode
+# filter options: "documented", "undocumented"; omit for all
 ```
 
 ### Documentation Export/Import
@@ -487,7 +487,7 @@ one search instead of one MCP round trip per function.
 
 ```text
 1. decompile_checkout_create(program=..., root=..., exclusions=[...])   # registers; no sweep
-2. decompile_checkout_start(checkout=...)                               # returns in ms with resource_uri
+2. decompile_checkout_run(checkout=..., action="start")                # returns in ms with resource_uri
 3. Poll decompile_checkout_status(checkout=...) until phase=complete    # or read STATUS.md on disk
 4. Grep / Read / Glob under <root>/modules/                   # the tree is the corpus
 5. For a hit: read the file header's uri: ghidra://function/<program>/<address>

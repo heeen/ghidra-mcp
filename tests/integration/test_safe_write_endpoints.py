@@ -365,7 +365,7 @@ class TestSafeDataTypeOperations:
         """Search for a data type and get its size."""
         # Search for int types
         search_response = http_client.get(
-            "/search_data_types", params={"pattern": "int"}
+            "/find_data_types", params={"pattern": "int"}
         )
         assert search_response.status_code == 200
 
@@ -594,14 +594,14 @@ class TestSafeHashOperations:
     #
     # The capability their author expected was a PERSISTENT hash index plus a
     # reverse hash -> function lookup. This server has neither. What it does
-    # have is /get_bulk_function_hashes, which computes the same hash for many
+    # have is /get_function_hash, which computes the same hash for many
     # functions in one call, so the two tests below ask the surviving surface
     # the same questions: does bulk hashing work, and does a function's own
     # hash identify it in that listing?
 
-    def test_get_bulk_function_hashes(self, http_client):
+    def test_get_function_hash_bulk(self, http_client):
         """Hash many functions in one call (the surviving bulk-hash surface)."""
-        response = http_client.get("/get_bulk_function_hashes", params={"limit": 10})
+        response = http_client.get("/get_function_hash", params={"limit": 10})
 
         assert response.status_code == 200, response.text
         functions = response.json()["functions"]
@@ -625,7 +625,7 @@ class TestSafeHashOperations:
         hash_value = hash_response.json()["hash"]
         assert hash_value, hash_response.text
 
-        bulk = http_client.get("/get_bulk_function_hashes", params={"limit": 200})
+        bulk = http_client.get("/get_function_hash", params={"limit": 200})
         assert bulk.status_code == 200, bulk.text
         by_address = {
             int(entry["address"], 16): entry["hash"]

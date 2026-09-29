@@ -82,8 +82,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     # no ghidra://function or ghidra://program body moves.
     "/decompile_checkout_create": InvalidationTier.NONE,
     "/decompile_checkout_configure": InvalidationTier.NONE,
-    "/decompile_checkout_start": InvalidationTier.NONE,
-    "/decompile_checkout_stop": InvalidationTier.NONE,
+    "/decompile_checkout_run": InvalidationTier.NONE,
     "/decompile_checkout_delete": InvalidationTier.NONE,
     "/decompile_checkout_refresh": InvalidationTier.NONE,
     # Placement metadata on the program; no ghidra://function body reports it.
@@ -95,9 +94,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/debugger/remove_breakpoint": InvalidationTier.NONE,
     "/debugger/resume": InvalidationTier.NONE,
     "/debugger/interrupt": InvalidationTier.NONE,
-    "/debugger/step_into": InvalidationTier.NONE,
-    "/debugger/step_over": InvalidationTier.NONE,
-    "/debugger/step_out": InvalidationTier.NONE,
+    "/debugger/step": InvalidationTier.NONE,
     # --- LOCAL: body/docs of one function, callers' decompilations untouched ---
     "/set_comment": InvalidationTier.LOCAL,
     "/batch_set_comments": InvalidationTier.LOCAL,
@@ -131,17 +128,13 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     # --- TYPE: struct/enum/typedef edits (precise fan-out in commit 7) ---
     "/add_struct_field": InvalidationTier.TYPE,
     "/remove_struct_field": InvalidationTier.TYPE,
+    "/create_derived_type": InvalidationTier.TYPE,
     "/modify_struct_field": InvalidationTier.TYPE,
-    "/modify_struct_field_type": InvalidationTier.TYPE,
-    "/embed_struct_field": InvalidationTier.TYPE,
     "/create_struct": InvalidationTier.TYPE,
     "/recreate_struct": InvalidationTier.TYPE,
     "/resize_struct": InvalidationTier.TYPE,
     "/create_enum": InvalidationTier.TYPE,
-    "/create_typedef": InvalidationTier.TYPE,
     "/create_union": InvalidationTier.TYPE,
-    "/create_array_type": InvalidationTier.TYPE,
-    "/create_pointer_type": InvalidationTier.TYPE,
     "/create_function_signature": InvalidationTier.TYPE,
     "/create_data_type_category": InvalidationTier.TYPE,
     "/clone_data_type": InvalidationTier.TYPE,
@@ -200,8 +193,7 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
 _CHECKOUT_WRITE_ENDPOINTS = frozenset({
     "/decompile_checkout_create",
     "/decompile_checkout_configure",
-    "/decompile_checkout_start",
-    "/decompile_checkout_stop",
+    "/decompile_checkout_run",
     "/decompile_checkout_delete",
     "/decompile_checkout_refresh",
 })

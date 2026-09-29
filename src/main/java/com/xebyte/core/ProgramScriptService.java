@@ -219,20 +219,8 @@ public class ProgramScriptService {
           + "use get_address_spaces to discover spaces before assuming a plain hex "
           + "address is unambiguous.";
 
-    /**
-     * List every program option group (e.g. "Program Information", "Analyzers",
-     * "Decompiler", "Disassembler"). Each group is a namespace of typed key→value
-     * settings; use {@code get_program_options} to read a group's entries.
-     */
-    @McpTool(path = "/list_option_groups",
-             description = "List program option groups (e.g. 'Program Information', 'Analyzers', 'Decompiler'). Each group holds typed key→value settings; use get_program_options to read a group's entries.",
-             category = "program", access = ToolAccess.READ_ONLY)
-    public Response listOptionGroups(
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
-        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
-        if (pe.hasError()) return pe.error();
-        Program program = pe.program();
-
+    /** Every program option group with its option count. */
+    private Response optionGroups(Program program) {
         try {
             List<Map<String, Object>> groups = new ArrayList<>();
             for (String groupName : program.getOptionsNames()) {
@@ -256,20 +244,20 @@ public class ProgramScriptService {
      * {@link Options#getValueAsString(String)} so every option type is legible.
      */
     @McpTool(path = "/get_program_options",
-             description = "Read all options in a program option group with types, current values, defaults, and descriptions. Use list_option_groups to discover group names.",
+             description = "Read all options in a program option group with types, current values, defaults, and descriptions. Omit group to list the option groups instead (e.g. 'Program Information', 'Analyzers', 'Decompiler'), each with its option count.",
              category = "program", access = ToolAccess.READ_ONLY)
     public Response getProgramOptions(
-            @Param(value = "group", description = "Option group name from list_option_groups (e.g. 'Program Information', 'Analyzers').") String group,
+            @Param(value = "group", defaultValue = "", description = "Option group name (e.g. 'Program Information', 'Analyzers'). Omit to list the groups.") String group,
             @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 
         if (group == null || group.isEmpty()) {
-            return Response.err("group is required (use list_option_groups to discover group names)");
+            return optionGroups(program);
         }
         if (!program.getOptionsNames().contains(group)) {
-            return Response.err("No such option group: '" + group + "'. Use list_option_groups to see available groups.");
+            return Response.err("No such option group: '" + group + "'. Omit group to see the available groups.");
         }
 
         try {
@@ -346,7 +334,7 @@ public class ProgramScriptService {
              description = "Set a typed program option. If the option already exists its type is reused; otherwise pass type (string|int|long|double|float|boolean). New/custom options are created on demand. Call save_program to persist.",
              category = "program", access = ToolAccess.WRITE)
     public Response setProgramOption(
-            @Param(value = "group", source = ParamSource.BODY, description = "Option group name (e.g. 'Program Information'). Use list_option_groups to discover names.") String group,
+            @Param(value = "group", source = ParamSource.BODY, description = "Option group name (e.g. 'Program Information'). Call get_program_options with no group to list them.") String group,
             @Param(value = "name", source = ParamSource.BODY, description = "Option name within the group.") String name,
             @Param(value = "value", source = ParamSource.BODY, description = "New value as a string; parsed according to the option type.") String value,
             @Param(value = "type", source = ParamSource.BODY, defaultValue = "",
@@ -362,7 +350,7 @@ public class ProgramScriptService {
         if (name == null || name.isEmpty()) return Response.err("name is required");
         if (value == null) return Response.err("value is required");
         if (!program.getOptionsNames().contains(group)) {
-            return Response.err("No such option group: '" + group + "'. Use list_option_groups to see available groups.");
+            return Response.err("No such option group: '" + group + "'. Call get_program_options with no group to see the available groups.");
         }
 
         Options opts = program.getOptions(group);
@@ -449,7 +437,7 @@ public class ProgramScriptService {
         if (group == null || group.isEmpty()) return Response.err("group is required");
         if (name == null || name.isEmpty()) return Response.err("name is required");
         if (!program.getOptionsNames().contains(group)) {
-            return Response.err("No such option group: '" + group + "'. Use list_option_groups to see available groups.");
+            return Response.err("No such option group: '" + group + "'. Call get_program_options with no group to see the available groups.");
         }
 
         Options opts = program.getOptions(group);
@@ -481,20 +469,8 @@ public class ProgramScriptService {
     // Property Maps (typed per-address key -> value stores)
     // ========================================================================
 
-    /**
-     * List all user-defined property maps. Each map has a name, a value type
-     * (int / long / string / object / void), and the count of addresses that
-     * currently hold a value.
-     */
-    @McpTool(path = "/list_property_maps",
-             description = "List user-defined property maps — typed per-address key→value stores. Each map reports its name, value type (int|long|string|object|void), and the number of addresses holding a value.",
-             category = "program", access = ToolAccess.READ_ONLY)
-    public Response listPropertyMaps(
-            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
-        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
-        if (pe.hasError()) return pe.error();
-        Program program = pe.program();
-
+    /** Every user-defined property map: its name, value type (int / long / string / object / void) and how many addresses hold a value. */
+    private Response propertyMaps(Program program) {
         try {
             PropertyMapManager mgr = program.getUsrPropertyManager();
             List<Map<String, Object>> maps = new ArrayList<>();
@@ -619,7 +595,7 @@ public class ProgramScriptService {
              description = "Set a value at an address in a property map. The value is coerced to the map's type (int/long/string); 'void' maps ignore the value and just tag the address. Create the map first with create_property_map. Call save_program to persist.",
              category = "program", access = ToolAccess.WRITE)
     public Response setProperty(
-            @Param(value = "map", source = ParamSource.BODY, description = "Property map name (from list_property_maps).") String mapName,
+            @Param(value = "map", source = ParamSource.BODY, description = "Property map name (list them with list_properties and no map).") String mapName,
             @Param(value = "address", paramType = "address", source = ParamSource.BODY, description = ADDRESS_PARAM_DESC) String addressStr,
             @Param(value = "value", source = ParamSource.BODY, defaultValue = "",
                    description = "Value to store, as a string; parsed per the map's type. Ignored for 'void' maps.") String value,
@@ -701,7 +677,7 @@ public class ProgramScriptService {
              description = "Read the value stored at an address in a property map. Returns has_value=false and a null value when the address holds no property.",
              category = "program", access = ToolAccess.READ_ONLY)
     public Response getProperty(
-            @Param(value = "map", description = "Property map name (from list_property_maps).") String mapName,
+            @Param(value = "map", defaultValue = "", description = "Property map name. Omit to list the maps.") String mapName,
             @Param(value = "address", paramType = "address", description = ADDRESS_PARAM_DESC) String addressStr,
             @Param(value = "program", defaultValue = "",
                    description = "Target program name (omit to use the active program — always specify "
@@ -788,10 +764,10 @@ public class ProgramScriptService {
      * Optionally restrict to an inclusive address range via {@code start}/{@code end}.
      */
     @McpTool(path = "/list_properties",
-             description = "List (address, value) entries stored in a property map, with pagination. Optionally restrict to an inclusive address range with start/end.",
+             description = "List (address, value) entries stored in a property map, with pagination. Optionally restrict to an inclusive address range with start/end. Omit map to list the property maps instead: each one's name, value type (int|long|string|object|void) and how many addresses hold a value.",
              category = "program", access = ToolAccess.READ_ONLY)
     public Response listProperties(
-            @Param(value = "map", description = "Property map name (from list_property_maps).") String mapName,
+            @Param(value = "map", description = "Property map name (list them with list_properties and no map).") String mapName,
             @Param(value = "start", paramType = "address", defaultValue = "", description = "Optional inclusive start address of a range filter.") String startStr,
             @Param(value = "end", paramType = "address", defaultValue = "", description = "Optional inclusive end address of a range filter (requires start).") String endStr,
             @Param(value = "offset", defaultValue = "0", description = "Number of entries to skip.") int offset,
@@ -803,7 +779,7 @@ public class ProgramScriptService {
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
 
-        if (mapName == null || mapName.isEmpty()) return Response.err("map is required");
+        if (mapName == null || mapName.isEmpty()) return propertyMaps(program);
         PropertyMap<?> map = program.getUsrPropertyManager().getPropertyMap(mapName);
         if (map == null) {
             return Response.err("No property map named '" + mapName + "'.");

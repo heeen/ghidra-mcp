@@ -47,7 +47,7 @@ KNOWN_ERROR_PAYLOAD_GOLDENS = {
     "remove_function_tag.snap": "no 'tags' supplied",
     "search_functions.snap": "no search term supplied",
     # --- one parameter name, different meanings in different tools ----------
-    # `pattern` is a type name for search_data_types but a hex byte string here.
+    # `pattern` is a type name for find_data_types but a hex byte string here.
     "search_byte_patterns.snap": "pattern='int' is not hex",
     # `source_type` is a Ghidra reference SourceType, not a data type.
     "add_memory_reference.snap": "source_type='int' is not a SourceType",

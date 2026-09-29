@@ -243,19 +243,24 @@ class TestFunctionListing:
 class TestDataTypes:
     """Test data type listing endpoints (read-only)."""
 
-    def test_list_data_types(self, http_client):
-        """List data types."""
-        response = http_client.get("/list_data_types")
+    def test_find_data_types(self, http_client):
+        """Find data types with no filter."""
+        response = http_client.get("/find_data_types")
         assert response.status_code == 200
 
-    def test_list_data_types_with_limit(self, http_client):
-        """List data types with limit."""
-        response = http_client.get("/list_data_types", params={"limit": 20})
+    def test_find_data_types_with_limit(self, http_client):
+        """Find data types with limit."""
+        response = http_client.get("/find_data_types", params={"limit": 20})
         assert response.status_code == 200
 
-    def test_search_data_types(self, http_client):
-        """Search for data types."""
-        response = http_client.get("/search_data_types", params={"pattern": "int"})
+    def test_find_data_types_by_pattern(self, http_client):
+        """Search for data types by name."""
+        response = http_client.get("/find_data_types", params={"pattern": "int"})
+        assert response.status_code == 200
+
+    def test_find_data_types_categories(self, http_client):
+        """List the category paths."""
+        response = http_client.get("/find_data_types", params={"categories": "true"})
         assert response.status_code == 200
 
     def test_get_valid_data_types(self, http_client):
@@ -814,10 +819,10 @@ class TestSearchInstructions:
 class TestBulkHashing:
     """Test bulk hash endpoints (read-only)."""
 
-    def test_get_bulk_function_hashes(self, http_client):
+    def test_get_function_hash_bulk(self, http_client):
         """Get bulk function hashes."""
         response = http_client.get(
-            "/get_bulk_function_hashes", params={"offset": 0, "limit": 10}
+            "/get_function_hash", params={"offset": 0, "limit": 10}
         )
         assert response.status_code == 200
 
