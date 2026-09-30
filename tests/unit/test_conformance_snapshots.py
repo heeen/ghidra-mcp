@@ -57,7 +57,6 @@ KNOWN_ERROR_PAYLOAD_GOLDENS = {
     "analyze_dataflow.snap": "direction='both' is not accepted here",
     # `name` was filled with the function name for a tool that wants an address.
     "get_function_labels.snap": "function lookup got '0xcalc_crc16'",
-    "get_function_tags.snap": "function lookup got '0xcalc_crc16'",
     # --- the synthesized address is real but wrong for this tool ------------
     "clear_instruction_flow_override.snap": "no instruction at the synthesized address",
     "suggest_field_names.snap": "no struct at the synthesized address",

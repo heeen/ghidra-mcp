@@ -116,12 +116,13 @@ public class DocumentationApplyServiceTest {
             (String) fields.get("calling_convention"), (String) fields.get("return_type"),
             list(fields.get("parameters")), stringMap(fields.get("variable_types")),
             stringMap(fields.get("variable_renames")), (String) fields.get("plate_comment"),
-            list(fields.get("comments")), list(fields.get("labels")), score, PROGRAM);
+            list(fields.get("comments")), list(fields.get("labels")),
+            (String) fields.get("tags"), stringMap(fields.get("tag_comments")), score, PROGRAM);
     }
 
     private Response applyMany(List<Map<String, Object>> entries, Boolean score) {
         return service(null).applyDocumentation("", entries, false, null, null, null, null, null, null, null,
-            null, null, null, score, PROGRAM);
+            null, null, null, null, null, score, PROGRAM);
     }
 
     @SuppressWarnings("unchecked")
@@ -150,7 +151,7 @@ public class DocumentationApplyServiceTest {
     @Test
     public void theAddressIsRequired() {
         Response r = service(null).applyDocumentation("  ", null, false, null, null, null, null, null, null,
-            null, null, null, null, null, PROGRAM);
+            null, null, null, null, null, null, null, PROGRAM);
         assertTrue(((Response.Err) r).message().contains("address parameter is required"));
     }
 
@@ -367,6 +368,38 @@ public class DocumentationApplyServiceTest {
         verifyNoInteractions(comments);
     }
 
+    // ------------------------------------------------------------------------------ tags
+
+    @Test
+    public void tagsAreAttachedAndReportedWithWhatWasCreated() {
+        when(functions.addFunctionTag(anyString(), anyString(), any(), any(), any()))
+            .thenReturn(Response.ok(Map.of("status", "success", "added", List.of("crypto", "hot"),
+                "already_present", List.of(), "created", List.of("crypto"))));
+
+        Map<String, Object> out = ok(applyOne(service(null), Map.of("tags", "crypto,hot",
+            "tag_comments", Map.of("crypto", "touches key material")), false));
+
+        verify(functions).addFunctionTag("0x1000", "crypto,hot", Map.of("crypto", "touches key material"),
+            List.of(), PROGRAM);
+        assertEquals(List.of("crypto", "hot"), step(out, "tags").get("added"));
+        assertEquals(List.of("crypto"), step(out, "tags").get("created"));
+        assertEquals(List.of(), out.get("errors"));
+    }
+
+    @Test
+    public void anEntryMayGiveItsTagsAsAnArray() {
+        when(functions.addFunctionTag(anyString(), anyString(), any(), any(), any())).thenReturn(Response.ok(Map.of()));
+        applyMany(List.of(Map.of("address", "0x1000", "tags", List.of("a", "b"))), false);
+        verify(functions).addFunctionTag(eq("0x1000"), eq("a,b"), any(), any(), eq(PROGRAM));
+    }
+
+    @Test
+    public void noTagsMeansNoTagStep() {
+        Map<String, Object> out = ok(applyOne(service(null), Map.of("name", "n"), false));
+        assertNull(step(out, "tags"));
+        verify(functions, never()).addFunctionTag(anyString(), anyString(), any(), any(), any());
+    }
+
     // ------------------------------------------------------------------ many functions
 
     @Test
@@ -409,7 +442,7 @@ public class DocumentationApplyServiceTest {
     @Test
     public void anUnknownProgramFailsTheWholeCall() {
         Response r = service(null).applyDocumentation("0x1000", null, false, null, null, null, null, null,
-            null, null, null, null, null, null, "/fw/none");
+            null, null, null, null, null, null, null, null, "/fw/none");
         assertTrue(r instanceof Response.Err);
     }
 }

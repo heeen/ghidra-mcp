@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 221,
+  "total_endpoints": 218,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -35,6 +35,7 @@
         "function_address",
         "function_name",
         "tags",
+        "tag_comments",
         "assignments",
         "program"
       ],
@@ -318,6 +319,8 @@
         "plate_comment",
         "comments",
         "labels",
+        "tags",
+        "tag_comments",
         "score",
         "program"
       ],
@@ -742,21 +745,6 @@
         "headless"
       ],
       "description": "Create function signature type"
-    },
-    {
-      "path": "/create_function_tag",
-      "method": "POST",
-      "category": "function",
-      "params": [
-        "name",
-        "comment",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "Create a program-wide function tag definition with an optional comment. Use add_function_tag to attach it to functions."
     },
     {
       "path": "/create_label",
@@ -1531,6 +1519,7 @@
         "has_custom_name",
         "is_thunk",
         "is_external",
+        "tag",
         "sort_by",
         "offset",
         "limit",
@@ -1867,24 +1856,6 @@
         "headless"
       ],
       "description": "Dump raw P-code for a function (issue #192). Returns low (basic-iter) and high (HighFunction) P-code with basic blocks and varnodes. Granularity controls output: 'basic' = basic-block iter only (less memory), 'high' = HighFunction graph (default; includes both BB iter and op-iter). For P-code emulators / ML pipelines / alternative decompilers."
-    },
-    {
-      "path": "/get_function_tags",
-      "method": "GET",
-      "category": "function",
-      "params": [
-        "function",
-        "address",
-        "name",
-        "function_address",
-        "function_name",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List all tags assigned to a specific function. Accepts either a function address or a function name."
     },
     {
       "path": "/get_functions",
@@ -2844,22 +2815,6 @@
         "headless"
       ],
       "description": "Search for byte patterns"
-    },
-    {
-      "path": "/search_functions_by_tag",
-      "method": "GET",
-      "category": "function",
-      "params": [
-        "tag",
-        "offset",
-        "limit",
-        "program"
-      ],
-      "servers": [
-        "gui",
-        "headless"
-      ],
-      "description": "List all functions that have a specified tag attached. Returns name + entry address."
     },
     {
       "path": "/search_instructions",

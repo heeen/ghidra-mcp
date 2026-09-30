@@ -302,15 +302,6 @@ tool_cases:
   tier: write
   snapshot: false
   skip: 'no synthetic value for required param(s): [''parameters'', ''return_type'']'
-- tool: create_function_tag
-  tier: write
-  args:
-    name: calc_crc16
-    program: Benchmark.dll
-  assert:
-    is_error: false
-    nonempty: true
-  snapshot: true
 - tool: create_label
   tier: write
   args:
@@ -797,15 +788,6 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: true
-- tool: get_function_tags
-  tier: read
-  args:
-    function: calc_crc16
-    program: Benchmark.dll
-  assert:
-    is_error: false
-    nonempty: true
-  snapshot: true
 - tool: get_function_variables
   tier: read
   args:
@@ -1276,10 +1258,6 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: true
-- tool: search_functions_by_tag
-  tier: read
-  snapshot: false
-  skip: 'no synthetic value for required param(s): [''tag'']'
 - tool: search_functions_enhanced
   tier: read
   args:

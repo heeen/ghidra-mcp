@@ -81,7 +81,7 @@ public class FunctionBundleService {
     static final Set<String> BUNDLE_FIELDS = Set.of(
             "signature", "classification", "return_type", "entry_point",
             "body_start", "body_end", "decompiled_code",
-            "plate_comment", "comments", "labels", "parameters", "locals",
+            "plate_comment", "comments", "labels", "tags", "parameters", "locals",
             "callers", "call_context", "callees", "xrefs", "disassembly",
             "jump_targets");
 
@@ -122,7 +122,7 @@ public class FunctionBundleService {
             @Param(value = "fields", defaultValue = "",
                    description = "Comma-separated subset: signature, classification, return_type, "
                                + "entry_point, body_start, body_end, decompiled_code, "
-                               + "plate_comment, comments, labels, parameters, locals, callers, "
+                               + "plate_comment, comments, labels, tags, parameters, locals, callers, "
                                + "call_context, callees, xrefs, disassembly, jump_targets. "
                                + "Omit or leave empty for the full bundle.") String fieldsParam,
             @Param(value = "include_call_context", defaultValue = "true",
@@ -409,6 +409,9 @@ public class FunctionBundleService {
         }
         if (wantsField(fields, "labels")) {
             out.put("labels", collectLabels(program, func));
+        }
+        if (wantsField(fields, "tags")) {
+            out.put("tags", func.getTags().stream().map(t -> t.getName()).sorted().toList());
         }
         if (wantsField(fields, "jump_targets")) {
             out.put("jump_targets", collectJumpTargets(program, func));

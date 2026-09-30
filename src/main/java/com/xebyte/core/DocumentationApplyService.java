@@ -111,6 +111,14 @@ public class DocumentationApplyService {
             @Param(value = "labels", source = ParamSource.BODY, defaultValue = "[]",
                    description = "Array of {address | relative_offset, name}. A label already there with "
                                + "that name is left alone.") List<Map<String, Object>> labels,
+            @Param(value = "tags", source = ParamSource.BODY, defaultValue = "",
+                   description = "Comma-separated function tags to attach (in an entry, a string or an "
+                               + "array of names). A tag that does not exist is created. Tags are only "
+                               + "added here; remove one with remove_function_tag.") String tags,
+            @Param(value = "tag_comments", source = ParamSource.BODY,
+                   description = "Object mapping a tag name to its description, used for a tag this call "
+                               + "creates; an existing tag keeps its description.")
+                Map<String, String> tagComments,
             @Param(value = "score", source = ParamSource.BODY, defaultValue = "",
                    description = "True appends a compact completeness score to each function. Default: true "
                                + "for one function, false for entries[], where it costs a decompile "
@@ -145,6 +153,8 @@ public class DocumentationApplyService {
         entry.put("plate_comment", plateComment);
         entry.put("comments", commentEntries);
         entry.put("labels", labels);
+        entry.put("tags", tags);
+        entry.put("tag_comments", tagComments);
         Map<String, Object> out = applyOne(program, programName, entry, score == null || score);
         out.put("program", program.getName());
         return Response.ok(out);
@@ -222,6 +232,7 @@ public class DocumentationApplyService {
         }
         applyComments(program, target, address, programName, entry, steps, errors);
         applyLabels(program, target, programName, list(entry.get("labels")), steps, errors);
+        applyTags(address, programName, entry, steps, errors);
 
         if (score) {
             // Compact: the caller already has the workflow guidance in its prompt.
@@ -374,6 +385,20 @@ public class DocumentationApplyService {
         result.put("created", wanted.size());
         result.put("unchanged", unchanged);
         steps.put("labels", result);
+    }
+
+    private void applyTags(String address, String programName, Map<String, Object> entry,
+            Map<String, Object> steps, List<String> errors) {
+        String names = entry.get("tags") instanceof List<?> list
+            ? list.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","))
+            : text(entry, "tags");
+        if (names == null || names.isBlank()) {
+            return;
+        }
+        Response attached = functions.addFunctionTag(address, names, stringMap(entry.get("tag_comments")),
+            List.of(), programName);
+        steps.put("tags", counted("tags", attached, errors, Map.of(
+            "added", "added", "already_present", "already_present", "created", "created")));
     }
 
     private static boolean hasLabel(Program program, Address at, String name) {

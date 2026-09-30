@@ -119,7 +119,7 @@ prototype, variable-type and variable-rename fields that used to need separate c
 
 ## Folds after the consolidation
 
-Seventeen more tools folded into a sibling, still within one permission tier. Each survivor
+Twenty more tools folded into a sibling, still within one permission tier. Each survivor
 keeps its own single-item call unchanged and gains the removed tool's job.
 
 | REMOVE | SURVIVOR | Transform |
@@ -141,6 +141,9 @@ keeps its own single-item call unchanged and gains the removed tool's job.
 | `debugger_step_out()` | `debugger_step` | `debugger_step(kind="out")` |
 | `decompile_checkout_start(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="start")` |
 | `decompile_checkout_stop(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="stop")` |
+| `get_function_tags(function)` | `get_functions` | `get_functions(function, fields="tags")`; `tags` is a list of names, and is part of the default bundle |
+| `search_functions_by_tag(tag)` | `find_functions` | `find_functions(tag=...)`, or several names for any-of; every result also carries its `tags` |
+| `create_function_tag(name, comment)` | `add_function_tag` | `add_function_tag(function, tags=name, tag_comments={name: comment})`, or `apply_documentation(tags=..., tag_comments=...)`; attaching creates the definition |
 
 The bridge's own `debugger_step_into` / `debugger_step_over` proxies, which forward to the
 external debugger server, are unaffected: only the GUI plugin's `/debugger/step_*` routes
@@ -164,9 +167,10 @@ Search the consumer for each item.
 - **Every tool listed under "Folds after the consolidation"** and `apply_function_documentation`
   (use `apply_documentation`; it takes the same export) are gone. `find_data_types` returns
   records under `data_types`, not preformatted strings.
-- **Still present, and worth a look before the next fold:** the tag tools
-  (`list_function_tags`, `search_functions_by_tag`), which fun-doc calls and which were
-  deliberately left unfolded until the consumer can change with them.
+- **Function tags:** `get_function_tags`, `search_functions_by_tag` and
+  `create_function_tag` are gone (`doc_lint`, `conformance_dashboard`, `fun_doc`,
+  `battletest_promoter`, `adversarial_reproof` and `golden_bench` call them). Reads are
+  `get_functions(fields="tags")` and `find_functions(tag=...)`; `list_function_tags` stays.
 
 ## Call-shape changes worth knowing
 

@@ -334,7 +334,8 @@ public class ListingService {
     @McpTool(path = "/find_functions",
         description = "Find functions: every filter is optional, so with none it lists the whole "
             + "program a page at a time. Filter by name (substring or regex=true), xref count, "
-            + "calling convention, whether the name is user-given, thunk or external; sort by "
+            + "calling convention, whether the name is user-given, thunk or external, or by tag "
+            + "(tag=a,b keeps functions carrying ANY of them); each result lists its tags; sort by "
             + "address, name or xref_count. Replaces list_functions, list_functions_enhanced, "
             + "search_functions and search_functions_enhanced, which returned four different "
             + "shapes for the same question.",
@@ -359,6 +360,10 @@ public class ListingService {
                    description = "true = only thunks, false = exclude them, omit for both.") Boolean isThunkFilter,
             @Param(value = "is_external", defaultValue = "",
                    description = "true = only external functions, false = exclude them.") Boolean isExternalFilter,
+            @Param(value = "tag", defaultValue = "",
+                   description = "Only functions carrying any of these tags: one name or a "
+                               + "comma-separated list. A name that is not a defined tag is an "
+                               + "error (list_function_tags shows the definitions).") String tagFilter,
             @Param(value = "sort_by", defaultValue = "address",
                    description = "address | name | xref_count.") String sortBy,
             @Param(value = "offset", defaultValue = "0",
@@ -385,6 +390,19 @@ public class ListingService {
             }
         }
 
+        Set<String> wantedTags = new java.util.LinkedHashSet<>();
+        if (tagFilter != null) {
+            for (String part : tagFilter.split(",")) {
+                if (!part.trim().isEmpty()) wantedTags.add(part.trim());
+            }
+        }
+        var tagManager = program.getFunctionManager().getFunctionTagManager();
+        for (String wanted : wantedTags) {
+            if (tagManager.getFunctionTag(wanted) == null) {
+                return Response.err("Tag not found: " + wanted);
+            }
+        }
+
         // Classification walks a function's instructions, so it is the one expensive test here.
         // Only pay it during the scan when a caller actually filters on it; otherwise it is
         // deferred to the returned page, turning 25,779 instruction walks into `limit` of them.
@@ -402,6 +420,10 @@ public class ListingService {
             }
             if (callingConvention != null && !callingConvention.isEmpty()
                     && !callingConvention.equalsIgnoreCase(func.getCallingConventionName())) {
+                continue;
+            }
+            if (!wantedTags.isEmpty()
+                    && func.getTags().stream().noneMatch(t -> wantedTags.contains(t.getName()))) {
                 continue;
             }
             int xrefCount = func.getSymbol().getReferenceCount();
@@ -435,7 +457,9 @@ public class ListingService {
         }
 
         Response paged = ServiceUtils.paged("functions", matches, offset, limit);
-        if (!classifyWhileScanning && paged instanceof Response.Ok ok
+        // Per-result work that only the returned page pays for: tags, and thunk
+        // classification when nothing filtered on it.
+        if (paged instanceof Response.Ok ok
                 && ok.data() instanceof Map<?, ?> map
                 && map.get("functions") instanceof List<?> rows) {
             for (Object o : rows) {
@@ -443,8 +467,12 @@ public class ListingService {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> row = (Map<String, Object>) o;
                 Function func = ServiceUtils.resolveFunction(program, String.valueOf(row.get("address")));
-                row.put("is_thunk", func != null
-                    && "thunk".equals(AnalysisService.classifyFunction(func, program)));
+                row.put("tags", func == null ? List.of()
+                    : func.getTags().stream().map(t -> t.getName()).sorted().toList());
+                if (!classifyWhileScanning) {
+                    row.put("is_thunk", func != null
+                        && "thunk".equals(AnalysisService.classifyFunction(func, program)));
+                }
             }
         }
         return paged;
