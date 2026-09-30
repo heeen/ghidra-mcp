@@ -529,18 +529,18 @@ allowlist has to be small *and* self-sufficient.
 | Tool | Group | What it buys you |
 | --- | --- | --- |
 | `get_metadata` | `program` | Which binary is loaded — name, architecture, image base, function count. Orientation, and it confirms the bridge reached Ghidra at all. |
-| `list_methods` | `listing` | Paginated function-name enumeration (`offset`, `limit`). **This is the discovery tool** — without it the agent cannot answer "what is in this binary". |
+| `find_functions` | `listing` | Paginated function enumeration and search (`offset`, `limit`, name filter, xref count, tag). **This is the discovery tool** — without it the agent cannot answer "what is in this binary". |
 | `get_entry_points` | `listing` | Where execution starts, so analysis has a root to work down from. |
-| `decompile_function` | `function` | The payload. Takes `address` **or** `functions=` (comma-separated names *or* addresses), so one call can pull several bodies. |
+| `get_functions` | `function` | The payload. Takes `function=` (a name or an address) **or** `functions=` (comma-separated names *or* addresses), so one call can pull several bodies; `fields=` picks what comes back (decompiled code, callers, callees, comments, tags…). |
 
-That set is genuinely closed: `get_entry_points` and `list_methods` supply the
-addresses and names that `decompile_function` consumes, and a decompiled body
-names its callees, which feed straight back into `decompile_function`.
+That set is genuinely closed: `get_entry_points` and `find_functions` supply the
+addresses and names that `get_functions` consumes, and a decompiled body
+names its callees, which feed straight back into `get_functions`.
 
 The three tools suggested in [#441](https://github.com/bethington/ghidra-mcp/issues/441)
-— `get_metadata`, `get_entry_points`, `decompile_function` — all exist under
-exactly those names and are a workable floor. `list_methods` is the one addition
-worth making: without it the agent can only reach code that is reachable by name
+— `get_metadata`, `get_entry_points`, `decompile_function` — were a workable floor.
+`decompile_function` is now `get_functions` (and folded five other function readers
+into it), and `find_functions` is the one addition worth making: without it the agent can only reach code that is reachable by name
 from something it already decompiled, so anything not referenced from an entry
 point is invisible.
 
@@ -548,11 +548,11 @@ point is invisible.
 
 | Tool | Group | Why |
 | --- | --- | --- |
-| `get_function_callers` / `get_function_callees` | `xref` | Walk the call graph without decompiling every body to find edges. |
+| `get_functions` with `fields=callers,callees` | `function` | Walk the call graph without decompiling every body to find edges (no decompile happens unless `decompiled_code` is requested). |
 | `get_xrefs_to` | `xref` | Who touches this address — the standard question about a global. |
 | `list_strings` | `listing` | Strings are the cheapest orientation signal in an unknown binary. |
-| `search_functions` | `listing` | Name search, once the agent knows what it is hunting for. |
-| `list_imports` / `list_exports` | `listing` | The binary's external surface. |
+| `find_functions` with `name_pattern` | `listing` | Name search, once the agent knows what it is hunting for. |
+| `list_program_items` with `kind=imports` / `exports` | `listing` | The binary's external surface. |
 
 Every tool above is a `GET`; none of them writes to the Ghidra database.
 
@@ -955,7 +955,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 ### Functions: Decompile, Rename, Prototypes & Variables
 
-- `add_function_tag` - Attach one or more tags to a function
+- `add_function_tag` - Attach tags to ONE function (function + tags) OR MANY in one transaction (assignments=[{function,tags}, ...])
 - `batch_rename_function_components` - Batch rename function components
 - `clear_flow_and_repair` - Run Ghidra's GUI 'Clear Flow and Repair' action on a seed range: clears instruction flow reachable from the seed, then repairs function bodies and re-disassembles retained flow (ClearFlowAndRepairCmd with clear_data=false, clear_labels=false, repair=true)
 - `clear_instruction_flow_override` - Clear flow override
@@ -995,12 +995,12 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `get_function_call_graph` - Get call graph
 - `get_xrefs_from` - Get references from address
 - `get_xrefs_to` - Get references to address
-- `remove_reference` - Remove memory cross-reference(s) from one address to another â€” the inverse of add_memory_reference
+- `remove_reference` - Remove memory cross-reference(s) from one address to another — the inverse of add_memory_reference
 
 ### Data Types & Structures
 
 - `add_struct_field` - Add struct field
-- `analyze_global_completeness` - Score a global variable's documentation completeness on a budgeted 0-100 scale â€” the data-address analog of analyze_function_completeness
+- `analyze_global_completeness` - Score a global variable's documentation completeness on a budgeted 0-100 scale — the data-address analog of analyze_function_completeness
 - `analyze_struct_field_usage` - Analyze struct field usage
 - `apply_data_classification` - Apply data classification
 - `apply_data_type` - Apply data type
@@ -1021,7 +1021,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `get_type_size` - Get data type size and info
 - `get_valid_data_types` - Get valid data type names
 - `import_data_types` - Import data types from GDT
-- `modify_struct_field` - Modify struct field
+- `modify_struct_field` - Modify a field in a structure: retype it (new_type, which also embeds a struct by value, e.g
 - `move_data_type_to_category` - Move data type to category
 - `recreate_struct` - Replace a structure in one step: optionally remove an existing same-named type, then create with fields JSON (same shape as create_struct)
 - `remove_struct_field` - Remove struct field
@@ -1037,7 +1037,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 - `batch_set_comments` - Set multiple comments
 - `clear_function_comments` - Clear all comments for a function
-- `get_comment` - Get listing comments (plate/pre/eol/post/repeatable) at ANY address, including data addresses (works on functions and data globals alike)
+- `get_comment` - Get listing comments (plate/pre/eol/post/repeatable) at ANY address, including data addresses (works on functions and data globals alike), for ONE address (address=) or MANY in one call (addresses=a,b,c)
 - `set_comment` - Set a listing comment of a given kind (plate/pre/eol/post/repeatable) at ANY address, including data addresses
 
 ### Analysis
@@ -1048,7 +1048,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `analyze_for_documentation` - Composite RE documentation analysis (decompile + classify + variables + completeness)
 - `analyze_function_complete` - Comprehensive single-call function analysis
 - `analyze_function_completeness` - Analyze documentation completeness
-- `apply_documentation` - Apply documentation to ONE function (fields at the top level) OR MANY (functions=[{address, ...}, ...])
+- `apply_documentation` - Apply documentation to ONE function (fields at the top level) OR MANY (entries=[{address, ...}, ...])
 - `configure_analyzer` - Configure an analysis plugin
 - `detect_array_bounds` - Detect array bounds
 - `find_code_gaps` - Find gaps of undefined bytes between functions in executable memory
@@ -1083,7 +1083,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 - `find_similar_functions_fuzzy` - Cross-binary fuzzy function matching
 - `find_undocumented_by_string` - Find undocumented functions referencing string
 - `get_function_documentation` - Export function documentation
-- `get_function_hash` - Get function hash
+- `get_function_hash` - Compute the normalized opcode hash of ONE function (function=), or of MANY in one call by omitting it: every function, paged, optionally only the documented or undocumented ones (filter=)
 - `merge_program_documentation` - Bulk merge: copy all RE documentation (function names, signatures, plate comments, instruction comments at EOL/PRE/POST, non-default labels & global symbols) from one program to another at matching addresses
 
 ### Health, Schema & Tool Control
@@ -1151,7 +1151,7 @@ On Windows hosts where the bridge's WinDbg debugger proxy is active (`GHIDRA_DEB
 - `decompile_checkout_delete` - Deregister a checkout; with delete_files=true also remove its on-disk tree (containment-checked)
 - `decompile_checkout_pin_module` - Pin a function to a checkout compartment forever
 - `decompile_checkout_run` - Start or stop the sweep that fills a checkout's tree
-- `decompile_checkout_status` - Status, config and root path of a decompilation checkout — poll this after decompile_checkout_start, then Grep the reported root
+- `decompile_checkout_status` - Status, config and root path of a decompilation checkout — poll this after decompile_checkout_run(action=start), then Grep the reported root
 
 ### Bridge Static Tools
 
@@ -1406,10 +1406,10 @@ curl -X POST -H 'Content-Type: application/json' \
 curl -X POST http://localhost:8089/run_analysis
 
 # 3. List discovered functions
-curl "http://localhost:8089/list_functions?limit=20"
+curl "http://localhost:8089/find_functions?limit=20"
 
 # 4. Decompile a function
-curl "http://localhost:8089/decompile_function?address=0x401000"
+curl "http://localhost:8089/get_functions?function=0x401000&fields=decompiled_code"
 
 # 5. Get metadata
 curl http://localhost:8089/get_metadata
@@ -1422,10 +1422,9 @@ curl http://localhost:8089/get_metadata
 | `/import_file` | POST | Import a binary into the project and open it |
 | `/open_program` | POST | Open a program already in the project (any `program=` also opens on demand) |
 | `/run_analysis` | POST | Run Ghidra auto-analysis |
-| `/list_functions` | GET | List all discovered functions |
-| `/list_exports` | GET | List exported symbols |
-| `/list_imports` | GET | List imported symbols |
-| `/decompile_function` | GET | Decompile function to C code |
+| `/find_functions` | GET | Find or list functions (filters, sort, paging, tags) |
+| `/list_program_items` | GET | List imports, exports, segments, classes, namespaces or external locations (`kind=`) |
+| `/get_functions` | GET | One or many functions: decompiled code, signature, callers, callees, comments, tags |
 | `/create_function` | POST | Create function at address |
 | `/get_metadata` | GET | Get program metadata |
 | `/create_project` | POST | Create a Ghidra project |
