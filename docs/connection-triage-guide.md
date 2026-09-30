@@ -81,7 +81,7 @@ regression check that the chosen route has not drifted.
 
 Interpret the results as follows:
 
-- `200` from `/mcp/health` (GUI) or `/health` (headless) means the HTTP server can
+- `200` from `/mcp/health` (both servers) means the HTTP server can
   answer a health request.
 - `200` from GUI `/mcp/instance_info` means the server can report instance metadata
   such as its process, project, and open-program state. Headless mode records this
