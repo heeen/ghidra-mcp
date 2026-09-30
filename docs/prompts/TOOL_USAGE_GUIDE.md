@@ -549,8 +549,8 @@ Lightweight per-function labels (program-wide tag definitions, attached to any f
 
 Two layers:
 
-- **Tag definitions** (program-wide): `create_function_tag`, `delete_function_tag`, `set_function_tag_comment`, `list_function_tags`.
-- **Per-function attachment**: `add_function_tag`, `remove_function_tag`, `get_function_tags`, `search_functions_by_tag`. Attaching a tag by name auto-creates the definition if it doesn't already exist.
+- **Tag definitions** (program-wide): `delete_function_tag`, `set_function_tag_comment`, `list_function_tags`. There is no create call: attaching a tag creates its definition, and `tag_comments={"crypto": "..."}` on `add_function_tag` or `apply_documentation` gives a new one a description.
+- **Per-function attachment**: `add_function_tag`, `remove_function_tag`, and `apply_documentation(tags=...)`, which adds tags alongside everything else you write about a function. Read them back with `get_functions(fields=tags)`, and find functions by tag with `find_functions(tag=...)`; every `find_functions` result lists its tags.
 
 Batch variants: `add_function_tag` / `remove_function_tag` take an array of `{function, tags}` objects and run the whole set in one transaction. Use these when tagging a sweep result — single-call instead of N round-trips.
 
@@ -566,11 +566,11 @@ add_function_tag(assignments=[
 ])
 
 # Later, recall the curated list:
-search_functions_by_tag(tag="crypto")
-# → returns {tag, total, functions: [{name, address}, ...]}
+find_functions(tag="crypto")            # any of several: tag="crypto,parser"
+# → returns {functions: [{name, address, tags, ...}, ...], total, ...}
 ```
 
-Tags are case-sensitive; `search_functions_by_tag` rejects unknown tag names (returns error rather than empty list) so you can detect typos.
+Tags are case-sensitive; `find_functions(tag=...)` rejects unknown tag names (returns error rather than empty list) so you can detect typos.
 
 ## Security Environment Variables (v5.4.1+)
 

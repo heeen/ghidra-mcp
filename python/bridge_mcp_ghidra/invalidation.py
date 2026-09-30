@@ -123,7 +123,6 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/apply_data_type": InvalidationTier.CALLERS,
     "/create_function": InvalidationTier.CALLERS,
     "/delete_function": InvalidationTier.CALLERS,
-    "/create_function_tag": InvalidationTier.CALLERS,
     "/delete_function_tag": InvalidationTier.CALLERS,
     # --- TYPE: struct/enum/typedef edits (precise fan-out in commit 7) ---
     "/add_struct_field": InvalidationTier.TYPE,

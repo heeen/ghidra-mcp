@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**221 endpoints**, 220 of them advertised as MCP tools — 217 served by the GUI
-plugin, 202 by the headless server, 198 by both. One endpoint,
+**218 endpoints**, 217 of them advertised as MCP tools — 214 served by the GUI
+plugin, 199 by the headless server, 195 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
@@ -156,6 +156,21 @@ client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
 
+- **Function tags are an attribute of a function, not a tool family.** Reading them is
+  `get_functions(fields=tags)` (also in the default bundle, so bulk mode returns the tags of
+  20 functions in one call) and `find_functions(tag=a,b)`, which composes with every other
+  filter and sort (any-of; an undefined tag is an error, so a typo is not an empty page);
+  each `find_functions` result now lists its `tags`. Writing them is
+  `apply_documentation(tags=..., tag_comments=...)` alongside everything else written about
+  a function, or `add_function_tag`. There is no create call any more: attaching a tag
+  creates its definition, and `tag_comments` gives a new one a description (an existing tag
+  keeps its own; `set_function_tag_comment` changes it). `add_function_tag` and its bulk
+  form report what they `created`. **Removed:** `get_function_tags`,
+  `search_functions_by_tag`, `create_function_tag`. Untouched: `list_function_tags` (the
+  definitions and their use counts), `remove_function_tag`, `delete_function_tag`,
+  `set_function_tag_comment`. `apply_documentation` only adds tags, so applying an export to
+  another function never strips one.
+
 - **One meaning for a function reference, in every tool.** `FunctionRef` had a
   case-insensitive fallback and `ServiceUtils.resolveFunction` did not, so a name typed in
   the wrong case worked in the call-graph tools and failed in the function tools; neither
@@ -233,8 +248,7 @@ client's own built-in tools, so the search costs no permission surface.
   `debugger_step(kind=into|over|out)` replaces the three GUI step routes (the bridge's own
   proxies to the external debugger are untouched); `decompile_checkout_run(action=start|stop)`
   replaces `decompile_checkout_start` and `decompile_checkout_stop`. Nothing was left behind
-  as an alias. The tag-read fold (`get_function_tags` absorbing `list_function_tags` and
-  `search_functions_by_tag`) is not done: fun-doc calls all three and needs a matching change.
+  as an alias. Function tags followed (next entry).
 
 - **GZF export/import and GAR archive/restore are served by the GUI too.** They were
   headless-only because they lived in `HeadlessProgramProvider`, though nothing in them

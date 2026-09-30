@@ -70,7 +70,7 @@ public class ListingServiceValidationTest extends TestCase {
 
     public void testFindFunctionsDegradesGracefully() {
         assertNoProgram(listing.findFunctions("Foo", false, null, null, "", null, null, null,
-                                              "address", 0, 100, ""));
+                                              "", "address", 0, 100, ""));
     }
 
     public void testListProgramItemsDegradesGracefully() {
