@@ -318,7 +318,8 @@ public class AnnotationScanner {
                     }
                 }
 
-                return injectResolvedProgram((Response) method.invoke(service, args));
+                Response result = injectResolvedProgram((Response) method.invoke(service, args));
+                return isWrite && tool.dryRun() ? warnIfUnsaveable(result) : result;
             } catch (InvocationTargetException e) {
                 Throwable cause = e.getCause();
                 String msg = cause != null ? cause.getMessage() : e.getMessage();
@@ -331,6 +332,39 @@ public class AnnotationScanner {
                 ServiceUtils.clearResolvedProgramName();
             }
         };
+    }
+
+    /**
+     * Append a warning to a successful program edit that can never be saved. The edit
+     * applied, so the response is right to say success; what it does not say is that the
+     * edit lives only in memory, because the program is an in-memory copy of a versioned
+     * file that is not checked out ({@link ProgramSaves#unsaveableReason}). Without this, every edit reported success
+     * and the loss surfaced only at close.
+     */
+    static Response warnIfUnsaveable(Response response) {
+        Program program = ServiceUtils.peekResolvedProgram();
+        if (program == null || !(response instanceof Response.Ok ok)
+                || !(ok.data() instanceof Map<?, ?> map) || !program.isChanged()) {
+            return response;
+        }
+        String reason = ProgramSaves.unsaveableReason(program);
+        if (reason == null) {
+            return response;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            out.put(String.valueOf(e.getKey()), e.getValue());
+        }
+        List<Object> warnings = new ArrayList<>();
+        Object existing = out.get("warnings");
+        if (existing instanceof Collection<?> c) {
+            warnings.addAll(c);
+        } else if (existing != null) {
+            warnings.add(existing);
+        }
+        warnings.add(reason);
+        out.put("warnings", warnings);
+        return Response.ok(out);
     }
 
     /**

@@ -1,10 +1,12 @@
 package com.xebyte.offline;
 
 import com.xebyte.core.ProgramProvider;
+import com.xebyte.core.ProjectProgramProvider;
 import com.xebyte.core.ProjectVersionControl;
 import com.xebyte.core.Response;
 import ghidra.framework.client.RepositoryAdapter;
 import ghidra.framework.data.CheckinHandler;
+import ghidra.framework.data.DomainFileProxy;
 import ghidra.framework.model.DomainFile;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.model.Project;
@@ -122,6 +124,101 @@ public class ProjectVersionControlTest {
         Map<String, Object> out = ok(f.vc.checkout("/fw/a", true));
         assertEquals("checkout_failed", out.get("status"));
         assertEquals(false, out.get("success"));
+    }
+
+    /**
+     * Found live: a second checkout failed with Ghidra's "Cannot checkout, private file
+     * exists" while the file was checked out all along.
+     */
+    @Test
+    public void checkingOutAFileAlreadyCheckedOutSaysSoAndSucceeds() throws Exception {
+        Fixture f = new Fixture();
+        DomainFile a = f.file("/fw/a", true, true);
+        when(a.isCheckedOutExclusive()).thenReturn(true);
+
+        Map<String, Object> out = ok(f.vc.checkout("/fw/a", false));
+
+        assertEquals("already_checked_out", out.get("status"));
+        assertEquals(true, out.get("success"));
+        assertEquals("the existing checkout's mode, not the request's", true, out.get("exclusive"));
+        verify(a, never()).checkout(anyBoolean(), any());
+    }
+
+    @Test
+    public void aHijackedFileIsNamedAsTheReasonACheckoutCannotHappen() throws Exception {
+        Fixture f = new Fixture();
+        DomainFile a = f.file("/fw/a", true, false);
+        when(a.isHijacked()).thenReturn(true);
+        assertTrue(err(f.vc.checkout("/fw/a", true)).contains("hijacked"));
+        verify(a, never()).checkout(anyBoolean(), any());
+    }
+
+    /** A program opened before its checkout: an in-memory copy that saves nowhere. */
+    private static Program preCheckoutCopy(String path, boolean edited) {
+        DomainFileProxy proxy = mock(DomainFileProxy.class);
+        when(proxy.getPathname()).thenReturn(path);
+        Program p = mock(Program.class);
+        when(p.getDomainFile()).thenReturn(proxy);
+        when(p.canSave()).thenReturn(false);
+        when(p.isChanged()).thenReturn(edited);
+        return p;
+    }
+
+    @Test
+    public void anEditedCopyOpenedBeforeTheCheckoutIsLeftAloneAndTheCallerTold() throws Exception {
+        Fixture f = new Fixture();
+        DomainFile a = f.file("/fw/a", true, false);
+        when(a.checkout(anyBoolean(), any(TaskMonitor.class))).thenReturn(true);
+        Program copy = preCheckoutCopy("/fw/a", true);
+        when(f.provider.getAllOpenPrograms()).thenReturn(new Program[] {copy});
+
+        Map<String, Object> out = ok(f.vc.checkout("/fw/a", false));
+
+        assertEquals("checked_out", out.get("status"));
+        assertEquals(true, out.get("reopen_required"));
+        assertTrue(String.valueOf(out.get("open_copy")).contains("save=false"));
+        verify(f.provider, never()).closeProgramByPath(any());
+    }
+
+    @Test
+    public void anUneditedCopyOpenedBeforeTheCheckoutIsReopenedOnIt() throws Exception {
+        ProjectProgramProvider provider = mock(ProjectProgramProvider.class);
+        Project project = mock(Project.class);
+        ProjectData data = mock(ProjectData.class);
+        when(provider.getProject()).thenReturn(project);
+        when(project.getProjectData()).thenReturn(data);
+        DomainFile a = mock(DomainFile.class);
+        when(a.getPathname()).thenReturn("/fw/a");
+        when(a.isVersioned()).thenReturn(true);
+        when(a.checkout(anyBoolean(), any(TaskMonitor.class))).thenReturn(true);
+        when(data.getFile("/fw/a")).thenReturn(a);
+        Program copy = preCheckoutCopy("/fw/a", false);
+        when(provider.getAllOpenPrograms()).thenReturn(new Program[] {copy});
+
+        Map<String, Object> out = ok(new ProjectVersionControl(provider).checkout("/fw/a", false));
+
+        assertEquals(true, out.get("reopened"));
+        assertFalse(out.containsKey("reopen_required"));
+        org.mockito.InOrder order = inOrder(provider);
+        order.verify(provider).closeProgramByPath("/fw/a");
+        order.verify(provider).openDomainFile(any(DomainFile.class));
+    }
+
+    @Test
+    public void aWritableOpenProgramIsNotTouchedByACheckout() throws Exception {
+        Fixture f = new Fixture();
+        DomainFile a = f.file("/fw/a", true, false);
+        when(a.checkout(anyBoolean(), any(TaskMonitor.class))).thenReturn(true);
+        Program writable = mock(Program.class);
+        when(writable.getDomainFile()).thenReturn(a);
+        when(writable.canSave()).thenReturn(true);
+        when(f.provider.getAllOpenPrograms()).thenReturn(new Program[] {writable});
+
+        Map<String, Object> out = ok(f.vc.checkout("/fw/a", false));
+
+        assertFalse(out.containsKey("reopened"));
+        assertFalse(out.containsKey("reopen_required"));
+        verify(f.provider, never()).closeProgramByPath(any());
     }
 
     @Test
@@ -253,6 +350,27 @@ public class ProjectVersionControlTest {
         verify(a).addToVersionControl(eq("Added via GhidraMCP"), eq(true), any(TaskMonitor.class));
         assertEquals("Added via GhidraMCP", out.get("comment"));
         assertEquals(true, out.get("keep_checked_out"));
+    }
+
+    /**
+     * Found live: adding an open file with keep_checked_out=false left it checked out,
+     * because Ghidra keeps an open file's checkout whatever it is told. Same as checkin.
+     */
+    @Test
+    public void addSavesAndClosesTheOpenInstanceFirst() throws Exception {
+        Fixture f = new Fixture();
+        DomainFile a = f.file("/fw/a", false, false);
+        Program open = mock(Program.class);
+        when(open.getDomainFile()).thenReturn(a);
+        when(f.provider.getAllOpenPrograms()).thenReturn(new Program[] {open});
+        when(f.provider.closeProgramByPath("/fw/a")).thenReturn(true);
+
+        Map<String, Object> out = ok(f.vc.addToVersionControl("/fw/a", "c", false));
+
+        assertEquals(true, out.get("closed"));
+        org.mockito.InOrder order = inOrder(f.provider, a);
+        order.verify(f.provider).closeProgramByPath("/fw/a");
+        order.verify(a).addToVersionControl(eq("c"), eq(false), any(TaskMonitor.class));
     }
 
     @Test
