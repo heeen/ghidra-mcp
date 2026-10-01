@@ -141,6 +141,7 @@ public final class TreeReconciler {
 
             Set<String> touchedSlugs = new LinkedHashSet<>();
             Set<String> seedForNeighbours = new LinkedHashSet<>();
+            Map<String, List<AddressIndex.Row>> addressRows = new LinkedHashMap<>();
 
             // Removes first — frees file budget before inserts land in the same file.
             for (String hex : plan.remove) {
@@ -166,10 +167,11 @@ public final class TreeReconciler {
                     continue;
                 }
                 BlockSplicer.PartitionMeta part = partitionMetaForReplace(checkout, row);
-                String newBlock = BlockSplicer.decompileBlock(
+                FunctionBlock.Built built = BlockSplicer.decompileBlock(
                         decomp, func, part, mod, timeout, program.getName());
                 decompileCalls++;
-                ReplaceOutcome out = replaceInTree(checkout, working, hex, row, func, newBlock);
+                addressRows.put(hex, built.addresses());
+                ReplaceOutcome out = replaceInTree(checkout, working, hex, row, func, built.text());
                 if (out.skipped()) {
                     acc.unchanged.add(hex);
                 } else if (out.ok()) {
@@ -198,13 +200,14 @@ public final class TreeReconciler {
                 BlockSplicer.PartitionMeta part = new BlockSplicer.PartitionMeta(
                         placement.slug(), placement.method(), placement.confidence(),
                         placement.evidenceBacked());
-                String newBlock = BlockSplicer.decompileBlock(
+                FunctionBlock.Built built = BlockSplicer.decompileBlock(
                         decomp, func, part, mod, timeout, program.getName());
                 decompileCalls++;
                 InsertOutcome out = insertIntoTree(
-                        checkout, working, func, newBlock, placement,
+                        checkout, working, func, built.text(), placement,
                         pointerSize, maxFileBytes);
                 if (out.ok) {
+                    addressRows.put(hex, built.addresses());
                     acc.inserted.add(hex);
                     acc.filesWritten += out.filesWritten;
                     acc.filesSplit += out.filesSplit;
@@ -225,6 +228,7 @@ public final class TreeReconciler {
                 List<CheckoutTreeNarrower.IndexEntry> finalRows =
                         new ArrayList<>(working.values());
                 CheckoutTreeNarrower.rebuildIndexes(checkout, finalRows, touchedSlugs);
+                AddressIndex.update(checkout, addressRows);
                 checkout.root().writeFile(
                         Path.of(CheckoutLayout.callgraphTsv()),
                         SweepJob.renderCallgraphTsv(ctx));

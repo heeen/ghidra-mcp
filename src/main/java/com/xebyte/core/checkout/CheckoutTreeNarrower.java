@@ -265,6 +265,11 @@ public final class CheckoutTreeNarrower {
             Checkout checkout, List<IndexEntry> rows, Set<String> touchedSlugs)
             throws IOException {
         writeIndex(checkout, rows);
+        Set<String> entries = new java.util.HashSet<>();
+        for (IndexEntry e : rows) {
+            entries.add(normalizeHex(e.addressHex()));
+        }
+        AddressIndex.retain(checkout, entries);
         Map<String, List<IndexEntry>> bySlug = new LinkedHashMap<>();
         for (IndexEntry e : rows) {
             bySlug.computeIfAbsent(e.slug(), s -> new ArrayList<>()).add(e);

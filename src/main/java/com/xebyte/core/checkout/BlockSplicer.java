@@ -438,6 +438,7 @@ public final class BlockSplicer {
         List<String> headerPatched = new ArrayList<>();
         List<String> unchanged = new ArrayList<>();
         Map<String, String> nameUpdates = new LinkedHashMap<>();
+        Map<String, List<AddressIndex.Row>> addressRows = new LinkedHashMap<>();
         int filesRewritten = 0;
 
         Path indexPath = checkout.root().path().resolve(CheckoutLayout.byAddressTsv());
@@ -521,9 +522,10 @@ public final class BlockSplicer {
                                     0.0,
                                     row != null && row.evidenceBacked());
                         }
-                        String newBlock = decompileBlock(
+                        FunctionBlock.Built built = decompileBlock(
                                 decomp, func, part, mod, timeout, program.getName());
-                        replacements.put(hex, newBlock);
+                        replacements.put(hex, built.text());
+                        addressRows.put(hex, built.addresses());
                     }
 
                     if (replacements.isEmpty()) {
@@ -559,6 +561,8 @@ public final class BlockSplicer {
                 }
             }
         }
+
+        AddressIndex.update(checkout, addressRows);
 
         if (!nameUpdates.isEmpty()) {
             if (Files.isRegularFile(indexPath)) {
@@ -748,7 +752,7 @@ public final class BlockSplicer {
     }
 
     /** One function's block, decompiled with the checkout's pooled decompiler. */
-    static String decompileBlock(
+    static FunctionBlock.Built decompileBlock(
             DecompInterface decomp,
             Function func,
             PartitionMeta part,
@@ -756,7 +760,7 @@ public final class BlockSplicer {
             int timeoutSeconds,
             String programName) {
         return FunctionBlock.build(func, decomp, timeoutSeconds, TaskMonitor.DUMMY, part.slug(),
-                part.method(), part.confidence(), part.evidenceBacked(), modNumber, programName).text();
+                part.method(), part.confidence(), part.evidenceBacked(), modNumber, programName);
     }
 
     private static long functionSize(Function func) {

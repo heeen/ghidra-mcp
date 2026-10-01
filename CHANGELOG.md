@@ -232,6 +232,16 @@ client's own built-in tools, so the search costs no permission surface.
     every surface (`decompile_error`). A real-Ghidra test requires a swept block to equal a
     freshly decompiled bundle field for field; live, all 339 functions matched before and
     after splices. Sweep 5.5 s → 6.0 s, tree 844 KB → 1.3 MB.
+  - **A register greps by its own address.** `refs` (and so every block's `// refs:` line)
+    adds the memory the decompiled code reads and writes, so a register reached as
+    base + offset is listed as itself, not only as the base the C prints. The new
+    `index/addresses.tsv` lists every address each function uses, uncapped, with how it gets
+    there (`data`, `pointer` with the literal-pool word in `via`, `load`, `store`). The sweep
+    writes it and every pass that rewrites blocks keeps it current. On the 339-function
+    firmware with flash read-only: 9,386 rows, 76 peripheral addresses, `grep 0x40003c0c`
+    finds both SPI3 DMA functions where a grep over the tree found nothing; 3 registers are
+    reachable only through the decompiled code. Asking `get_functions` for `refs` now
+    decompiles.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

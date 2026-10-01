@@ -126,6 +126,10 @@ public final class CheckoutLayout {
         return "index/by-address.tsv";
     }
 
+    public static String addressesTsv() {
+        return "index/addresses.tsv";
+    }
+
     public static String callgraphTsv() {
         return "callgraph.tsv";
     }
