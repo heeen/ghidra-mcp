@@ -749,6 +749,17 @@ public class CheckoutService {
         StatusFile statusFile = readStatusMd(derivedRoot);
         Long sweptAt = statusFile.sweptAtModificationNumber();
         Long reconciledAt = statusFile.reconciledAtModificationNumber();
+        long liveMod = program.getModificationNumber();
+        if (existing != null) {
+            // Already tracked in this session: its in-memory state is the truth, and the
+            // tree has been kept current by the observer. Re-creating only re-reads config.
+            CheckoutRegistry.getInstance().ensureObserver(program);
+            Map<String, Object> out = statusMap(checkout);
+            out.put("adopted", true);
+            out.put("files_on_disk", countFiles(derivedRoot));
+            out.put("fresh", Boolean.TRUE.equals(out.get("in_sync")));
+            return Response.ok(out);
+        }
         if (sweptAt != null && checkout.progress().sweptAtModification() == null) {
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.COMPLETE)
@@ -758,26 +769,26 @@ public class CheckoutService {
                             statusFile.count("structural_since_sweep")));
         }
 
-        long liveMod = program.getModificationNumber();
         // A dirty STATUS.md means the previous writer did not finish (crash /
         // cancel / kill); stale was already known to diverge. Re-derive id finds the
         // same tree across a Ghidra restart; STALE tells the agent Grep results may be
-        // incomplete.
+        // incomplete. Otherwise the tree was current when last written, but nothing says
+        // the program has not changed since (modification numbers start over each time a
+        // program opens): a full reconcile re-checks every block's fingerprint.
         String state = statusFile.state();
-        if ("dirty".equalsIgnoreCase(state) || "stale".equalsIgnoreCase(state)) {
+        boolean stale = "dirty".equalsIgnoreCase(state) || "stale".equalsIgnoreCase(state);
+        if (stale) {
             String why = statusFile.fields().get("last_error");
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.STALE)
                     .withLastError(why != null ? why
                             : "previous sweep did not finish (STATUS.md state=" + state + ")"));
-        } else if (reconciledAt != null && reconciledAt != liveMod) {
-            checkout.setProgress(checkout.progress()
-                    .withPhase(SweepProgress.Phase.STALE)
-                    .withLastError("reconciled_at_modification_number=" + reconciledAt
-                            + " != live " + liveMod));
         }
 
         CheckoutRegistry.getInstance().ensureObserver(program);
+        if (!stale && sweptAt != null) {
+            CheckoutRegistry.getInstance().dirtyQueue().markNeedsReconcile(checkout.id());
+        }
 
         int files = countFiles(derivedRoot);
         Map<String, Object> out = statusMap(checkout);
@@ -785,8 +796,8 @@ public class CheckoutService {
         out.put("files_on_disk", files);
         out.put("swept_at_modification_number", sweptAt);
         out.put("live_modification_number", liveMod);
-        out.put("fresh", checkout.progress().phase() != SweepProgress.Phase.STALE
-                && reconciledAt != null && reconciledAt == liveMod);
+        out.put("fresh", false);
+        out.put("reconcile_queued", !stale && sweptAt != null);
         return Response.ok(out);
     }
 
@@ -848,11 +859,12 @@ public class CheckoutService {
         out.put("pending_dirty", pendingFull ? "full_reconcile" : pending);
         if (live != null) {
             // The one answer an agent needs before trusting a grep: does the tree describe
-            // the program as it is right now?
+            // the program as it is right now? Every change the tree shows is queued by the
+            // observer, so: swept, not stale, and nothing queued or running. (Modification
+            // numbers also move for changes no block shows, so they cannot answer this.)
             out.put("in_sync", progress.phase() != SweepProgress.Phase.STALE
-                    && !pendingFull && pending == 0
-                    && progress.reconciledAtModification() != null
-                    && progress.reconciledAtModification() == live.getModificationNumber());
+                    && progress.sweptAtModification() != null
+                    && !queue.hasPending(checkout.id()));
         }
         out.put("resource_uri", RESOURCE_URI_PREFIX + checkout.id());
         out.put("config", configToMap(checkout.config()));

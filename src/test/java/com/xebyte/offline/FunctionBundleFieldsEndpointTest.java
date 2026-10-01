@@ -74,7 +74,8 @@ public class FunctionBundleFieldsEndpointTest extends TestCase {
         assertTrue(bundle.contains("functions"));
         assertFalse("standalone jump-targets tool should be gone",
                 xref.contains("path = \"/get_function_jump_targets\""));
+        String facts = ProjectSource.readMainSource("core", "FunctionFacts.java");
         assertTrue("bundle must expose jump_targets as a field",
-                bundle.contains("\"jump_targets\""));
+                facts.contains("\"jump_targets\""));
     }
 }

@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.partition.PartitionContext;
 import ghidra.app.decompiler.DecompInterface;
@@ -131,10 +132,7 @@ public final class TreeReconciler {
 
             boolean needsDecomp = !replaceNow.isEmpty() || !plan.insert.isEmpty();
             if (needsDecomp) {
-                decomp = ServiceUtils.createConfiguredDecompiler(program, opts -> {
-                    opts.setEOLCommentIncluded(true);
-                    opts.setCommentStyle(DecompileOptions.CommentStyleEnum.CPPStyle);
-                });
+                decomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
             }
             long mod = program.getModificationNumber();
             int timeout = checkout.config().decompileTimeoutSeconds();
@@ -168,9 +166,8 @@ public final class TreeReconciler {
                     continue;
                 }
                 BlockSplicer.PartitionMeta part = partitionMetaForReplace(checkout, row);
-                SweepJob.Neighbourhood nb = SweepJob.neighbourhoodFor(func, ctx);
                 String newBlock = BlockSplicer.decompileBlock(
-                        decomp, func, part, mod, timeout, program.getName(), nb);
+                        decomp, func, part, mod, timeout, program.getName());
                 decompileCalls++;
                 ReplaceOutcome out = replaceInTree(checkout, working, hex, row, func, newBlock);
                 if (out.skipped()) {
@@ -201,9 +198,8 @@ public final class TreeReconciler {
                 BlockSplicer.PartitionMeta part = new BlockSplicer.PartitionMeta(
                         placement.slug(), placement.method(), placement.confidence(),
                         placement.evidenceBacked());
-                SweepJob.Neighbourhood nb = SweepJob.neighbourhoodFor(func, ctx);
                 String newBlock = BlockSplicer.decompileBlock(
-                        decomp, func, part, mod, timeout, program.getName(), nb);
+                        decomp, func, part, mod, timeout, program.getName());
                 decompileCalls++;
                 InsertOutcome out = insertIntoTree(
                         checkout, working, func, newBlock, placement,
@@ -303,12 +299,7 @@ public final class TreeReconciler {
     }
 
     private static boolean bodyMatches(String chunk, Pattern names) {
-        for (String line : chunk.split("\n")) {
-            if (!line.startsWith("// ") && names.matcher(line).find()) {
-                return true;
-            }
-        }
-        return false;
+        return names.matcher(BlockSplicer.bodyAfterLeadingComments(chunk)).find();
     }
 
     // -------------------------------------------------------------------------
@@ -800,9 +791,9 @@ public final class TreeReconciler {
                 if (func == null) {
                     continue;
                 }
-                SweepJob.Neighbourhood nb = SweepJob.neighbourhoodFor(func, ctx);
-                String callsVal = SweepJob.formatNeighbourList(nb.calls(), false);
-                String callersVal = SweepJob.formatNeighbourList(nb.callers(), true);
+                String[] now = FunctionBlock.neighbourValues(func);
+                String callsVal = now[0];
+                String callersVal = now[1];
                 String[] existing = BlockSplicer.neighbourhoodValuesFromBlock(oldBlock);
                 if (Objects.equals(callsVal, existing[0])
                         && Objects.equals(callersVal, existing[1])) {

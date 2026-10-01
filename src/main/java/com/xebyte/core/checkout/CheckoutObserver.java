@@ -166,6 +166,11 @@ public final class CheckoutObserver implements DomainObjectListener {
                     || type == ProgramEvent.SYMBOL_PRIMARY_STATE_CHANGED) {
                 Address at = startOf(rec);
                 addContaining(fm, at, dirty);
+                // A function's name also shows in its callees' blocks (callers, xrefs).
+                Function renamed = fm != null && at != null ? fm.getFunctionAt(at) : null;
+                if (renamed != null) {
+                    addCallees(renamed, dirty);
+                }
                 if (type == ProgramEvent.SYMBOL_RENAMED
                         && rec.getOldValue() instanceof String oldName && !oldName.isBlank()) {
                     retired.add(oldName);
@@ -180,11 +185,30 @@ public final class CheckoutObserver implements DomainObjectListener {
                 continue;
             }
 
-            // A new reference changes what its function's code resolves to.
+            // A new reference changes what its function's code resolves to, and the target
+            // function's callers and xrefs.
             if (type == ProgramEvent.REFERENCE_ADDED || type == ProgramEvent.REFERENCE_REMOVED
                     || type == ProgramEvent.REFERENCE_TYPE_CHANGED) {
                 addContaining(fm, startOf(rec), dirty);
+                for (Object value : new Object[] {rec.getNewValue(), rec.getOldValue()}) {
+                    if (value instanceof Reference ref) {
+                        addContaining(fm, ref.getToAddress(), dirty);
+                    }
+                }
                 continue;
+            }
+
+            if (type == ProgramEvent.FUNCTION_TAG_APPLIED || type == ProgramEvent.FUNCTION_TAG_UNAPPLIED) {
+                String hex = entryHexFromRecord(rec, true, fm);
+                if (hex != null) {
+                    dirty.add(hex);
+                }
+                continue;
+            }
+            // A tag definition renamed or deleted shows in every block carrying it; the input
+            // fingerprint includes tags, so a full pass finds them.
+            if (type == ProgramEvent.FUNCTION_TAG_CHANGED || type == ProgramEvent.FUNCTION_TAG_DELETED) {
+                return new Hint(Set.of(), true, retired, introduced);
             }
 
             if (type == ProgramEvent.CODE_ADDED || type == ProgramEvent.CODE_REMOVED) {
@@ -263,6 +287,18 @@ public final class CheckoutObserver implements DomainObjectListener {
             }
         } catch (Exception ignored) {
             // Best-effort on the EDT — a failed caller walk must not throw.
+        }
+    }
+
+    private static void addCallees(Function func, Set<String> dirty) {
+        try {
+            for (Function callee : func.getCalledFunctions(TaskMonitor.DUMMY)) {
+                if (callee != null && callee.getEntryPoint() != null && !callee.isExternal()) {
+                    dirty.add(hex(callee.getEntryPoint()));
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort on the EDT.
         }
     }
 

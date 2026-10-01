@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.WriteTx;
 import com.xebyte.core.partition.Partition;
@@ -199,13 +200,7 @@ public final class SweepJob implements Runnable {
 
             wipePriorTree();
 
-            localDecomp = ServiceUtils.createConfiguredDecompiler(program, opts -> {
-                // Same tune as FunctionBundleService: EOL comments under // so
-                // Grep finds plate-adjacent notes. Not the shared default — that
-                // feeds completeness scoring and fun-doc's comment stripper.
-                opts.setEOLCommentIncluded(true);
-                opts.setCommentStyle(DecompileOptions.CommentStyleEnum.CPPStyle);
-            });
+            localDecomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
             decomp = localDecomp;
 
             SweepAccum accum = new SweepAccum();
@@ -395,114 +390,6 @@ public final class SweepJob implements Runnable {
     // Pure helpers (offline-tested)
     // -------------------------------------------------------------------------
 
-    /**
-     * Nine-line header. {@code uri} uses the same lowercase-hex
-     * {@link ServiceUtils#addressToJson} emits so it resolves as an MCP resource.
-     * {@code calls}/{@code callers} are always present (fixed shape for parsers);
-     * empty callers note an entry/unreferenced function.
-     */
-    public static final int HEADER_LINES = 9;
-
-    /** Cap names printed in the header; hubs dump the rest to callgraph.tsv. */
-    public static final int NEIGHBOURHOOD_NAME_CAP = 8;
-
-    public static String renderFunctionHeader(
-            String functionName,
-            String addressHex,
-            long sizeBytes,
-            String partitionSlug,
-            String method,
-            double confidence,
-            boolean evidenceBacked,
-            String fingerprint,
-            Instant dts,
-            long modificationNumber,
-            String programName,
-            List<String> calls,
-            List<String> callers) {
-        String uri = functionResourceUri(programName, addressHex);
-        return ""
-                + "// fn: " + functionName + " @ " + addressHex + " size=" + sizeBytes + "\n"
-                + "// calls: " + formatNeighbourList(calls, false) + "\n"
-                + "// callers: " + formatNeighbourList(callers, true) + "\n"
-                + "// part: " + partitionSlug + " " + method
-                + " conf=" + String.format(Locale.ROOT, "%.2f", confidence)
-                + " evidence_backed=" + evidenceBacked + "\n"
-                + "// fp: " + fingerprint + "\n"
-                + "// dts: " + dts + "\n"
-                + "// mod: " + modificationNumber + "\n"
-                + "// uri: " + uri + "\n"
-                + "// see: modules/" + partitionSlug + "/README.md\n";
-    }
-
-    /**
-     * Names comma-separated; empty → {@code (none)} (or {@code (none — entry)}
-     * for callers of an unreferenced function); hubs truncate at
-     * {@link #NEIGHBOURHOOD_NAME_CAP}.
-     */
-    public static String formatNeighbourList(List<String> names, boolean entryWhenEmpty) {
-        if (names == null || names.isEmpty()) {
-            return entryWhenEmpty ? "(none — entry)" : "(none)";
-        }
-        if (names.size() <= NEIGHBOURHOOD_NAME_CAP) {
-            return String.join(", ", names);
-        }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < NEIGHBOURHOOD_NAME_CAP; i++) {
-            if (i > 0) {
-                sb.append(", ");
-            }
-            sb.append(names.get(i));
-        }
-        int more = names.size() - NEIGHBOURHOOD_NAME_CAP;
-        sb.append(" +").append(more).append(" more, see callgraph.tsv");
-        return sb.toString();
-    }
-
-    /**
-     * Callee/caller names for one function, address-ordered via the context's
-     * index (functions() is already address-sorted).
-     */
-    public static Neighbourhood neighbourhoodFor(Function func, PartitionContext ctx) {
-        if (func == null || ctx == null) {
-            return Neighbourhood.EMPTY;
-        }
-        Integer idx = ctx.indexOf(func.getEntryPoint());
-        if (idx == null) {
-            return Neighbourhood.EMPTY;
-        }
-        PartitionContext.CallGraph cg = ctx.callGraph();
-        return new Neighbourhood(
-                namesInAddressOrder(ctx, cg.callees().get(idx)),
-                namesInAddressOrder(ctx, cg.callers().get(idx)));
-    }
-
-    static List<String> namesInAddressOrder(PartitionContext ctx, Set<Integer> indices) {
-        if (indices == null || indices.isEmpty()) {
-            return List.of();
-        }
-        List<Integer> sorted = new ArrayList<>(indices);
-        sorted.sort(Integer::compareTo);
-        List<Function> fns = ctx.functions();
-        List<String> names = new ArrayList<>(sorted.size());
-        for (int i : sorted) {
-            if (i >= 0 && i < fns.size()) {
-                names.add(fns.get(i).getName());
-            }
-        }
-        return names;
-    }
-
-    /** Call neighbourhood rendered into the block header. */
-    public record Neighbourhood(List<String> calls, List<String> callers) {
-        public static final Neighbourhood EMPTY = new Neighbourhood(List.of(), List.of());
-
-        public Neighbourhood {
-            calls = calls == null ? List.of() : List.copyOf(calls);
-            callers = callers == null ? List.of() : List.copyOf(callers);
-        }
-    }
-
     public static String renderFailedBody(String reason) {
         String safe = reason == null || reason.isBlank() ? "unknown" : reason.trim();
         return FAILED_MARKER_PREFIX + safe + "\n";
@@ -639,53 +526,10 @@ public final class SweepJob implements Runnable {
     private FunctionEmit decompileOne(
             Function func, Partition part, boolean evidenceBacked, long modNumber,
             PartitionContext ctx) {
-        String addrHex = func.getEntryPoint().toString(false);
-        long size = functionSize(func);
-        String body;
-        boolean failed;
-        String failReason = null;
-
-        try {
-            DecompileResults results = decomp.decompileFunction(
-                    func, checkout.config().decompileTimeoutSeconds(), cancel.monitor());
-            if (results != null && results.decompileCompleted()
-                    && results.getDecompiledFunction() != null
-                    && results.getDecompiledFunction().getC() != null) {
-                body = results.getDecompiledFunction().getC();
-                failed = false;
-            } else {
-                failReason = results != null && results.getErrorMessage() != null
-                        && !results.getErrorMessage().isBlank()
-                        ? results.getErrorMessage().trim()
-                        : "decompile did not complete";
-                body = renderFailedBody(failReason);
-                failed = true;
-            }
-        } catch (Exception e) {
-            failReason = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            body = renderFailedBody(failReason);
-            failed = true;
-        }
-
-        // Fingerprint the emitted body (code or FAILED marker), not the header —
-        // so a header-only change does not look like a decompile drift.
-        String fp = shortContentHash(body);
-        Neighbourhood nb = neighbourhoodFor(func, ctx);
-        String header = renderFunctionHeader(
-                func.getName(),
-                addrHex,
-                size,
-                part.slug(),
-                part.method(),
-                part.confidence(),
-                evidenceBacked,
-                fp,
-                Instant.now(),
-                modNumber,
-                program.getName(),
-                nb.calls(),
-                nb.callers());
-        return new FunctionEmit(header + body, failed);
+        FunctionBlock.Built block = FunctionBlock.build(func, decomp,
+                checkout.config().decompileTimeoutSeconds(), cancel.monitor(), part.slug(),
+                part.method(), part.confidence(), evidenceBacked, modNumber, program.getName());
+        return new FunctionEmit(block.text(), block.failed());
     }
 
     private static long functionSize(Function func) {
@@ -1106,25 +950,20 @@ public final class SweepJob implements Runnable {
                 renderModulesIndex(ctx, cascade, partitions, total, scope, rows));
     }
 
-    /** Full callgraph TSV from a live context — shared by sweep and reconcile. */
+    /**
+     * Full callgraph TSV, one row per call edge, by the same rule as the block headers'
+     * {@code // calls:} lines ({@link FunctionFacts#calleesOf}): a header capped with
+     * {@code +N more} and this file never disagree. Shared by sweep and reconcile.
+     */
     public static String renderCallgraphTsv(PartitionContext ctx) {
         StringBuilder sb = new StringBuilder("caller\tcallee\tcaller_name\tcallee_name\n");
-        PartitionContext.CallGraph cg = ctx.callGraph();
-        List<Function> fns = ctx.functions();
-        for (int i = 0; i < fns.size(); i++) {
-            Set<Integer> callees = cg.callees().get(i);
-            if (callees == null || callees.isEmpty()) {
-                continue;
-            }
-            String callerAddr = fns.get(i).getEntryPoint().toString(false);
-            String callerName = fns.get(i).getName();
-            List<Integer> sorted = new ArrayList<>(callees);
-            sorted.sort(Integer::compareTo);
-            for (int j : sorted) {
+        for (Function caller : ctx.functions()) {
+            String callerAddr = caller.getEntryPoint().toString(false);
+            for (Function callee : FunctionFacts.calleesOf(caller)) {
                 sb.append(callerAddr).append('\t')
-                        .append(fns.get(j).getEntryPoint().toString(false)).append('\t')
-                        .append(callerName).append('\t')
-                        .append(fns.get(j).getName()).append('\n');
+                        .append(callee.getEntryPoint().toString(false)).append('\t')
+                        .append(caller.getName()).append('\t')
+                        .append(callee.getName()).append('\n');
             }
         }
         return sb.toString();

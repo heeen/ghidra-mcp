@@ -85,6 +85,19 @@ class TestBundleShape(unittest.TestCase):
         })
         self.assertLess(body.index("⚠ return type"), body.index("## Decompiled"))
 
+    def test_the_resource_shows_every_field_the_tree_does(self):
+        """Tags, refs, jump targets, the body range and why a decompile failed appear in the
+        resource as they do in a checkout block (parity with the tree)."""
+        body = function_bundle_markdown({
+            "name": "gpio_set", "address": "08004000", "size": 24,
+            "body_start": "08004000", "body_end": "08004017",
+            "tags": ["gpio", "hal"], "refs": ["0x40020000"], "jump_targets": ["08004014"],
+            "decompile_failed": True, "decompile_error": "timed out",
+        })
+        for text in ("body `08004000..08004017`", "size 24", "`gpio`", "`0x40020000`",
+                     "`08004014`", "Decompilation failed: timed out"):
+            self.assertIn(text, body)
+
     def test_truncation_is_stated_not_silent(self):
         body = function_bundle_markdown({
             "name": "f", "address": "1000",

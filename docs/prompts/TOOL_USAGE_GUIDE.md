@@ -505,9 +505,10 @@ kept current block by block since that sweep (`spliced_since_sweep` counts the
 rewritten blocks); `dirty` means a writer did not finish (crash, cancel, or still
 running) — do not Grep a dirty tree as if it were complete; `stale` means the tree is
 known to diverge from the program (`last_error` says why) — resweep.
-`reconciled_at_modification_number` is the program state the tree reflects, and
-`decompile_checkout_status` reports `in_sync` (tree at the live modification number,
-nothing pending) and `pending_dirty`.
+`decompile_checkout_status` reports `in_sync`: swept, not stale, and no change still
+queued or being spliced in — the answer to "can I trust a grep right now". `pending_dirty`
+says what is queued. (Modification numbers are reported but are not the test: they also
+move for changes no block shows, and start over each time the program opens.)
 
 ### Measured sweep cost
 
@@ -528,10 +529,42 @@ finish faster.
 
 ### The tree is the corpus; the resource is the microscope
 
-Every `.c` file header carries `uri: ghidra://function/<program>/<address>`.
-Grep finds the hit; that URI is how you pull callers and call-site context
-afterwards. Do not re-decompile via tools just to re-read what the header already
-points at.
+Each function block carries everything `get_functions` returns for it: both are rendered
+from the same facts, by the same decompiler settings, and a test holds them equal field for
+field. The header is one `// key: value` line per fact, so each greps on its own; it ends at
+`// ----`, after which comes the decompiler's C (whose own `//` lines are body):
+
+```text
+// fn: gpio_set @ 08004000 size=24
+// signature: void gpio_set(uint * port, ushort pins)
+// classification: leaf
+// return_type: void                       (+ " (unresolved)" when it is undefined*)
+// body: 08004000..08004017
+// tags: gpio, hal
+// plate: Sets pins.\nAlgorithm: ...        (newlines inside a value are written \n)
+// plate_issue: missing Parameters section
+// calls: read_status@08002000             (name@address, sorted, capped at 50 "+N more")
+// callers: led_on@08005000
+// refs: 0x08004100 0x40020000             (data addresses used, incl. literal-pool values)
+// param: #0 uint * port @r0:4
+// local: int extraout_r0 @r0 [phantom]
+// label: +0x14 done (USER_DEFINED)
+// comment: +0x4 eol BSRR write
+// xref: 08005010 UNCONDITIONAL_CALL led_on
+// jump: 08004014
+// decompile_error: timed out              (only when there is no C)
+// part / fp / dts / mod / uri / see       (where the block sits in the tree)
+// ----
+void gpio_set(uint *port,ushort pins) { ... }
+```
+
+Typical greps: `// callers:.*led_on`, `// refs:.*0x40020000`, `// tags:.*hal`,
+`// return_type:.*unresolved`. `call_context` is the one bundle field a block leaves out
+(it costs a decompile per caller, and every caller's own block is in the tree);
+`callgraph.tsv` lists every call edge by the same rule as the `calls:` lines.
+
+Grep finds the hit; the `uri:` line is how you pull call-site context afterwards. Do not
+re-decompile via tools just to re-read what the block already holds.
 
 The MCP resource `ghidra://decompile-checkout/{checkout_id}` is status/config prose (phase,
 exclusions, compartment table, Glob/Grep incantations) — not a substitute for
