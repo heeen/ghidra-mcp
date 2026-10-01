@@ -135,6 +135,12 @@ public final class DirtyQueue {
         return b == null ? 0 : b.addresses.size();
     }
 
+    /** Any work at all still waiting for this checkout: addresses, names or a full pass. */
+    public synchronized boolean hasPending(String checkoutId) {
+        Bucket b = buckets.get(checkoutId);
+        return b != null && (b.needsReconcile || !b.addresses.isEmpty() || !b.retiredNames.isEmpty());
+    }
+
     public synchronized boolean pendingNeedsReconcile(String checkoutId) {
         Bucket b = buckets.get(checkoutId);
         return b != null && b.needsReconcile;

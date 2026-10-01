@@ -59,11 +59,18 @@ public final class CheckoutObserver implements DomainObjectListener {
 
         // CLOSED: drop our listener so a disposed Program cannot keep us alive.
         if (ev.contains(DomainObjectEvent.CLOSED)) {
+            CheckoutRegistry.getInstance().noteClosing(checkoutId, program);
             CheckoutRegistry.getInstance().detachObserver(checkoutId);
             return;
         }
+        if (ev.contains(DomainObjectEvent.SAVED) && program != null) {
+            CheckoutRegistry.getInstance().noteSaved(checkoutId, program.getModificationNumber());
+        }
 
         Hint hint = translate(ev, program);
+        if (!hint.introducedNames().isEmpty()) {
+            CheckoutRegistry.getInstance().noteIntroducedNames(checkoutId, hint.introducedNames());
+        }
         if (!hint.retiredNames().isEmpty()) {
             queue.markRetiredNames(checkoutId, hint.retiredNames());
         }
@@ -83,6 +90,7 @@ public final class CheckoutObserver implements DomainObjectListener {
     public static Hint translate(DomainObjectChangedEvent ev, Program program) {
         Set<String> dirty = new LinkedHashSet<>();
         Set<String> retired = new LinkedHashSet<>();
+        Set<String> introduced = new LinkedHashSet<>();
         if (ev == null) {
             return Hint.none();
         }
@@ -146,8 +154,12 @@ public final class CheckoutObserver implements DomainObjectListener {
                         && rec.getOldValue() instanceof String oldName && !oldName.isBlank()) {
                     retired.add(oldName);
                 }
+                if (type == ProgramEvent.SYMBOL_RENAMED
+                        && rec.getNewValue() instanceof String newName && !newName.isBlank()) {
+                    introduced.add(newName);
+                }
                 if (!addReferencers(program, fm, at, dirty)) {
-                    return Hint.fullReconcile(retired);
+                    return new Hint(Set.of(), true, retired, introduced);
                 }
                 continue;
             }
@@ -166,14 +178,14 @@ public final class CheckoutObserver implements DomainObjectListener {
                 // word) changes how every function reading it decompiles.
                 if (start != null && fm != null && fm.getFunctionContaining(start) == null
                         && !addReferencers(program, fm, start, dirty)) {
-                    return Hint.fullReconcile(retired);
+                    return new Hint(Set.of(), true, retired, introduced);
                 }
             }
             if (dirty.size() > DirtyQueue.ADDRESS_BOUND) {
-                return Hint.fullReconcile(retired);
+                return new Hint(Set.of(), true, retired, introduced);
             }
         }
-        return new Hint(dirty, false, retired);
+        return new Hint(dirty, false, retired, introduced);
     }
 
     /**
@@ -314,29 +326,28 @@ public final class CheckoutObserver implements DomainObjectListener {
 
     /**
      * Translation result — addresses to dirty, or a full-reconcile flag — plus the names
-     * symbols were renamed away from, which the drain looks for in the tree's bodies.
+     * symbols were renamed away from, which the drain looks for in the tree's bodies, and
+     * the names they were renamed to, which a discarded session would leave behind.
      */
-    public record Hint(Set<String> addresses, boolean needsReconcile, Set<String> retiredNames) {
+    public record Hint(Set<String> addresses, boolean needsReconcile, Set<String> retiredNames,
+            Set<String> introducedNames) {
         public Hint {
             addresses = addresses == null ? Set.of() : Set.copyOf(addresses);
             retiredNames = retiredNames == null ? Set.of() : Set.copyOf(retiredNames);
+            introducedNames = introducedNames == null ? Set.of() : Set.copyOf(introducedNames);
         }
 
         static Hint none() {
-            return new Hint(Set.of(), false, Set.of());
+            return new Hint(Set.of(), false, Set.of(), Set.of());
         }
 
         static Hint of(Set<String> addresses) {
-            return new Hint(addresses, false, Set.of());
+            return new Hint(addresses, false, Set.of(), Set.of());
         }
 
         /** RESTORED / bound-collapse — reconciler re-diffs; do not enumerate. */
         static Hint fullReconcile() {
-            return fullReconcile(Set.of());
-        }
-
-        static Hint fullReconcile(Set<String> retiredNames) {
-            return new Hint(Set.of(), true, retiredNames);
+            return new Hint(Set.of(), true, Set.of(), Set.of());
         }
     }
 }

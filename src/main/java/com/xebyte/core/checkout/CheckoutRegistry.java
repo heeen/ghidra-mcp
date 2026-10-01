@@ -128,6 +128,17 @@ public final class CheckoutRegistry {
             program.addListener(obs);
             observers.put(id, obs);
             observerPrograms.put(id, program);
+            // A program that opens unchanged is its saved state.
+            checkout.setSavedAtModification(program.isChanged() ? null : program.getModificationNumber());
+            if (checkout.recoverOnReattach()) {
+                // Closed while the tree held discarded edits or missed saved ones: re-diff
+                // against the program as it reopened instead of waiting for the next edit.
+                // Names the discarded session introduced are searched in the bodies too, for
+                // the uses a fingerprint compare cannot see.
+                dirtyQueue.markRetiredNames(id, java.util.Set.copyOf(checkout.namesSinceSave()));
+                checkout.namesSinceSave().clear();
+                dirtyQueue.markNeedsReconcile(id);
+            }
         } catch (Exception e) {
             Msg.warn(this, "Failed to attach checkout observer for " + id
                     + ": " + e.getMessage());
@@ -146,7 +157,64 @@ public final class CheckoutRegistry {
             }
         }
         for (String id : ids) {
+            noteClosing(id, program);
             detachObserver(id);
+        }
+    }
+
+    /** The program was saved at {@code modification}: that is what a reopen will show. */
+    public void noteSaved(String checkoutId, long modification) {
+        Checkout checkout = byId(checkoutId);
+        if (checkout != null) {
+            checkout.setSavedAtModification(modification);
+            checkout.namesSinceSave().clear();
+        }
+    }
+
+    /** Symbols were renamed to {@code names} since the last save. */
+    public void noteIntroducedNames(String checkoutId, Collection<String> names) {
+        Checkout checkout = byId(checkoutId);
+        if (checkout != null) {
+            checkout.namesSinceSave().addAll(names);
+        }
+    }
+
+    /**
+     * The checkout's program is closing. If the tree no longer matches what a reopen will
+     * show, mark it stale and reconcile on reopen: either the close discards edits the tree
+     * already took in, or saved edits are still queued and detaching drops them.
+     */
+    public void noteClosing(String checkoutId, Program program) {
+        Checkout checkout = byId(checkoutId);
+        if (checkout == null || program == null) {
+            return;
+        }
+        SweepProgress p = checkout.progress();
+        Long tree = p.reconciledAtModification();
+        Long saved = checkout.savedAtModification();
+        String why = null;
+        boolean discarding;
+        try {
+            discarding = program.isChanged();
+        } catch (Exception e) {
+            discarding = false;
+        }
+        if (discarding && tree != null && (saved == null || tree > saved)) {
+            why = "the program closed without saving edits the tree had already taken in; "
+                    + "it may show changes the program no longer has";
+        } else if (!discarding && dirtyQueue.hasPending(checkoutId)) {
+            why = "the program closed before saved changes reached the tree";
+        }
+        if (why == null) {
+            return;
+        }
+        checkout.setProgress(p.withPhase(SweepProgress.Phase.STALE).withLastError(why));
+        checkout.setRecoverOnReattach(true);
+        try {
+            CheckoutStatusMd.write(checkout, "stale");
+        } catch (IOException e) {
+            Msg.warn(this, "Checkout " + checkoutId + ": could not mark STATUS.md stale: "
+                    + e.getMessage());
         }
     }
 
