@@ -205,6 +205,7 @@ public final class SweepJob implements Runnable {
 
             SweepAccum accum = new SweepAccum();
             List<IndexRow> indexRows = new ArrayList<>(total);
+            List<AddressIndex.Row> addressRows = new ArrayList<>();
             long sliceStartNs = System.nanoTime();
             int functionsSinceAnalysisCheck = 0;
 
@@ -300,6 +301,7 @@ public final class SweepJob implements Runnable {
                     }
                     fileLastHex = addrHex;
 
+                    addressRows.addAll(emit.addresses());
                     indexRows.add(new IndexRow(
                             addrHex,
                             func.getName(),
@@ -332,6 +334,7 @@ public final class SweepJob implements Runnable {
             }
 
             writeIndexes(indexRows, ctx, cascade, partitions, total, scope);
+            AddressIndex.write(checkout, addressRows);
             writeTopReadme(total, partitions.size());
             writeAgentsMd(partitions);
 
@@ -529,7 +532,7 @@ public final class SweepJob implements Runnable {
         FunctionBlock.Built block = FunctionBlock.build(func, decomp,
                 checkout.config().decompileTimeoutSeconds(), cancel.monitor(), part.slug(),
                 part.method(), part.confidence(), evidenceBacked, modNumber, program.getName());
-        return new FunctionEmit(block.text(), block.failed());
+        return new FunctionEmit(block.text(), block.failed(), block.addresses());
     }
 
     private static long functionSize(Function func) {
@@ -1078,6 +1081,9 @@ public final class SweepJob implements Runnable {
         sb.append("- `index/by-address.tsv` — complete address → file map "
                 + "(failed decompiles still appear); `ifp` column is a "
                 + "DB-cheap input fingerprint for reconcile without re-decompiling\n");
+        sb.append("- `index/addresses.tsv` — every address each function uses "
+                + "(data references, literal-pool values, memory read and written), "
+                + "for `grep 0x<address>`\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
         checkout.root().writeFile(Path.of(CheckoutLayout.readmeMd()), sb.toString());
     }
@@ -1210,7 +1216,7 @@ public final class SweepJob implements Runnable {
         }
     }
 
-    private record FunctionEmit(String text, boolean failed) {}
+    private record FunctionEmit(String text, boolean failed, List<AddressIndex.Row> addresses) {}
 
     private record IndexRow(
             String addressHex,

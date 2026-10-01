@@ -545,7 +545,7 @@ field. The header is one `// key: value` line per fact, so each greps on its own
 // plate_issue: missing Parameters section
 // calls: read_status@08002000             (name@address, sorted, capped at 50 "+N more")
 // callers: led_on@08005000
-// refs: 0x08004100 0x40020000             (data addresses used, incl. literal-pool values)
+// refs: 0x08004100 0x40003c0c 0x40020000  (addresses used: data refs, literal-pool values, memory read/written)
 // param: #0 uint * port @r0:4
 // local: int extraout_r0 @r0 [phantom]
 // label: +0x14 done (USER_DEFINED)
@@ -562,6 +562,20 @@ Typical greps: `// callers:.*led_on`, `// refs:.*0x40020000`, `// tags:.*hal`,
 `// return_type:.*unresolved`. `call_context` is the one bundle field a block leaves out
 (it costs a decompile per caller, and every caller's own block is in the tree);
 `callgraph.tsv` lists every call edge by the same rule as the `calls:` lines.
+
+`index/addresses.tsv` has one row per address a function uses, with how it gets there:
+
+```text
+address     kind     via         function    entry
+0x40003c0c  store                dma_start   08002000
+0x40020000  pointer  0x08016e58  gpio_init   08001000
+```
+
+`data` is a reference, `pointer` the value of a literal-pool word (the word in `via`), and
+`load`/`store` memory the decompiled code reads or writes. `grep 0x40003c0c
+index/addresses.tsv` names every function that touches a register, including one reached as
+base + offset, which the C prints as the base plus `0xc`. The `// refs:` line carries the same
+addresses (capped at 200), so a grep over the tree hits the block too.
 
 Grep finds the hit; the `uri:` line is how you pull call-site context afterwards. Do not
 re-decompile via tools just to re-read what the block already holds.
@@ -584,8 +598,10 @@ searching the files.
    `set_memory_block(block="ram", write=false)`, then resweep. Measured on a 339-function
    firmware: pool reads went from 1123 to 4, and the bases printed as constants or the
    labels at their targets (`(uint *)&GPIOC_CFGR`). A register reached as base + offset
-   still prints as the base plus the offset; the compartment `README.md`'s
-   `peripheral_pages` line indexes those pages.
+   still prints as the base plus the offset; grep its own address in
+   `index/addresses.tsv` or the `// refs:` lines, which take it from the decompiled code.
+   Those `load`/`store` rows need the pool words read-only too: a writable word can change
+   at run time, so the decompiler does not fold it.
 
 ## Shared projects: check out before you edit
 

@@ -2,7 +2,9 @@ package com.xebyte.core.checkout;
 
 import com.xebyte.core.FunctionFacts;
 import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileResults;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.pcode.HighFunction;
 import ghidra.util.task.TaskMonitor;
 
 import java.time.Instant;
@@ -47,8 +49,8 @@ public final class FunctionBlock {
     public static final FunctionFacts.Options TREE_FIELDS =
             new FunctionFacts.Options(null, false, 0, 3, false);
 
-    /** A rendered block, and whether the decompiler produced code for it. */
-    public record Built(String text, boolean failed) {
+    /** A rendered block, whether the decompiler produced code for it, and its address rows. */
+    public record Built(String text, boolean failed, List<AddressIndex.Row> addresses) {
     }
 
     /**
@@ -59,9 +61,11 @@ public final class FunctionBlock {
     public static Built build(Function func, DecompInterface decomp, int timeoutSeconds,
             TaskMonitor monitor, String partitionSlug, String method, double confidence,
             boolean evidenceBacked, long modificationNumber, String programName) {
+        DecompileResults[] decompiled = new DecompileResults[1];
         Map<String, Object> facts = FunctionFacts.build(func.getProgram(), func, TREE_FIELDS, f -> {
             try {
-                return decomp.decompileFunction(f, timeoutSeconds, monitor);
+                decompiled[0] = decomp.decompileFunction(f, timeoutSeconds, monitor);
+                return decompiled[0];
             } catch (Exception e) {
                 return null;
             }
@@ -75,7 +79,10 @@ public final class FunctionBlock {
         Placement where = new Placement(partitionSlug, method, confidence, evidenceBacked,
                 SweepJob.shortContentHash(body), Instant.now(), modificationNumber,
                 SweepJob.functionResourceUri(programName, addressHex));
-        return new Built(render(facts, body, where), failed);
+        HighFunction high = decompiled[0] != null ? decompiled[0].getHighFunction() : null;
+        List<AddressIndex.Row> addresses = AddressIndex.rows(func,
+                FunctionFacts.addressRefs(func.getProgram(), func, high));
+        return new Built(render(facts, body, where), failed, addresses);
     }
 
     /** Header plus body. {@code body} is the C, or the failure marker when there is none. */

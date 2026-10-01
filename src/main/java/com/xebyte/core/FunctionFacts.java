@@ -15,8 +15,12 @@ import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.Variable;
 import ghidra.program.model.listing.VariableStorage;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighSymbol;
+import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -161,7 +165,9 @@ public final class FunctionFacts {
         out.putAll(ServiceUtils.addressToJson(entry, program));
 
         boolean wantsAll = fields == null;
-        boolean needsTargetDecompile = wantsAll || wantsField(fields, "decompiled_code");
+        // refs takes the addresses the decompiled code loads and stores, so it decompiles too.
+        boolean needsTargetDecompile = wantsAll || wantsField(fields, "decompiled_code")
+            || wantsField(fields, "refs");
         boolean needsCallContext = wantsField(fields, "call_context")
             && includeCallContext && callContextLimit > 0;
 
@@ -236,7 +242,8 @@ public final class FunctionFacts {
             out.put("tags", func.getTags().stream().map(t -> t.getName()).sorted().toList());
         }
         if (wantsField(fields, "refs")) {
-            out.put("refs", collectRefs(program, func));
+            out.put("refs", refAddresses(addressRefs(program, func,
+                decompiled ? decomp.getHighFunction() : null)));
         }
         if (wantsField(fields, "jump_targets")) {
             out.put("jump_targets", collectJumpTargets(program, func));
@@ -636,15 +643,30 @@ public final class FunctionFacts {
     private static final int MAX_REFS = 200;
 
     /**
-     * The absolute data addresses the function uses, as {@code 0x}-prefixed hex: each data
-     * reference's target, and, when that target is a pointer-sized word whose value is
-     * itself an address (inside a memory block, or labelled), that value too. The second
-     * half is the literal-pool case: {@code iVar2 = DAT_08016e58;} prints the pool word, and
-     * only its value, {@code 0x40020000}, says which peripheral the function drives. Listed
-     * so the address greps however the C prints it.
+     * One address a function uses, and how it reaches it.
+     *
+     * <ul>
+     *   <li>{@code data}: a data reference from the function's body.
+     *   <li>{@code pointer}: the value of a pointer-sized word the function references;
+     *       {@code via} is the word. The literal-pool case: {@code iVar2 = DAT_08016e58;}
+     *       prints the pool word, and only its value, {@code 0x40020000}, says which
+     *       peripheral the function drives.
+     *   <li>{@code load} / {@code store}: a memory location the decompiled code reads or
+     *       writes, folded to one address. The only place a register reached as base + offset exists as one
+     *       number: the C prints {@code *(uint *)(&GPIOB_CFGR + 0xc)}, and no reference
+     *       points at {@code 0x40003c0c}.
+     * </ul>
      */
-    private static List<String> collectRefs(Program program, Function func) {
-        java.util.TreeSet<Address> found = new java.util.TreeSet<>();
+    public record AddressRef(Address address, String kind, Address via) {
+    }
+
+    /**
+     * Every address {@code func} uses, in the order found, without duplicates. {@code high}
+     * is the decompiled function, or null when there is none; then the load and store
+     * addresses are missing.
+     */
+    public static List<AddressRef> addressRefs(Program program, Function func, HighFunction high) {
+        LinkedHashSet<AddressRef> found = new LinkedHashSet<>();
         ReferenceManager refs = program.getReferenceManager();
         ghidra.program.model.mem.Memory memory = program.getMemory();
         int pointerSize = program.getDefaultPointerSize();
@@ -654,22 +676,120 @@ public final class FunctionFacts {
                 if (!ref.getReferenceType().isData() || to == null || !to.isMemoryAddress()) {
                     continue;
                 }
-                found.add(to);
+                found.add(new AddressRef(to, "data", null));
                 Address value = pointerValue(program, memory, to, pointerSize);
                 if (value != null) {
-                    found.add(value);
+                    found.add(new AddressRef(value, "pointer", to));
                 }
             }
-            if (found.size() >= MAX_REFS) {
-                break;
+        }
+        if (high != null) {
+            Iterator<PcodeOpAST> ops = high.getPcodeOps();
+            while (ops.hasNext()) {
+                PcodeOpAST op = ops.next();
+                int opcode = op.getOpcode();
+                if (opcode == PcodeOp.LOAD || opcode == PcodeOp.STORE) {
+                    // An access through a pointer the decompiler could not turn into a
+                    // location, but whose value is still a constant sum.
+                    Address target = constantTarget(program, op);
+                    if (target != null) {
+                        found.add(new AddressRef(target, opcode == PcodeOp.LOAD ? "load" : "store", null));
+                    }
+                    continue;
+                }
+                // Fully folded: the access became the memory location itself, e.g.
+                // (ram, 0x40003c0c, 4) COPY (const, 0x1, 4).
+                Address written = memoryLocation(op.getOutput());
+                if (written != null) {
+                    found.add(new AddressRef(written, "store", null));
+                }
+                for (Varnode in : op.getInputs()) {
+                    Address read = memoryLocation(in);
+                    if (read != null) {
+                        found.add(new AddressRef(read, "load", null));
+                    }
+                }
             }
         }
+        return new ArrayList<>(found);
+    }
+
+    /** The distinct addresses of {@code refs}, sorted, as {@code 0x...}, capped. */
+    static List<String> refAddresses(List<AddressRef> refs) {
+        java.util.TreeSet<Address> sorted = new java.util.TreeSet<>();
+        for (AddressRef r : refs) {
+            sorted.add(r.address());
+        }
         List<String> out = new ArrayList<>();
-        for (Address a : found) {
+        for (Address a : sorted) {
             if (out.size() >= MAX_REFS) break;
             out.add("0x" + a.toString(false));
         }
         return out;
+    }
+
+    /** {@code v}'s address when it is a location in memory, not a register, stack slot or temporary. */
+    private static Address memoryLocation(Varnode v) {
+        if (v == null || !v.isAddress()) {
+            return null;
+        }
+        Address a = v.getAddress();
+        return a.getAddressSpace().isMemorySpace() && !a.getAddressSpace().isStackSpace() ? a : null;
+    }
+
+    /** The address a LOAD or STORE goes to, when the pointer folds to a constant. */
+    private static Address constantTarget(Program program, PcodeOp op) {
+        Long offset = constantValue(op.getInput(1), 4);
+        if (offset == null || offset == 0) {
+            return null;
+        }
+        AddressSpace space = program.getAddressFactory()
+            .getAddressSpace((int) op.getInput(0).getOffset());
+        if (space == null || !space.isMemorySpace()) {
+            return null;
+        }
+        try {
+            return space.getTruncatedAddress(offset, true);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * The value of {@code v} when it is a constant, or a sum the decompiler left unfolded:
+     * {@code PTRSUB(0, 0x40003c00)} for a global, {@code INT_ADD}/{@code PTRSUB} of base and
+     * offset, {@code PTRADD} of base, index and element size, through copies and casts.
+     */
+    private static Long constantValue(Varnode v, int depth) {
+        if (v == null) {
+            return null;
+        }
+        if (v.isConstant()) {
+            return v.getOffset();
+        }
+        PcodeOp def = v.getDef();
+        if (def == null || depth == 0) {
+            return null;
+        }
+        switch (def.getOpcode()) {
+            case PcodeOp.COPY, PcodeOp.CAST, PcodeOp.INT_ZEXT -> {
+                return constantValue(def.getInput(0), depth - 1);
+            }
+            case PcodeOp.INT_ADD, PcodeOp.PTRSUB -> {
+                Long a = constantValue(def.getInput(0), depth - 1);
+                Long b = constantValue(def.getInput(1), depth - 1);
+                return a != null && b != null ? a + b : null;
+            }
+            case PcodeOp.PTRADD -> {
+                Long base = constantValue(def.getInput(0), depth - 1);
+                Long index = constantValue(def.getInput(1), depth - 1);
+                Long size = constantValue(def.getInput(2), depth - 1);
+                return base != null && index != null && size != null ? base + index * size : null;
+            }
+            default -> {
+                return null;
+            }
+        }
     }
 
     /** The address a pointer-sized word holds, when it is one: mapped, or labelled. */

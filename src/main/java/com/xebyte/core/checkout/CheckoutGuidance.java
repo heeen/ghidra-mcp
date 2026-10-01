@@ -72,6 +72,11 @@ public final class CheckoutGuidance {
                 .append("including functions whose decompilation failed. The `ifp` column ")
                 .append("is a short hash of DB-cheap inputs (name, prototype, comments, ")
                 .append("refs) — used to detect change without re-decompiling.\n");
+        sb.append("- `index/addresses.tsv` lists every address a function uses, one row per ")
+                .append("address, kind, via and function: `grep 0x40003c0c index/addresses.tsv` names ")
+                .append("the functions that touch a register however the C spells it. `kind` is ")
+                .append("`data` (a reference), `pointer` (the value of a literal-pool word, the word in ")
+                .append("`via`), or `load`/`store` (memory the decompiled code reads or writes).\n");
         if (strippedBinary) {
             sb.append("\n**This binary is stripped — do not search for function names.** ")
                     .append("Almost every name here is Ghidra's own `FUN_<addr>`, so grepping ")
@@ -87,9 +92,8 @@ public final class CheckoutGuidance {
                     .append("word holds `0x40020000`. Mark flash read-only with `set_memory_block` and ")
                     .append("resweep; the loads then fold into constants or the labels at their ")
                     .append("targets (measured on one firmware: 1123 pool reads became 4). A register ")
-                    .append("reached as base + offset still prints as the base plus `0xc0c`, so grep ")
-                    .append("the base and the offset, or use the `peripheral_pages` line in each `m*` ")
-                    .append("compartment's README, which is built from the reference graph.\n");
+                    .append("reached as base + offset still prints as the base plus `0xc0c`; its own ")
+                    .append("address is on the block's `// refs:` line and in `index/addresses.tsv`.\n");
         }
 
         sb.append("\n## Compartments\n\n");

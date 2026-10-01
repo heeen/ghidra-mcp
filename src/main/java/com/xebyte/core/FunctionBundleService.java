@@ -84,9 +84,11 @@ public class FunctionBundleService {
                    description = "Comma-separated subset: signature, classification, return_type, "
                                + "entry_point, body_start, body_end, decompiled_code, "
                                + "plate_comment, comments, labels, tags, parameters, locals, callers, "
-                               + "call_context, callees, xrefs, disassembly, jump_targets, refs (the absolute data "
-                               + "addresses the function uses, including the values of literal-pool "
-                               + "words). "
+                               + "call_context, callees, xrefs, disassembly, jump_targets, refs (the absolute "
+                               + "addresses the function uses: data references, the values of "
+                               + "literal-pool words, and the memory the decompiled code reads and "
+                               + "writes, so a register reached as base + offset is listed by its "
+                               + "own address; asking for refs decompiles). "
                                + "Omit or leave empty for the full bundle.") String fieldsParam,
             @Param(value = "include_call_context", defaultValue = "true",
                    description = "Include each caller's decompiled call-site line. Costs one "
