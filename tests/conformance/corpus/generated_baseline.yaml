@@ -567,6 +567,15 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: true
+- tool: find_functions
+  tier: read
+  args:
+    limit: 10
+    program: Benchmark.dll
+  assert:
+    is_error: false
+    nonempty: true
+  snapshot: true
 - tool: find_next_undefined_function
   tier: read
   snapshot: false
@@ -1054,6 +1063,15 @@ tool_cases:
     is_error: false
     nonempty: true
   snapshot: false
+- tool: list_program_items
+  tier: read
+  args:
+    kind: segments
+    program: Benchmark.dll
+  assert:
+    is_error: false
+    nonempty: true
+  snapshot: true
 - tool: list_project_files
   tier: read
   snapshot: false

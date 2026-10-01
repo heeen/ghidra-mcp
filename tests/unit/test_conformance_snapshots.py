@@ -45,7 +45,6 @@ KNOWN_ERROR_PAYLOAD_GOLDENS = {
     # --- the synthesizer omitted a required-in-practice argument ------------
     "add_function_tag.snap": "no 'tags' supplied",
     "remove_function_tag.snap": "no 'tags' supplied",
-    "search_functions.snap": "no search term supplied",
     # --- one parameter name, different meanings in different tools ----------
     # `pattern` is a type name for find_data_types but a hex byte string here.
     "search_byte_patterns.snap": "pattern='int' is not hex",
@@ -55,8 +54,6 @@ KNOWN_ERROR_PAYLOAD_GOLDENS = {
     "get_program_options.snap": "group='function' is not an option group",
     # `direction` must be forward|backward; the synthesizer sends 'both'.
     "analyze_dataflow.snap": "direction='both' is not accepted here",
-    # `name` was filled with the function name for a tool that wants an address.
-    "get_function_labels.snap": "function lookup got '0xcalc_crc16'",
     # --- the synthesized address is real but wrong for this tool ------------
     "clear_instruction_flow_override.snap": "no instruction at the synthesized address",
     "suggest_field_names.snap": "no struct at the synthesized address",
@@ -68,7 +65,6 @@ KNOWN_ERROR_PAYLOAD_GOLDENS = {
     # --- environment-gated: belongs in a skip, not a snapshot ---------------
     "archive_ingest_function.snap": "archive exchange disabled (GHIDRA_MCP_ARCHIVE_URL unset)",
     "archive_ingest_program.snap": "archive exchange disabled (GHIDRA_MCP_ARCHIVE_URL unset)",
-    "tool_goto_address.snap": "needs a GUI CodeBrowser session",
 }
 
 
