@@ -70,60 +70,6 @@ public class SweepJobTest {
     }
 
     @Test
-    public void functionHeaderHasNineLinesResolvableUriAndFields() {
-        Instant dts = Instant.parse("2026-08-20T12:00:00Z");
-        String header = SweepJob.renderFunctionHeader(
-                "ParseHeader",
-                "0000000180001000",
-                0x120L,
-                "c05",
-                "literal-locality",
-                0.85,
-                true,
-                "abcdef012345",
-                dts,
-                42L,
-                "synaWudfBioUsb.dll",
-                List.of("crt0_init_bss_data", "prng_seed_default"),
-                List.of());
-
-        String[] lines = header.split("\n", -1);
-        // trailing newline ⇒ last element empty
-        assertEquals(SweepJob.HEADER_LINES + 1, lines.length);
-        assertEquals(SweepJob.HEADER_LINES, lines.length - 1);
-
-        assertTrue(lines[0].startsWith("// fn: ParseHeader @ 0000000180001000 size="));
-        assertEquals("// calls: crt0_init_bss_data, prng_seed_default", lines[1]);
-        assertEquals("// callers: (none — entry)", lines[2]);
-        assertTrue(lines[3].contains("c05"));
-        assertTrue(lines[3].contains("literal-locality"));
-        assertTrue(lines[3].contains("evidence_backed=true"));
-        assertEquals("// fp: abcdef012345", lines[4]);
-        assertEquals("// dts: 2026-08-20T12:00:00Z", lines[5]);
-        assertEquals("// mod: 42", lines[6]);
-        assertEquals(
-                "// uri: ghidra://function/synaWudfBioUsb.dll/0000000180001000",
-                lines[7]);
-        assertEquals("// see: modules/c05/README.md", lines[8]);
-    }
-
-    @Test
-    public void neighbourListEmptyCallsVsEntryCallers() {
-        assertEquals("(none)", SweepJob.formatNeighbourList(List.of(), false));
-        assertEquals("(none — entry)", SweepJob.formatNeighbourList(List.of(), true));
-        assertEquals("(none)", SweepJob.formatNeighbourList(null, false));
-    }
-
-    @Test
-    public void neighbourListTruncatesAtEightWithMoreHint() {
-        List<String> nine = List.of("a", "b", "c", "d", "e", "f", "g", "h", "i");
-        String rendered = SweepJob.formatNeighbourList(nine, false);
-        assertEquals("a, b, c, d, e, f, g, h +1 more, see callgraph.tsv", rendered);
-        List<String> eight = List.of("a", "b", "c", "d", "e", "f", "g", "h");
-        assertEquals("a, b, c, d, e, f, g, h", SweepJob.formatNeighbourList(eight, false));
-    }
-
-    @Test
     public void functionUriEncodesProgramNameLikeBridgeQuote() {
         assertEquals(
                 "ghidra://function/my%20prog/00401000",

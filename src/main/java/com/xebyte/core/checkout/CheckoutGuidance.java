@@ -48,19 +48,22 @@ public final class CheckoutGuidance {
                 .append("(`spliced_since_sweep` counts them); `dirty` means a writer did not finish ")
                 .append("(crash, kill, or still running) and the tree is partial; `stale` means it ")
                 .append("is known to diverge from the program (`last_error` says why) — resweep. ")
-                .append("`reconciled_at_modification_number` is the program state the tree ")
-                .append("reflects; `decompile_checkout_status` compares it with the live one and ")
-                .append("reports `in_sync`.\n\n");
+                .append("`decompile_checkout_status` reports `in_sync`: swept, not stale, and no ")
+                .append("change still queued or being spliced in.\n\n");
         sb.append("A rename or comment made through MCP splices the affected blocks in place, ")
                 .append("so the tree normally keeps up. A bulk change (`reanalyze`, a script) ")
                 .append("marks the checkout stale instead — resweep rather than trusting it.\n\n");
 
         sb.append("## The tree is the corpus; the resource is the microscope\n\n");
-        sb.append("Every function block carries `uri: ghidra://function/<program>/<address>` "
-                + "plus `calls:` / `callers:` neighbourhood lines. Grep to find the hit; "
-                + "the header answers who calls it without another tool round-trip. "
-                + "Read the URI resource for call-site context and the full bundle. "
-                + "Disassembly, p-code and type layouts are MCP tools, not files.\n\n");
+        sb.append("Every function block carries what `get_functions` returns for it, one "
+                + "`// key: value` header line per fact, ending at `// ----` (the C follows): "
+                + "`signature:`, `return_type:`, `tags:`, `plate:`, `calls:` / `callers:` "
+                + "(`name@address`), `refs:` (data addresses used, including literal-pool "
+                + "values), `param:`, `local:`, `label:`, `comment:`, `xref:`, `jump:`. Grep "
+                + "a header line (`// callers:.*Foo`, `// refs:.*0x40020000`) and the block "
+                + "answers without another tool round-trip. Read the `uri:` resource for "
+                + "call-site context. Disassembly, p-code and type layouts are MCP tools, not "
+                + "files.\n\n");
 
         sb.append("## Searching\n\n");
         sb.append("- `Grep <pattern> ").append(rootPath).append("/modules`\n");

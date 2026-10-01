@@ -313,11 +313,7 @@ public class TreeReconcilerTest {
     }
 
     private static String rebuildBlock(String name, String addr, String fp, String body) {
-        return SweepJob.renderFunctionHeader(
-                name, addr, 16, "c05", "address-band", 0.50, false, fp,
-                java.time.Instant.parse("2026-01-01T00:00:00Z"), 1L, "app.exe",
-                List.of(), List.of())
-                + body;
+        return TestBlocks.block(name, addr, fp, body);
     }
 
     /** Oversized body so byte-budget splits fire under a small maxFileBytes. */

@@ -62,6 +62,15 @@ def _kv_line(bundle: dict) -> list[str]:
         bits.append(f"modification_number: {revision['modification_number']}")
     if bits:
         out.append(" · ".join(bits))
+    extent = []
+    if bundle.get("body_start") and bundle.get("body_end"):
+        extent.append(f"body `{bundle['body_start']}..{bundle['body_end']}`")
+    if bundle.get("size") is not None:
+        extent.append(f"size {bundle['size']}")
+    if extent:
+        out.append(" · ".join(extent))
+    if bundle.get("tags"):
+        out.append("tags: " + ", ".join(f"`{t}`" for t in bundle["tags"]))
     # A wrong return type silently poisons every caller's reading of the code,
     # so the warning goes above the fold rather than into a field nobody reads.
     if bundle.get("return_type") and not bundle.get("return_type_resolved", True):
@@ -170,7 +179,8 @@ def function_bundle_markdown(bundle: dict) -> str:
     if code:
         out += ["", "## Decompiled"] + _fence(code)
     elif bundle.get("decompile_failed"):
-        out += ["", "## Decompiled", "_Decompilation failed._"]
+        why = bundle.get("decompile_error")
+        out += ["", "## Decompiled", f"_Decompilation failed{': ' + why if why else ''}._"]
     if bundle.get("decompiled_code_note"):
         out.append(f"_{bundle['decompiled_code_note']}_")
 
@@ -197,6 +207,14 @@ def function_bundle_markdown(bundle: dict) -> str:
             offset = label.get("relative_offset")
             where = f"+{offset:#x}" if isinstance(offset, int) else label.get("address", "?")
             out.append(f"- {label.get('name')} `{where}` ({label.get('source')})")
+
+    refs = bundle.get("refs") or []
+    if refs:
+        out += ["", f"## Data addresses used ({len(refs)})", " ".join(f"`{r}`" for r in refs)]
+
+    jumps = bundle.get("jump_targets") or []
+    if jumps:
+        out += ["", f"## Jump targets ({len(jumps)})", " ".join(f"`{j}`" for j in jumps)]
 
     out += _call_context(bundle)
     out += _named_addresses("Callers", bundle.get("callers"), bundle.get("caller_count"))
@@ -428,6 +446,9 @@ def _checkout_freshness(payload: dict) -> str:
         return f"stale ({payload.get('last_error') or 'resweep needed'})"
     if pending:
         return f"catching up ({pending} pending)"
+    if payload.get("in_sync") is True:
+        spliced = payload.get("spliced_since_sweep") or 0
+        return "fresh" + (f", {spliced} blocks spliced since sweep" if spliced else "")
     if tree is None or live is None:
         return "unknown"
     if tree == live:

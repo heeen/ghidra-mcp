@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.partition.PartitionContext;
 import ghidra.app.decompiler.DecompInterface;
@@ -162,6 +163,9 @@ public final class BlockSplicer {
             return new String[]{null, null};
         }
         for (String line : block.split("\n", -1)) {
+            if (line.equals(FunctionBlock.HEADER_END)) {
+                break;
+            }
             if (line.startsWith("// calls:")) {
                 calls = line.substring("// calls:".length()).trim();
             } else if (line.startsWith("// callers:")) {
@@ -177,9 +181,14 @@ public final class BlockSplicer {
             return "";
         }
         String[] lines = block.split("\n", -1);
-        int idx = 0;
-        while (idx < lines.length && lines[idx].startsWith("// ")) {
-            idx++;
+        // The header ends at its terminator; the decompiler's own // lines below it are body.
+        // Blocks written before the terminator existed end at the first non-comment line.
+        int idx = FunctionBlock.bodyStart(lines);
+        if (idx < 0) {
+            idx = 0;
+            while (idx < lines.length && lines[idx].startsWith("// ")) {
+                idx++;
+            }
         }
         StringBuilder sb = new StringBuilder();
         for (; idx < lines.length; idx++) {
@@ -471,12 +480,7 @@ public final class BlockSplicer {
         DecompInterface decomp = null;
         try {
             if (!byFile.isEmpty()) {
-                decomp = ServiceUtils.createConfiguredDecompiler(program, opts -> {
-                    // Must match SweepJob: otherwise refreshed blocks render comments
-                    // differently from swept ones and Grep/fp drift on every plate edit.
-                    opts.setEOLCommentIncluded(true);
-                    opts.setCommentStyle(DecompileOptions.CommentStyleEnum.CPPStyle);
-                });
+                decomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
 
                 long mod = program.getModificationNumber();
                 int timeout = checkout.config().decompileTimeoutSeconds();
@@ -517,9 +521,8 @@ public final class BlockSplicer {
                                     0.0,
                                     row != null && row.evidenceBacked());
                         }
-                        SweepJob.Neighbourhood nb = SweepJob.neighbourhoodFor(func, ctx);
                         String newBlock = decompileBlock(
-                                decomp, func, part, mod, timeout, program.getName(), nb);
+                                decomp, func, part, mod, timeout, program.getName());
                         replacements.put(hex, newBlock);
                     }
 
@@ -642,9 +645,9 @@ public final class BlockSplicer {
                     failedReasons.add("function_not_found");
                     continue;
                 }
-                SweepJob.Neighbourhood nb = SweepJob.neighbourhoodFor(func, ctx);
-                String callsVal = SweepJob.formatNeighbourList(nb.calls(), false);
-                String callersVal = SweepJob.formatNeighbourList(nb.callers(), true);
+                String[] now = FunctionBlock.neighbourValues(func);
+                String callsVal = now[0];
+                String callersVal = now[1];
                 String[] existing = neighbourhoodValuesFromBlock(oldBlock);
                 if (Objects.equals(callsVal, existing[0])
                         && Objects.equals(callersVal, existing[1])) {
@@ -744,54 +747,16 @@ public final class BlockSplicer {
         return sb.toString();
     }
 
-    /** Package-visible so {@link TreeReconciler} renders replace/insert with the same header. */
+    /** One function's block, decompiled with the checkout's pooled decompiler. */
     static String decompileBlock(
             DecompInterface decomp,
             Function func,
             PartitionMeta part,
             long modNumber,
             int timeoutSeconds,
-            String programName,
-            SweepJob.Neighbourhood nb) {
-        String addrHex = func.getEntryPoint().toString(false);
-        long size = functionSize(func);
-        String body;
-        try {
-            DecompileResults results = decomp.decompileFunction(
-                    func, timeoutSeconds, TaskMonitor.DUMMY);
-            if (results != null && results.decompileCompleted()
-                    && results.getDecompiledFunction() != null
-                    && results.getDecompiledFunction().getC() != null) {
-                body = results.getDecompiledFunction().getC();
-            } else {
-                String reason = results != null && results.getErrorMessage() != null
-                        && !results.getErrorMessage().isBlank()
-                        ? results.getErrorMessage().trim()
-                        : "decompile did not complete";
-                body = FAILED_MARKER_PREFIX + reason + "\n";
-            }
-        } catch (Exception e) {
-            String reason = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            body = FAILED_MARKER_PREFIX + reason + "\n";
-        }
-        String fp = SweepJob.shortContentHash(body);
-        SweepJob.Neighbourhood neighbourhood =
-                nb != null ? nb : SweepJob.Neighbourhood.EMPTY;
-        String header = SweepJob.renderFunctionHeader(
-                func.getName(),
-                addrHex,
-                size,
-                part.slug(),
-                part.method(),
-                part.confidence(),
-                part.evidenceBacked(),
-                fp,
-                Instant.now(),
-                modNumber,
-                programName,
-                neighbourhood.calls(),
-                neighbourhood.callers());
-        return header + body;
+            String programName) {
+        return FunctionBlock.build(func, decomp, timeoutSeconds, TaskMonitor.DUMMY, part.slug(),
+                part.method(), part.confidence(), part.evidenceBacked(), modNumber, programName).text();
     }
 
     private static long functionSize(Function func) {

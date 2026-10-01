@@ -245,10 +245,6 @@ public class BlockSplicerTest {
     private static String rebuildBlock(
             String name, String addr, String fp,
             List<String> calls, List<String> callers, String body) {
-        return SweepJob.renderFunctionHeader(
-                name, addr, 16L, "c05", "address-band", 0.50, false, fp,
-                java.time.Instant.parse("2026-01-01T00:00:00Z"), 1L, "x",
-                calls, callers)
-                + body;
+        return TestBlocks.block(name, addr, fp, calls, callers, body);
     }
 }

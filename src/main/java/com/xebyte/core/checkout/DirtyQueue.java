@@ -135,10 +135,11 @@ public final class DirtyQueue {
         return b == null ? 0 : b.addresses.size();
     }
 
-    /** Any work at all still waiting for this checkout: addresses, names or a full pass. */
+    /** Any work at all for this checkout: queued addresses, names, a full pass, or one running. */
     public synchronized boolean hasPending(String checkoutId) {
         Bucket b = buckets.get(checkoutId);
-        return b != null && (b.needsReconcile || !b.addresses.isEmpty() || !b.retiredNames.isEmpty());
+        return b != null && (b.needsReconcile || !b.addresses.isEmpty() || !b.retiredNames.isEmpty()
+                || b.reconciling);
     }
 
     public synchronized boolean pendingNeedsReconcile(String checkoutId) {
@@ -249,6 +250,7 @@ public final class DirtyQueue {
                     full = b.needsReconcile;
                     targeted = full ? null : Set.copyOf(b.addresses);
                     retired = Set.copyOf(b.retiredNames);
+                    b.reconciling = true;
                     b.needsReconcile = false;
                     b.addresses.clear();
                     b.retiredNames.clear();
@@ -272,6 +274,13 @@ public final class DirtyQueue {
                 } catch (Exception e) {
                     Msg.error(this, "Checkout dirty-queue reconcile failed for "
                             + checkoutId + ": " + e.getMessage(), e);
+                } finally {
+                    synchronized (this) {
+                        Bucket b = buckets.get(checkoutId);
+                        if (b != null) {
+                            b.reconciling = false;
+                        }
+                    }
                 }
                 // More dirt may have arrived during reconcile — if so, arm()
                 // already queued another drain on this same executor.
@@ -317,6 +326,7 @@ public final class DirtyQueue {
     private static final class Bucket {
         final Set<String> addresses = new LinkedHashSet<>();
         final Set<String> retiredNames = new LinkedHashSet<>();
+        boolean reconciling;
         boolean needsReconcile;
         long deadlineMs;
         boolean drainQueued;

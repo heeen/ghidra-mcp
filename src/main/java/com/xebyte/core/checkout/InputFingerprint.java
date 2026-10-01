@@ -11,6 +11,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolTable;
+import ghidra.program.model.symbol.SymbolType;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -63,6 +64,7 @@ public final class InputFingerprint {
         appendExtents(sb, func);
         appendComments(sb, program, func);
         appendReferencedSymbols(sb, program, func);
+        appendBlockOnlyFacts(sb, program, func);
         return shortHash(sb.toString());
     }
 
@@ -198,6 +200,35 @@ public final class InputFingerprint {
             first = false;
         }
         sb.append('\n');
+    }
+
+    /**
+     * Facts a block shows that the decompiled C does not: tags, labels in the body, and who
+     * references the entry (the block's callers and xrefs). Without them a full reconcile
+     * would keep a block whose header no longer matches the program.
+     */
+    private static void appendBlockOnlyFacts(StringBuilder sb, Program program, Function func) {
+        try {
+            sb.append("tags=").append(func.getTags().stream().map(t -> t.getName()).sorted().toList())
+                    .append('\n');
+            if (program == null) {
+                return;
+            }
+            TreeSet<String> labels = new TreeSet<>();
+            for (Symbol s : program.getSymbolTable().getSymbols(func.getBody(), SymbolType.LABEL, true)) {
+                labels.add(s.getAddress().toString(false) + "=" + s.getName());
+            }
+            sb.append("labels=").append(labels).append('\n');
+            TreeSet<String> incoming = new TreeSet<>();
+            for (Reference ref : program.getReferenceManager().getReferencesTo(func.getEntryPoint())) {
+                Function from = program.getFunctionManager().getFunctionContaining(ref.getFromAddress());
+                incoming.add(ref.getFromAddress().toString(false) + " " + ref.getReferenceType()
+                        + (from != null ? " " + from.getName() : ""));
+            }
+            sb.append("incoming=").append(incoming).append('\n');
+        } catch (Exception e) {
+            // A fact that cannot be read hashes as absent, stably.
+        }
     }
 
     private static String nullToEmpty(String s) {

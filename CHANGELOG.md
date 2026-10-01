@@ -156,6 +156,39 @@ client's own built-in tools, so the search costs no permission surface.
 
 ### Changed — this branch
 
+- **The decompilation checkout stopped lying, and shows what `get_functions` shows.** All
+  found by a live RE session on a 339-function firmware.
+  - **Renames reach every block that prints the name.** A renamed function updated its own
+    block while its callers kept the old name until an unrelated full reconcile; a renamed
+    label or global propagated nowhere. Symbol changes now dirty every function referencing
+    the symbol, and the old name is searched for in the bodies, which catches calls the
+    decompiler resolves through a register or a literal pool, which have no reference.
+    Measured: a callee used 72 times updated everywhere in 1.4 s.
+  - **Status is honest.** STATUS.md said `clean` after splices and blanked
+    `swept_at_modification_number`. New states `spliced` (kept current since the sweep) and
+    `stale` (with `last_error`); every rewritten block is counted; `decompile_checkout_status`
+    reports `in_sync` (swept, not stale, nothing queued or running) and `pending_dirty`.
+  - **Discarded edits do not stay.** `close_program(save=false)` kept them in the tree. The
+    checkout now goes stale with the reason and reconciles in full on reopen, including the
+    names the discarded session introduced.
+  - **`set_memory_block`** changes a block's permissions. Firmware loaders often mark flash
+    writable, so the decompiler reads every literal-pool word as a variable
+    (`iVar2 = DAT_08016e58;`) instead of the peripheral base it holds; marking flash
+    read-only took pool reads from 1123 to 4 and printed bases as constants or labels. A
+    memory-map change marks checkouts stale (only a resweep fixes that).
+  - **One function view.** `FunctionFacts` builds every field once; `get_functions`, the
+    checkout's blocks and the `ghidra://function` resource all render it. Blocks gained
+    signature, classification, return type, body range, tags, plate and its issues,
+    parameters, locals, labels, comments, xrefs, jump targets and a new `refs` field (the
+    data addresses used, including literal-pool values, so `0x40020000` greps however the C
+    prints it). `calls:`/`callers:` and `callgraph.tsv` use the bundle's rule
+    (`name@address`, sorted by name, capped at 50). A decompile failure gives its reason on
+    every surface (`decompile_error`). A real-Ghidra test requires a swept block to equal a
+    freshly decompiled bundle field for field; live, all 339 functions matched before and
+    after splices. Sweep 5.5 s → 6.0 s, tree 844 KB → 1.3 MB.
+  - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
+    and kept the backup, while reporting success.
+
 - **Function tags are an attribute of a function, not a tool family.** Reading them is
   `get_functions(fields=tags)` (also in the default bundle, so bulk mode returns the tags of
   20 functions in one call) and `find_functions(tag=a,b)`, which composes with every other
