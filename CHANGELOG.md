@@ -30,6 +30,30 @@ five ways of reading a function into `/get_functions`.
 Stacked on the consolidation above rather than shipped separately — same
 unreleased 7.0.0.
 
+#### Found in a live RE session against a Ghidra Server repository
+
+A headless client doing version-controlled work hit these one after another:
+
+- **`checkin_program(dry_run=true)` really checked in.** The scanner's dry run
+  is a transaction that rolls back, and a check-in is not a transaction: the
+  version went 1 → 2, then the rollback's `endTransaction` threw
+  `ClosedException` on the file the check-in had closed. A write tool now
+  declares `dryRun = false` when a rollback cannot undo its effect (50 do), and
+  the scanner refuses `dry_run` for those unless the tool takes the parameter
+  itself. `checkin_program` does: it reports `would_save`, `would_close`, the
+  version and `modified_since_checkout` without touching anything. It also
+  moved from the `project` group to `server`, beside checkout and undo.
+- **That exception wedged the server for ~20 hours.** `DirectThreadingStrategy`
+  released its global write lock after `endTransaction` in the same `finally`,
+  so a throwing transaction end skipped the unlock and an idle pool thread held
+  the lock forever; every later write blocked. The unlock has its own `finally`.
+- **A naming refusal arrived as a bare `name_quality`.** The bridge's error
+  text was the `error` code alone; it now joins `error`, `message` and
+  `suggestion`.
+- **`rename_symbol` had no `strict_mode`.** `rename_function` takes a per-call
+  `enforce`/`warn`/`off` override; `rename_symbol` now does too, and its refusal
+  names it.
+
 #### One GUI provider, one service set, one server
 
 The GUI answered the same question two ways depending on which transport
