@@ -78,12 +78,15 @@ public final class CheckoutGuidance {
                     .append("were built from.\n");
         }
         if (hasPeripherals) {
-            sb.append("\n**Peripheral addresses do not appear as hex.** The decompiler renders ")
-                    .append("high addresses as negative signed literals — `0xCA000000` shows up ")
-                    .append("as `-0x36000000` — so grepping an MMIO address by its natural form ")
-                    .append("finds nothing. Use the `peripheral_pages` line in each `m*` ")
-                    .append("compartment's README instead; that index is built from the ")
-                    .append("reference graph, which sees the real address.\n");
+            sb.append("\n**Peripheral addresses may not appear as hex.** When the code block is ")
+                    .append("marked writable (firmware loaders often do), the decompiler treats every ")
+                    .append("literal-pool load as a variable: `iVar2 = DAT_08016e58;` where the pool ")
+                    .append("word holds `0x40020000`. Mark flash read-only with `set_memory_block` and ")
+                    .append("resweep; the loads then fold into constants or the labels at their ")
+                    .append("targets (measured on one firmware: 1123 pool reads became 4). A register ")
+                    .append("reached as base + offset still prints as the base plus `0xc0c`, so grep ")
+                    .append("the base and the offset, or use the `peripheral_pages` line in each `m*` ")
+                    .append("compartment's README, which is built from the reference graph.\n");
         }
 
         sb.append("\n## Compartments\n\n");

@@ -145,6 +145,8 @@ ENDPOINT_TIER: dict[str, InvalidationTier] = {
     "/apply_data_classification": InvalidationTier.TYPE,
     "/set_global": InvalidationTier.TYPE,
     # --- UNBOUNDED: analysis, scripts, program lifecycle, project ops ---
+    # Every function reading the block may decompile differently.
+    "/set_memory_block": InvalidationTier.UNBOUNDED,
     "/reanalyze": InvalidationTier.UNBOUNDED,
     "/run_analysis": InvalidationTier.UNBOUNDED,
     "/analyze_data_region": InvalidationTier.UNBOUNDED,

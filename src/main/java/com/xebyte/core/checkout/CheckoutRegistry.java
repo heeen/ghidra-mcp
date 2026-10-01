@@ -162,6 +162,29 @@ public final class CheckoutRegistry {
         }
     }
 
+    /**
+     * The tree is known to diverge from the program in a way only a resweep fixes. Called
+     * on the event thread: progress changes now, STATUS.md is written on the checkout
+     * executor.
+     */
+    public void markStale(String checkoutId, String reason) {
+        Checkout checkout = byId(checkoutId);
+        if (checkout == null) {
+            return;
+        }
+        checkout.setProgress(checkout.progress()
+                .withPhase(SweepProgress.Phase.STALE)
+                .withLastError(reason));
+        enqueue(() -> {
+            try {
+                CheckoutStatusMd.write(checkout, "stale");
+            } catch (IOException e) {
+                Msg.warn(this, "Checkout " + checkoutId + ": could not mark STATUS.md stale: "
+                        + e.getMessage());
+            }
+        });
+    }
+
     /** The program was saved at {@code modification}: that is what a reopen will show. */
     public void noteSaved(String checkoutId, long modification) {
         Checkout checkout = byId(checkoutId);

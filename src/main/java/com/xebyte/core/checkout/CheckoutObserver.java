@@ -68,6 +68,9 @@ public final class CheckoutObserver implements DomainObjectListener {
         }
 
         Hint hint = translate(ev, program);
+        if (hint.staleReason() != null) {
+            CheckoutRegistry.getInstance().markStale(checkoutId, hint.staleReason());
+        }
         if (!hint.introducedNames().isEmpty()) {
             CheckoutRegistry.getInstance().noteIntroducedNames(checkoutId, hint.introducedNames());
         }
@@ -101,6 +104,19 @@ public final class CheckoutObserver implements DomainObjectListener {
         }
 
         FunctionManager fm = program != null ? program.getFunctionManager() : null;
+
+        // A memory-map change (a block made read-only, mapped or removed) changes how the
+        // decompiler treats every load from that range, in functions no record names and
+        // without changing any input fingerprint: only a resweep brings the tree back.
+        for (DomainObjectChangeRecord rec : ev) {
+            var type = rec == null ? null : rec.getEventType();
+            if (type == ProgramEvent.MEMORY_BLOCK_CHANGED || type == ProgramEvent.MEMORY_BLOCK_ADDED
+                    || type == ProgramEvent.MEMORY_BLOCK_REMOVED || type == ProgramEvent.MEMORY_BLOCK_MOVED
+                    || type == ProgramEvent.MEMORY_BLOCK_SPLIT || type == ProgramEvent.MEMORY_BLOCKS_JOINED) {
+                return Hint.stale("the memory map changed; every function may decompile "
+                        + "differently, so resweep (decompile_checkout_run action=start)");
+            }
+        }
 
         for (DomainObjectChangeRecord rec : ev) {
             if (rec == null || rec.getEventType() == null) {
@@ -330,7 +346,18 @@ public final class CheckoutObserver implements DomainObjectListener {
      * the names they were renamed to, which a discarded session would leave behind.
      */
     public record Hint(Set<String> addresses, boolean needsReconcile, Set<String> retiredNames,
-            Set<String> introducedNames) {
+            Set<String> introducedNames, String staleReason) {
+
+        public Hint(Set<String> addresses, boolean needsReconcile, Set<String> retiredNames,
+                Set<String> introducedNames) {
+            this(addresses, needsReconcile, retiredNames, introducedNames, null);
+        }
+
+        /** Nothing a reconcile can fix: the checkout needs a resweep. */
+        static Hint stale(String reason) {
+            return new Hint(Set.of(), false, Set.of(), Set.of(), reason);
+        }
+
         public Hint {
             addresses = addresses == null ? Set.of() : Set.copyOf(addresses);
             retiredNames = retiredNames == null ? Set.of() : Set.copyOf(retiredNames);

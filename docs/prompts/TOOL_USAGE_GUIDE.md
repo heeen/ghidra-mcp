@@ -544,10 +544,15 @@ searching the files.
    **strings and constants** instead — that is also the signal the partitioner
    uses (`literal-locality` / string evidence in compartment READMEs).
 
-2. **Peripheral / MMIO addresses render as negative signed literals** in the
-   decompiled C (`-0x36000000` is `0xCA000000`). Grepping a peripheral by its
-   natural hex form finds nothing. The compartment `README.md` is the index for
-   those addresses, not Grep.
+2. **Peripheral / RAM addresses can be invisible in the C** when the code block is
+   marked writable, which firmware loaders often do: the decompiler then treats each
+   literal-pool load as a variable (`iVar2 = DAT_08016e58;`, the word holding
+   `0x40020000`), so grepping the address finds nothing. Mark flash read-only first:
+   `set_memory_block(block="ram", write=false)`, then resweep. Measured on a 339-function
+   firmware: pool reads went from 1123 to 4, and the bases printed as constants or the
+   labels at their targets (`(uint *)&GPIOC_CFGR`). A register reached as base + offset
+   still prints as the base plus the offset; the compartment `README.md`'s
+   `peripheral_pages` line indexes those pages.
 
 ## Function Tagging
 

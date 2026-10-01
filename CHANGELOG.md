@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**218 endpoints**, 217 of them advertised as MCP tools — 214 served by the GUI
-plugin, 199 by the headless server, 195 by both. One endpoint,
+**219 endpoints**, 218 of them advertised as MCP tools — 215 served by the GUI
+plugin, 200 by the headless server, 196 by both. One endpoint,
 `/decompile_checkout_refresh`, stays an HTTP route and is never advertised as a
 tool, which is why the two numbers differ.
 
