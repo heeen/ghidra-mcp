@@ -83,7 +83,7 @@ public final class TreeReconciler {
                 : List.of();
         Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex = new LinkedHashMap<>();
         for (CheckoutTreeNarrower.IndexEntry row : indexRows) {
-            indexByHex.put(CheckoutTreeNarrower.normalizeHex(row.addressHex()), row);
+            indexByHex.put(CheckoutAddresses.normalize(row.addressHex()), row);
         }
 
         PartitionContext ctx = new PartitionContext(program);
@@ -92,7 +92,7 @@ public final class TreeReconciler {
         Map<String, Function> programByHex = new LinkedHashMap<>();
         for (Function f : ctx.functions()) {
             programByHex.put(
-                    CheckoutTreeNarrower.normalizeHex(f.getEntryPoint().toString(false)), f);
+                    CheckoutAddresses.of(f), f);
         }
 
         WorkPlan plan = planWork(indexByHex, programByHex, addresses);
@@ -294,7 +294,7 @@ public final class TreeReconciler {
                         Files.readString(file, StandardCharsets.UTF_8))) {
                     String hex = CheckoutTreeNarrower.addressFromChunk(chunk);
                     if (hex != null && bodyMatches(chunk, any)) {
-                        found.add(CheckoutTreeNarrower.normalizeHex(hex));
+                        found.add(CheckoutAddresses.normalize(hex));
                     }
                 }
             }
@@ -347,7 +347,7 @@ public final class TreeReconciler {
                 if (raw == null || raw.isBlank()) {
                     continue;
                 }
-                String hex = CheckoutTreeNarrower.normalizeHex(raw);
+                String hex = CheckoutAddresses.normalize(raw);
                 boolean inTree = indexByHex.containsKey(hex);
                 boolean inProg = programByHex.containsKey(hex);
                 if (inTree && inProg) {
@@ -396,7 +396,7 @@ public final class TreeReconciler {
             }
             return new Placement(pinned.get(), ModuleOverrides.METHOD, conf, true);
         }
-        return placeByContainment(entry.toString(false), indexByHex);
+        return placeByContainment(CheckoutAddresses.of(func), indexByHex);
     }
 
     /**
@@ -406,13 +406,21 @@ public final class TreeReconciler {
      */
     public static Placement placeByContainment(
             String addressHex, Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex) {
-        String want = CheckoutTreeNarrower.normalizeHex(addressHex);
-        long addr = parseHexLong(want);
+        String want = CheckoutAddresses.normalize(addressHex);
+        long addr = CheckoutAddresses.offset(want);
+        // Offsets compare only within one address space; an overlay function placed by a
+        // default-space span would land beside code it has nothing to do with.
+        String space = CheckoutAddresses.space(want);
+        boolean anyInSpace = indexByHex.values().stream()
+                .anyMatch(r -> CheckoutAddresses.space(r.addressHex()).equals(space));
 
         Map<String, long[]> spans = new LinkedHashMap<>();
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (CheckoutTreeNarrower.IndexEntry row : indexByHex.values()) {
-            long a = parseHexLong(CheckoutTreeNarrower.normalizeHex(row.addressHex()));
+            if (anyInSpace && !CheckoutAddresses.space(row.addressHex()).equals(space)) {
+                continue;
+            }
+            long a = CheckoutAddresses.offset(row.addressHex());
             long[] span = spans.get(row.slug());
             if (span == null) {
                 spans.put(row.slug(), new long[]{a, a});
@@ -468,7 +476,7 @@ public final class TreeReconciler {
         if (want == null) {
             return (fileBody == null ? "" : fileBody) + ensureBlockSeparator(newBlock);
         }
-        String wantNorm = CheckoutTreeNarrower.normalizeHex(want);
+        String wantNorm = CheckoutAddresses.normalize(want);
         List<String> chunks = CheckoutTreeNarrower.splitFunctionChunks(
                 fileBody == null ? "" : fileBody);
         List<String> out = new ArrayList<>();
@@ -476,7 +484,7 @@ public final class TreeReconciler {
         for (String chunk : chunks) {
             String addr = CheckoutTreeNarrower.addressFromChunk(chunk);
             if (!inserted && addr != null
-                    && CheckoutTreeNarrower.normalizeHex(addr).compareTo(wantNorm) > 0) {
+                    && CheckoutAddresses.normalize(addr).compareTo(wantNorm) > 0) {
                 out.add(trimTrailingExtraBlanks(newBlock));
                 inserted = true;
             }
@@ -494,7 +502,7 @@ public final class TreeReconciler {
      */
     public static String removeBlockFromFile(String fileBody, String addressHex) {
         return CheckoutTreeNarrower.rewritePartitionFile(
-                fileBody, Set.of(CheckoutTreeNarrower.normalizeHex(addressHex)));
+                fileBody, Set.of(CheckoutAddresses.normalize(addressHex)));
     }
 
     /**
@@ -542,9 +550,8 @@ public final class TreeReconciler {
     public static String filePathForBody(String slug, String body, int pointerSize) {
         String addr = CheckoutTreeNarrower.addressFromChunk(
                 CheckoutTreeNarrower.splitFunctionChunks(body).get(0));
-        long offset = parseHexLong(CheckoutTreeNarrower.normalizeHex(addr));
         return CheckoutLayout.moduleFunctionFile(
-                slug, CheckoutLayout.compartmentFileName(offset, pointerSize));
+                slug, CheckoutLayout.compartmentFileName(addr, pointerSize));
     }
 
     // -------------------------------------------------------------------------
@@ -625,8 +632,7 @@ public final class TreeReconciler {
             Placement placement,
             int pointerSize,
             int maxFileBytes) throws IOException {
-        String hex = CheckoutTreeNarrower.normalizeHex(
-                func.getEntryPoint().toString(false));
+        String hex = CheckoutAddresses.of(func);
         String targetFile = chooseTargetFile(working, placement.slug(), hex, pointerSize);
 
         Path abs = checkout.root().path().resolve(targetFile);
@@ -670,7 +676,7 @@ public final class TreeReconciler {
                 if (addr == null) {
                     continue;
                 }
-                String aHex = CheckoutTreeNarrower.normalizeHex(addr);
+                String aHex = CheckoutAddresses.normalize(addr);
                 String name = BlockSplicer.nameFromBlock(chunk);
                 if (name == null) {
                     name = aHex;
@@ -713,13 +719,12 @@ public final class TreeReconciler {
         for (CheckoutTreeNarrower.IndexEntry row : working.values()) {
             if (slug.equals(row.slug())) {
                 addrToFile.put(
-                        CheckoutTreeNarrower.normalizeHex(row.addressHex()), row.file());
+                        CheckoutAddresses.normalize(row.addressHex()), row.file());
             }
         }
         if (addrToFile.isEmpty()) {
-            long offset = parseHexLong(newHex);
             return CheckoutLayout.moduleFunctionFile(
-                    slug, CheckoutLayout.compartmentFileName(offset, pointerSize));
+                    slug, CheckoutLayout.compartmentFileName(newHex, pointerSize));
         }
         String floor = addrToFile.floorKey(newHex);
         if (floor != null) {
@@ -791,7 +796,7 @@ public final class TreeReconciler {
                 if (oldBlock == null) {
                     continue;
                 }
-                Function func = resolveFunction(program, hex);
+                Function func = CheckoutAddresses.function(program, hex);
                 if (func == null) {
                     continue;
                 }
@@ -819,18 +824,6 @@ public final class TreeReconciler {
             }
         }
         return filesWritten;
-    }
-
-    private static Function resolveFunction(Program program, String hex) {
-        var addr = ServiceUtils.parseAddress(program, hex);
-        if (addr == null) {
-            return null;
-        }
-        Function at = program.getFunctionManager().getFunctionAt(addr);
-        if (at != null) {
-            return at;
-        }
-        return program.getFunctionManager().getFunctionContaining(addr);
     }
 
     private static String joinChunks(List<String> chunks) {
@@ -863,17 +856,6 @@ public final class TreeReconciler {
             s = s.substring(0, s.length() - 1);
         }
         return s;
-    }
-
-    private static long parseHexLong(String hex) {
-        if (hex == null || hex.isBlank()) {
-            return 0L;
-        }
-        try {
-            return Long.parseUnsignedLong(hex, 16);
-        } catch (NumberFormatException e) {
-            return 0L;
-        }
     }
 
     // -------------------------------------------------------------------------

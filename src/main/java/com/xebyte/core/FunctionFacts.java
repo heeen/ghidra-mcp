@@ -1,5 +1,6 @@
 package com.xebyte.core;
 
+import com.xebyte.core.checkout.CheckoutAddresses;
 import ghidra.app.decompiler.ClangCommentToken;
 import ghidra.app.decompiler.ClangLine;
 import ghidra.app.decompiler.ClangToken;
@@ -140,7 +141,7 @@ public final class FunctionFacts {
         java.util.Collections.sort(sorted);
         List<String> out = new ArrayList<>(sorted.size());
         for (ghidra.program.model.address.Address a : sorted) {
-            out.add(a.toString(false));
+            out.add(CheckoutAddresses.of(a, program));
         }
         return out;
     }
@@ -189,13 +190,13 @@ public final class FunctionFacts {
             }
         }
         if (wantsField(fields, "entry_point")) {
-            out.put("entry_point", entry.toString(false));
+            out.put("entry_point", CheckoutAddresses.of(entry, program));
         }
         if (wantsField(fields, "body_start")) {
-            out.put("body_start", func.getBody().getMinAddress().toString(false));
+            out.put("body_start", CheckoutAddresses.of(func.getBody().getMinAddress(), program));
         }
         if (wantsField(fields, "body_end")) {
-            out.put("body_end", func.getBody().getMaxAddress().toString(false));
+            out.put("body_end", CheckoutAddresses.of(func.getBody().getMaxAddress(), program));
         }
 
         DecompileResults decomp = null;
@@ -243,7 +244,7 @@ public final class FunctionFacts {
         }
         if (wantsField(fields, "refs")) {
             out.put("refs", refAddresses(addressRefs(program, func,
-                decompiled ? decomp.getHighFunction() : null)));
+                decompiled ? decomp.getHighFunction() : null), program));
         }
         if (wantsField(fields, "jump_targets")) {
             out.put("jump_targets", collectJumpTargets(program, func));
@@ -468,6 +469,9 @@ public final class FunctionFacts {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("name", f.getName());
             item.putAll(ServiceUtils.addressToJson(f.getEntryPoint(), program));
+            // Qualified outside the default space, so an overlay caller cannot read as the
+            // default-space function at the same offset.
+            item.put("address", CheckoutAddresses.of(f.getEntryPoint(), program));
             out.add(item);
         }
         return out;
@@ -508,8 +512,8 @@ public final class FunctionFacts {
             for (Address site : entry.getValue()) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("caller", caller.getName());
-                item.put("caller_address", caller.getEntryPoint().toString(false));
-                item.put("site_address", site.toString(false));
+                item.put("caller_address", CheckoutAddresses.of(caller.getEntryPoint(), program));
+                item.put("site_address", CheckoutAddresses.of(site, program));
                 int at = indexOfLineContaining(lines, site);
                 if (at >= 0) {
                     item.put("line_number", lines.get(at).getLineNumber());
@@ -588,7 +592,7 @@ public final class FunctionFacts {
             total++;
             if (out.size() >= MAX_XREFS) continue;
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("from", ref.getFromAddress().toString(false));
+            item.put("from", CheckoutAddresses.of(ref.getFromAddress(), program));
             item.put("type", ref.getReferenceType().getName());
             Function containing = program.getFunctionManager()
                 .getFunctionContaining(ref.getFromAddress());
@@ -609,7 +613,7 @@ public final class FunctionFacts {
             total++;
             if (out.size() >= MAX_DISASM) continue;
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("address", instruction.getAddress().toString(false));
+            item.put("address", CheckoutAddresses.of(instruction.getAddress(), program));
             item.put("mnemonic", instruction.getMnemonicString());
             List<String> operands = new ArrayList<>();
             for (int i = 0; i < instruction.getNumOperands(); i++) {
@@ -714,8 +718,8 @@ public final class FunctionFacts {
         return new ArrayList<>(found);
     }
 
-    /** The distinct addresses of {@code refs}, sorted, as {@code 0x...}, capped. */
-    static List<String> refAddresses(List<AddressRef> refs) {
+    /** The distinct addresses of {@code refs}, sorted, as {@link CheckoutAddresses#display}, capped. */
+    static List<String> refAddresses(List<AddressRef> refs, Program program) {
         java.util.TreeSet<Address> sorted = new java.util.TreeSet<>();
         for (AddressRef r : refs) {
             sorted.add(r.address());
@@ -723,7 +727,7 @@ public final class FunctionFacts {
         List<String> out = new ArrayList<>();
         for (Address a : sorted) {
             if (out.size() >= MAX_REFS) break;
-            out.add("0x" + a.toString(false));
+            out.add(CheckoutAddresses.display(a, program));
         }
         return out;
     }

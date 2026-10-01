@@ -577,6 +577,10 @@ index/addresses.tsv` names every function that touches a register, including one
 base + offset, which the C prints as the base plus `0xc`. The `// refs:` line carries the same
 addresses (capped at 200), so a grep over the tree hits the block too.
 
+Addresses are bare hex in the program's default space and `space:hex` in any other
+(`// fn: init @ OVL:00001000`), in the headers, both TSVs, the file names
+(`OVL_00001000.c`) and the `uri:` line, the same spelling `get_functions` uses.
+
 Grep finds the hit; the `uri:` line is how you pull call-site context afterwards. Do not
 re-decompile via tools just to re-read what the block already holds.
 

@@ -289,14 +289,14 @@ public final class SweepJob implements Runnable {
                         relativeFile = CheckoutLayout.moduleFunctionFile(
                                 part.slug(),
                                 CheckoutLayout.compartmentFileName(
-                                        func.getEntryPoint().getOffset(), pointerSize));
+                                        CheckoutAddresses.of(func), pointerSize));
                     }
 
                     appendBlock(fileBody, emit.text());
                     fileBytes += addition;
                     fileFnCount++;
 
-                    String addrHex = func.getEntryPoint().toString(false);
+                    String addrHex = CheckoutAddresses.of(func);
                     if (fileFirstHex == null) {
                         fileFirstHex = addrHex;
                     }
@@ -946,10 +946,10 @@ public final class SweepJob implements Runnable {
     public static String renderCallgraphTsv(PartitionContext ctx) {
         StringBuilder sb = new StringBuilder("caller\tcallee\tcaller_name\tcallee_name\n");
         for (Function caller : ctx.functions()) {
-            String callerAddr = caller.getEntryPoint().toString(false);
+            String callerAddr = CheckoutAddresses.of(caller);
             for (Function callee : FunctionFacts.calleesOf(caller)) {
                 sb.append(callerAddr).append('\t')
-                        .append(callee.getEntryPoint().toString(false)).append('\t')
+                        .append(CheckoutAddresses.of(callee)).append('\t')
                         .append(caller.getName()).append('\t')
                         .append(callee.getName()).append('\n');
             }
