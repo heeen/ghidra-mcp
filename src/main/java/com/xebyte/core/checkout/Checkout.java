@@ -18,6 +18,12 @@ public final class Checkout {
     private final CheckoutRoot root;
     private volatile CheckoutConfig config;
     private volatile SweepProgress progress;
+    /** Program modification number at its last save (or clean open); null while unknown. */
+    private volatile Long savedAtModification;
+    /** The tree went stale when its program closed; reconcile in full when it reopens. */
+    private volatile boolean recoverOnReattach;
+    /** Names given to symbols since the last save: what a discarded session may leave behind. */
+    private final java.util.Set<String> namesSinceSave = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public Checkout(CheckoutKey key, String programName, CheckoutConfig config, CheckoutRoot root) {
         this.key = Objects.requireNonNull(key, "key");
@@ -61,5 +67,25 @@ public final class Checkout {
 
     public void setProgress(SweepProgress progress) {
         this.progress = Objects.requireNonNull(progress, "progress");
+    }
+
+    public Long savedAtModification() {
+        return savedAtModification;
+    }
+
+    public void setSavedAtModification(Long modification) {
+        this.savedAtModification = modification;
+    }
+
+    public java.util.Set<String> namesSinceSave() {
+        return namesSinceSave;
+    }
+
+    public boolean recoverOnReattach() {
+        return recoverOnReattach;
+    }
+
+    public void setRecoverOnReattach(boolean recover) {
+        this.recoverOnReattach = recover;
     }
 }

@@ -246,9 +246,19 @@ public final class TreeReconciler {
         int structural = acc.inserted.size() + acc.removed.size();
         int rewritten = acc.replaced.size() + structural;
         SweepProgress before = checkout.progress();
-        checkout.setProgress(before
+        SweepProgress after = before
                 .withLastError(before.phase() == SweepProgress.Phase.STALE ? before.lastError() : null)
-                .reconciledAt(reconcilingAt, rewritten, structural));
+                .reconciledAt(reconcilingAt, rewritten, structural);
+        if (addresses == null && checkout.recoverOnReattach()) {
+            // The full pass after a stale close re-diffed every block against the program
+            // as it reopened: the divergence that made it stale is gone.
+            checkout.setRecoverOnReattach(false);
+            after = after
+                    .withPhase(after.sweptAtModification() != null
+                            ? SweepProgress.Phase.COMPLETE : SweepProgress.Phase.IDLE)
+                    .withLastError(null);
+        }
+        checkout.setProgress(after);
         CheckoutStatusMd.write(checkout, CheckoutStatusMd.settledState(checkout.progress()));
 
         return ReconcileResult.of(
