@@ -637,23 +637,29 @@ public final class ServiceUtils {
      * {@link AnnotationScanner} clears on entry and in {@code finally}; background
      * jobs (SweepJob, DirtyQueue) do not use this path.
      */
-    private static final ThreadLocal<String> resolvedProgramName = new ThreadLocal<>();
+    private static final ThreadLocal<Program> resolvedProgram = new ThreadLocal<>();
 
     /** Record the resolved program for response labeling. Call only on success. */
     static void recordResolvedProgram(Program program) {
         if (program != null) {
-            resolvedProgramName.set(program.getName());
+            resolvedProgram.set(program);
         }
     }
 
     /** Clear before/after each annotation-driven request (entry + finally). */
     public static void clearResolvedProgramName() {
-        resolvedProgramName.remove();
+        resolvedProgram.remove();
     }
 
     /** Peek the name recorded for this thread, or null if none. */
     public static String peekResolvedProgramName() {
-        return resolvedProgramName.get();
+        Program program = resolvedProgram.get();
+        return program != null ? program.getName() : null;
+    }
+
+    /** The program this request resolved, or null if none. */
+    static Program peekResolvedProgram() {
+        return resolvedProgram.get();
     }
 
     /**

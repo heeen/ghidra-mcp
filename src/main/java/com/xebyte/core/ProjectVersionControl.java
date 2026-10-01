@@ -173,16 +173,74 @@ public final class ProjectVersionControl {
     public Response checkout(String path, boolean exclusive) {
         FileOrError f = file(path);
         if (f.hasError()) return Response.err(f.error());
-        if (!f.file().isVersioned()) {
-            return Response.err("File is not under version control: " + f.file().getPathname());
+        DomainFile file = f.file();
+        if (!file.isVersioned()) {
+            return Response.err("File is not under version control: " + file.getPathname());
+        }
+        // Ghidra answers a second checkout with "Cannot checkout, private file exists", which
+        // reads as a failure while the file is in fact checked out.
+        if (file.isCheckedOut()) {
+            Map<String, Object> extras = new LinkedHashMap<>();
+            extras.put("exclusive", file.isCheckedOutExclusive());
+            extras.putAll(rebindOpenCopies(file));
+            return report("already_checked_out", true, file, extras);
+        }
+        if (file.isHijacked()) {
+            return Response.err(file.getPathname() + " has a private local file at its path (a "
+                + "hijacked file), so it cannot be checked out. Move or delete the local file first.");
         }
         try {
-            boolean ok = f.file().checkout(exclusive, monitor);
-            return report(ok ? "checked_out" : "checkout_failed", ok, f.file(),
-                Map.of("exclusive", exclusive));
+            boolean ok = file.checkout(exclusive, monitor);
+            Map<String, Object> extras = new LinkedHashMap<>();
+            extras.put("exclusive", exclusive);
+            if (ok) {
+                extras.putAll(rebindOpenCopies(file));
+            }
+            return report(ok ? "checked_out" : "checkout_failed", ok, file, extras);
         } catch (Exception e) {
             return Response.err("Checkout failed: " + messageOf(e));
         }
+    }
+
+    /**
+     * Point open copies of {@code file} at its checkout. A program opened before the checkout
+     * is an in-memory copy of the versioned file and stays one: it saves nowhere, so each save
+     * fails with "Location does not exist for a save operation!". An unedited copy is closed
+     * and reopened on the checkout. An edited one is left alone, because its edits cannot move
+     * into the checkout, and the caller is told so rather than having them dropped.
+     */
+    private Map<String, Object> rebindOpenCopies(DomainFile file) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String path = file.getPathname();
+        for (Program p : provider.getAllOpenPrograms()) {
+            if (p.getDomainFile() == null || !p.getDomainFile().getPathname().equals(path)
+                    || ProgramSaves.unsaveableReason(p) == null) {
+                continue;
+            }
+            if (p.isChanged()) {
+                out.put("reopen_required", true);
+                out.put("open_copy", "The open copy of " + path + " has edits made before the "
+                    + "checkout. They cannot be saved into it. Close it with save=false, open it "
+                    + "again, and redo them.");
+                return out;
+            }
+            if (!(provider instanceof ProjectProgramProvider projectProvider)) {
+                out.put("reopen_required", true);
+                out.put("open_copy", "Close and reopen " + path + " to edit the checkout.");
+                return out;
+            }
+            provider.closeProgramByPath(path);
+            try {
+                projectProvider.openDomainFile(refreshed(file));
+                out.put("reopened", true);
+            } catch (Exception e) {
+                out.put("reopen_required", true);
+                out.put("open_copy", "Closed the copy opened before the checkout, but reopening "
+                    + path + " failed: " + messageOf(e));
+            }
+            return out;
+        }
+        return out;
     }
 
     /**
@@ -296,11 +354,22 @@ public final class ProjectVersionControl {
             return Response.err("File already under version control: " + f.file().getPathname());
         }
         String cmt = comment == null || comment.isBlank() ? "Added via GhidraMCP" : comment;
+        // An open file is added checked out whatever keep_checked_out says, as with checkin.
+        String filePath = f.file().getPathname();
+        for (Program p : provider.getAllOpenPrograms()) {
+            if (p.getDomainFile() != null && p.getDomainFile().getPathname().equals(filePath)
+                    && !ProgramSaves.saveIfChanged(p, monitor)) {
+                return Response.err("Save before adding failed for " + filePath
+                    + "; nothing was added (see the Ghidra log)");
+            }
+        }
+        boolean closed = provider.closeProgramByPath(filePath);
         try {
             f.file().addToVersionControl(cmt, keepCheckedOut, monitor);
             Map<String, Object> extras = new LinkedHashMap<>();
             extras.put("comment", cmt);
             extras.put("keep_checked_out", keepCheckedOut);
+            extras.put("closed", closed);
             return report("added", true, f.file(), extras);
         } catch (Exception e) {
             return Response.err("Add to version control failed: " + messageOf(e));

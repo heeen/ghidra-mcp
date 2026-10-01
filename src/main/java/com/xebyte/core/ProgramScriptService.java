@@ -876,6 +876,11 @@ public class ProgramScriptService {
                         errorMsg.set("Program has no domain file");
                         return;
                     }
+                    String unsaveable = ProgramSaves.unsaveableReason(program);
+                    if (unsaveable != null) {
+                        errorMsg.set(unsaveable);
+                        return;
+                    }
                     ProgramSaves.withRetry(program, () -> df.save(new ConsoleTaskMonitor()));
                     resultData.set(JsonHelper.mapOf(
                         "success", true,
@@ -1026,7 +1031,9 @@ public class ProgramScriptService {
              description = "Close an open program by project path or name. Never prompts interactively: "
                          + "unsaved changes are saved first by default (save=true) or silently discarded "
                          + "(save=false) before closing, so this cannot block the caller on a GUI "
-                         + "confirmation dialog the way Ghidra's own close normally would.", category = "program", access = ToolAccess.DESTRUCTIVE)
+                         + "confirmation dialog the way Ghidra's own close normally would. save=true is "
+                         + "refused when the edits cannot be saved (a versioned file that is not checked "
+                         + "out), rather than closing and losing them.", category = "program", access = ToolAccess.DESTRUCTIVE)
     public Response closeProgram(
             @Param(value = "name", source = ParamSource.BODY,
                     description = "Program name or project path") String name,
@@ -1051,6 +1058,13 @@ public class ProgramScriptService {
         if (target == null) {
             return Response.ok(JsonHelper.mapOf(
                 "success", true, "closed_count", 0, "released_cache", false, "name", search));
+        }
+        // Closing would drop the edits with only a log line ("Unsaved changes LOST") behind a
+        // success. Make the caller choose the discard.
+        String unsaveable = ProgramSaves.unsaveableReason(target);
+        if (save && target.isChanged() && unsaveable != null) {
+            return Response.err("Not closed: the unsaved edits cannot be saved. " + unsaveable
+                + " Pass save=false to close and discard them.");
         }
 
         AtomicInteger closedCount = new AtomicInteger(0);
@@ -1858,10 +1872,15 @@ public class ProgramScriptService {
         out.put("path", domainFile.getPathname());
         // The writable open failed and the read-only fallback took it: edits cannot be
         // saved, and the caller must hear why (a stale SLEIGH language is the usual cause).
-        out.put("read_only", !program.isChangeable());
+        // A versioned file that is not checked out opens changeable but not saveable: that is
+        // read-only for every purpose a caller has.
+        String unsaveable = ProgramSaves.unsaveableReason(program);
+        out.put("read_only", !program.isChangeable() || unsaveable != null);
         Exception whyReadOnly = provider.readOnlyReason(program);
         if (whyReadOnly != null) {
             out.put("read_only_reason", describeOpenFailure(whyReadOnly, domainFile.getPathname()));
+        } else if (unsaveable != null) {
+            out.put("read_only_reason", unsaveable);
         }
         out.put("auto_analyzed", analyzed);
         out.put("function_count", program.getFunctionManager().getFunctionCount());

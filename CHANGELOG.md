@@ -50,6 +50,28 @@ A headless client doing version-controlled work hit these one after another:
 - **A naming refusal arrived as a bare `name_quality`.** The bridge's error
   text was the `error` code alone; it now joins `error`, `message` and
   `suggestion`.
+- **Edits to a file that was not checked out vanished, and every tool said
+  success.** A versioned file that is not checked out opens as an in-memory copy
+  behind Ghidra's `DomainFileProxy`, which saves nowhere. Reproduced against a
+  throwaway Ghidra Server:
+  - `open_program` said `read_only: false`.
+  - Every edit reported success.
+  - `save_program` failed with "Location does not exist for a save operation!".
+  - `close_program(save=true)` reported success while Ghidra logged
+    "Unsaved changes LOST".
+
+  Now `open_program` reports `read_only: true` with the reason. Each edit carries
+  the reason in `warnings`. `save_program` names the cause and the remedy, and
+  `close_program(save=true)` refuses and asks for `save=false`.
+- **Checkout misreported and left open copies stale.**
+  - A second checkout failed with Ghidra's "Cannot checkout, private file exists"
+    while the file was checked out all along. It now answers
+    `already_checked_out`.
+  - A program opened before its checkout stayed an unsaveable copy. A checkout now
+    reopens an unedited copy on itself (`reopened`). An edited copy is left alone
+    with `reopen_required`, because its edits cannot move into the checkout.
+  - Adding an open file with `keep_checked_out=false` left it checked out. It is
+    now saved and closed first, as checkin already did.
 - **`rename_symbol` had no `strict_mode`.** `rename_function` takes a per-call
   `enforce`/`warn`/`off` override; `rename_symbol` now does too, and its refusal
   names it.
