@@ -42,7 +42,11 @@ from .fake_ghidra import (
 #: Adding a path back is a decision to ship an endpoint the offline tier cannot
 #: check. Re-record the snapshot instead; do NOT make the fake invent a
 #: contract.
-SCHEMA_RECORDING_PREDATES: frozenset[str] = frozenset()
+SCHEMA_RECORDING_PREDATES: frozenset[str] = frozenset({
+    # An HTTP route by design, never advertised as an MCP tool (the bridge reaches it
+    # through decompile_checkout_run), so no /mcp/schema recording can cover it.
+    "/decompile_checkout_refresh",
+})
 
 
 def _get(url: str, timeout: float = 10):
@@ -171,9 +175,9 @@ class TestFixtureIntegrity:
 
 class TestRouting:
     def test_serves_a_recorded_payload_verbatim(self, fake_ghidra):
-        status, body = _get(f"{fake_ghidra.url}/list_segments")
+        status, body = _get(f"{fake_ghidra.url}/get_entry_points")
         assert status == 200
-        recorded = (SNAPSHOT_DIR / "list_segments.snap").read_text(encoding="utf-8")
+        recorded = (SNAPSHOT_DIR / "get_entry_points.snap").read_text(encoding="utf-8")
         assert json.loads(body) == json.loads(recorded)
 
     def test_unknown_endpoint_is_404(self, fake_ghidra):
@@ -257,7 +261,7 @@ class TestContractRules:
         assert status == 200
 
     def test_undeclared_parameter_is_refused(self, fake_ghidra):
-        status, body = _get(f"{fake_ghidra.url}/list_functions?limit=5")
+        status, body = _get(f"{fake_ghidra.url}/get_entry_points?limit=5")
         assert status == 400
         payload = json.loads(body)
         assert payload["error"] == "unknown_parameter"
@@ -290,10 +294,10 @@ class TestLenientMode:
     def test_lenient_mode_records_instead_of_refusing(self):
         server = FakeGhidraServer(strict=False).start()
         try:
-            status, body = _get(f"{server.url}/list_functions?limit=5")
+            status, body = _get(f"{server.url}/get_entry_points?limit=5")
             assert status == 200, "lenient mode must serve the fixture"
             assert json.loads(body)["count"] > 0
-            assert server.violation_keys() == ["unknown_parameter GET /list_functions [limit]"]
+            assert server.violation_keys() == ["unknown_parameter GET /get_entry_points [limit]"]
         finally:
             server.stop()
 
