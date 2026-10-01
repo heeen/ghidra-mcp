@@ -290,6 +290,20 @@ public class CheckoutObserverTest {
         assertTrue(CheckoutObserver.translate(event(rec), program).needsReconcile());
     }
 
+    /**
+     * Marking flash read-only turns every literal-pool load into a constant, in functions
+     * no record names and without changing a fingerprint: only a resweep fixes the tree.
+     */
+    @Test
+    public void aMemoryMapChangeMakesTheCheckoutStale() {
+        Address start = addr("08005000");
+        ProgramChangeRecord rec = new ProgramChangeRecord(
+                ProgramEvent.MEMORY_BLOCK_CHANGED, start, start, null, null, null);
+        CheckoutObserver.Hint hint = CheckoutObserver.translate(event(rec), program());
+        assertTrue(hint.staleReason(), hint.staleReason().contains("resweep"));
+        assertTrue(hint.addresses().isEmpty());
+    }
+
     // -------------------------------------------------------------------------
 
     private static Function function(String entryHex) {

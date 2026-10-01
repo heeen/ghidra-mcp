@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "description": "GhidraMCP REST API Endpoint Specification",
-  "total_endpoints": 218,
+  "total_endpoints": 219,
   "categories": {
     "analysis": "Completeness analysis, control flow, similarity, memory inspection",
     "comment": "Plate, decompiler, disassembly and repeatable comments",
@@ -3200,6 +3200,25 @@
         "headless"
       ],
       "description": "Set the base address of the program (rebases all addresses)"
+    },
+    {
+      "path": "/set_memory_block",
+      "method": "POST",
+      "category": "program",
+      "params": [
+        "block",
+        "address",
+        "read",
+        "write",
+        "execute",
+        "volatile",
+        "program"
+      ],
+      "servers": [
+        "gui",
+        "headless"
+      ],
+      "description": "Change an existing memory block's permissions or volatility. The one that matters most: firmware loaders often mark the flash block writable, and the decompiler then treats every literal-pool load as a variable (iVar2 = DAT_08016e58) instead of folding it into the constant it holds; marking flash read-only lets peripheral and RAM addresses show as constants or their labels. Every function may decompile differently afterwards, so decompilation checkouts are marked stale (resweep)."
     },
     {
       "path": "/set_program_option",
