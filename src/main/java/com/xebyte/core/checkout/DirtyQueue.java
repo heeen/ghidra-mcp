@@ -106,6 +106,19 @@ public final class DirtyQueue {
         arm(checkoutId, b);
     }
 
+    /**
+     * Names symbols were renamed away from. The drain re-decompiles every block whose body
+     * still prints one, which covers uses the program records no reference for.
+     */
+    public synchronized void markRetiredNames(String checkoutId, Collection<String> names) {
+        if (checkoutId == null || names == null || names.isEmpty()) {
+            return;
+        }
+        Bucket b = buckets.computeIfAbsent(checkoutId, id -> new Bucket());
+        b.retiredNames.addAll(names);
+        arm(checkoutId, b);
+    }
+
     public synchronized void markNeedsReconcile(String checkoutId) {
         if (checkoutId == null) {
             return;
@@ -153,7 +166,8 @@ public final class DirtyQueue {
                 long waitMs;
                 synchronized (this) {
                     Bucket b = buckets.get(checkoutId);
-                    if (b == null || (!b.needsReconcile && b.addresses.isEmpty())) {
+                    if (b == null || (!b.needsReconcile && b.addresses.isEmpty()
+                            && b.retiredNames.isEmpty())) {
                         if (b != null) {
                             b.drainQueued = false;
                         }
@@ -216,6 +230,7 @@ public final class DirtyQueue {
 
                 final boolean full;
                 final Set<String> targeted;
+                final Set<String> retired;
                 synchronized (this) {
                     Bucket b = buckets.get(checkoutId);
                     if (b == null) {
@@ -227,13 +242,27 @@ public final class DirtyQueue {
                     }
                     full = b.needsReconcile;
                     targeted = full ? null : Set.copyOf(b.addresses);
+                    retired = Set.copyOf(b.retiredNames);
                     b.needsReconcile = false;
                     b.addresses.clear();
+                    b.retiredNames.clear();
                     b.drainQueued = false;
                 }
 
                 try {
-                    reconcileAction.reconcile(checkout, program, targeted);
+                    // A full pass compares input fingerprints, which a use the program has no
+                    // reference for does not change, so the name search runs either way.
+                    Set<String> mentioning = TreeReconciler.blocksMentioning(checkout, retired);
+                    if (full) {
+                        reconcileAction.reconcile(checkout, program, null);
+                        if (!mentioning.isEmpty()) {
+                            reconcileAction.reconcile(checkout, program, mentioning);
+                        }
+                    } else {
+                        Set<String> all = new LinkedHashSet<>(targeted);
+                        all.addAll(mentioning);
+                        reconcileAction.reconcile(checkout, program, all);
+                    }
                 } catch (Exception e) {
                     Msg.error(this, "Checkout dirty-queue reconcile failed for "
                             + checkoutId + ": " + e.getMessage(), e);
@@ -281,6 +310,7 @@ public final class DirtyQueue {
 
     private static final class Bucket {
         final Set<String> addresses = new LinkedHashSet<>();
+        final Set<String> retiredNames = new LinkedHashSet<>();
         boolean needsReconcile;
         long deadlineMs;
         boolean drainQueued;

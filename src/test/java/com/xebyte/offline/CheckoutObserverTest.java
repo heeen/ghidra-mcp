@@ -10,6 +10,9 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.util.FunctionChangeRecord;
 import ghidra.program.util.ProgramChangeRecord;
 import ghidra.program.util.ProgramEvent;
@@ -210,7 +213,112 @@ public class CheckoutObserverTest {
         assertEquals(DirtyQueue.ADDRESS_BOUND, 2000);
     }
 
+    /**
+     * Found in a live RE session: renaming a function updated its own block, but its
+     * callers' bodies (which print the callee's name) stayed stale until some unrelated
+     * full reconcile minutes later.
+     */
+    @Test
+    public void aRenamedFunctionDirtiesEveryCaller() {
+        Address entry = addr("00100000");
+        Address callSite = addr("00100208");
+        Function callee = function("00100000");
+        Function caller = function("00100200");
+        FunctionManager fm = mock(FunctionManager.class);
+        when(fm.getFunctionContaining(entry)).thenReturn(callee);
+        when(fm.getFunctionContaining(callSite)).thenReturn(caller);
+        Program program = program(fm, entry, callSite);
+
+        ProgramChangeRecord rec = new ProgramChangeRecord(
+                ProgramEvent.SYMBOL_RENAMED, entry, entry, null, "old", "new");
+        CheckoutObserver.Hint hint = CheckoutObserver.translate(event(rec), program);
+        assertEquals(Set.of("00100000", "00100200"), hint.addresses());
+        assertEquals("the old name is handed on for the tree search",
+                Set.of("old"), hint.retiredNames());
+    }
+
+    /** A label or global used in several functions lives in no function at all. */
+    @Test
+    public void aRenamedGlobalDirtiesEveryFunctionThatReferencesIt() {
+        Address global = addr("20004410");
+        Address useA = addr("00100010");
+        Address useB = addr("00100410");
+        Function a = function("00100000");
+        Function b = function("00100400");
+        FunctionManager fm = mock(FunctionManager.class);
+        when(fm.getFunctionContaining(global)).thenReturn(null);
+        when(fm.getFunctionContaining(useA)).thenReturn(a);
+        when(fm.getFunctionContaining(useB)).thenReturn(b);
+        Program program = program(fm, global, useA, useB);
+
+        ProgramChangeRecord rec = new ProgramChangeRecord(
+                ProgramEvent.SYMBOL_RENAMED, global, global, null, "DAT_20004410", "g_scan");
+        CheckoutObserver.Hint hint = CheckoutObserver.translate(event(rec), program);
+        assertEquals(Set.of("00100000", "00100400"), hint.addresses());
+        assertFalse(hint.needsReconcile());
+    }
+
+    /** Typing a literal-pool word changes how every function loading it decompiles. */
+    @Test
+    public void dataDefinedOutsideAFunctionDirtiesItsReaders() {
+        Address word = addr("080164a0");
+        Address load = addr("08016402");
+        Function reader = function("08016400");
+        FunctionManager fm = mock(FunctionManager.class);
+        when(fm.getFunctionContaining(word)).thenReturn(null);
+        when(fm.getFunctionContaining(load)).thenReturn(reader);
+        when(fm.getFunctionsOverlapping(any())).thenThrow(new RuntimeException("force fallback"));
+        Program program = program(fm, word, load);
+
+        ProgramChangeRecord rec = new ProgramChangeRecord(
+                ProgramEvent.CODE_ADDED, word, word, null, null, null);
+        CheckoutObserver.Hint hint = CheckoutObserver.translate(event(rec), program);
+        assertEquals(Set.of("08016400"), hint.addresses());
+    }
+
+    @Test
+    public void aSymbolUsedEverywhereAsksForAFullReconcileInsteadOfEnumerating() {
+        Address global = addr("20000000");
+        Address[] uses = new Address[DirtyQueue.ADDRESS_BOUND + 1];
+        for (int i = 0; i < uses.length; i++) {
+            uses[i] = addr(String.format("%08x", 0x100000 + i * 4));
+        }
+        Program program = program(mock(FunctionManager.class), global, uses);
+
+        ProgramChangeRecord rec = new ProgramChangeRecord(
+                ProgramEvent.SYMBOL_RENAMED, global, global, null, "a", "b");
+        assertTrue(CheckoutObserver.translate(event(rec), program).needsReconcile());
+    }
+
     // -------------------------------------------------------------------------
+
+    private static Function function(String entryHex) {
+        Function f = mock(Function.class);
+        Address entry = addr(entryHex);
+        when(f.getEntryPoint()).thenReturn(entry);
+        return f;
+    }
+
+    /** A program whose only references point at {@code target}, one from each of {@code froms}. */
+    private static Program program(FunctionManager fm, Address target, Address... froms) {
+        Program program = mock(Program.class);
+        when(program.getFunctionManager()).thenReturn(fm);
+        ReferenceManager rm = mock(ReferenceManager.class);
+        when(program.getReferenceManager()).thenReturn(rm);
+        List<Reference> refs = new ArrayList<>();
+        for (Address from : froms) {
+            Reference r = mock(Reference.class);
+            when(r.getFromAddress()).thenReturn(from);
+            refs.add(r);
+        }
+        java.util.Iterator<Reference> it = refs.iterator();
+        ReferenceIterator ri = mock(ReferenceIterator.class);
+        when(ri.iterator()).thenReturn(ri);
+        when(ri.hasNext()).thenAnswer(inv -> it.hasNext());
+        when(ri.next()).thenAnswer(inv -> it.next());
+        when(rm.getReferencesTo(target)).thenReturn(ri);
+        return program;
+    }
 
     private static Program program() {
         Program program = mock(Program.class);

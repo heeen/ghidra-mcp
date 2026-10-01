@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -21,6 +22,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 
 /**
  * Reconcile the on-disk checkout tree with the live program.
@@ -255,6 +257,48 @@ public final class TreeReconciler {
                 acc.filesWritten, acc.filesSplit, acc.filesDeleted,
                 decompileCalls, System.currentTimeMillis() - started,
                 checkout.progress().splicedSinceSweep());
+    }
+
+    /**
+     * Entry addresses of blocks whose decompiled body (not the header) uses one of
+     * {@code names} as a whole identifier. A rename's old name is printed wherever the
+     * decompiler resolved the symbol, including calls it worked out through a register or
+     * a literal pool, where the program records no reference to look up.
+     */
+    public static Set<String> blocksMentioning(Checkout checkout, Collection<String> names)
+            throws IOException {
+        Set<String> found = new LinkedHashSet<>();
+        if (names == null || names.isEmpty()) {
+            return found;
+        }
+        Pattern any = Pattern.compile("(?<![A-Za-z0-9_])(?:"
+                + names.stream().map(Pattern::quote).collect(java.util.stream.Collectors.joining("|"))
+                + ")(?![A-Za-z0-9_])");
+        Path modules = checkout.root().path().resolve("modules");
+        if (!Files.isDirectory(modules)) {
+            return found;
+        }
+        try (java.util.stream.Stream<Path> files = Files.walk(modules)) {
+            for (Path file : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".c"))::iterator) {
+                for (String chunk : CheckoutTreeNarrower.splitFunctionChunks(
+                        Files.readString(file, StandardCharsets.UTF_8))) {
+                    String hex = CheckoutTreeNarrower.addressFromChunk(chunk);
+                    if (hex != null && bodyMatches(chunk, any)) {
+                        found.add(CheckoutTreeNarrower.normalizeHex(hex));
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
+    private static boolean bodyMatches(String chunk, Pattern names) {
+        for (String line : chunk.split("\n")) {
+            if (!line.startsWith("// ") && names.matcher(line).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // -------------------------------------------------------------------------
