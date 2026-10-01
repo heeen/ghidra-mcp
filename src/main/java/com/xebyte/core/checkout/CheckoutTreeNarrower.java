@@ -123,7 +123,8 @@ public final class CheckoutTreeNarrower {
                     checkout.root().writeFile(Path.of(relative), filtered);
                 }
             }
-            rewriteModuleReadme(checkout, slug, remaining);
+            rewriteModuleReadme(checkout, slug, remaining,
+                    "member list narrowed by /decompile_checkout_configure");
             rewritten.add(slug + " (rewritten, " + remaining.size() + " kept)");
         }
 
@@ -283,7 +284,7 @@ public final class CheckoutTreeNarrower {
             if (remaining.isEmpty()) {
                 deleteModuleDir(checkout.root().path().resolve("modules").resolve(slug));
             } else {
-                rewriteModuleReadme(checkout, slug, remaining);
+                rewriteModuleReadme(checkout, slug, remaining, null);
             }
         }
     }
@@ -327,31 +328,32 @@ public final class CheckoutTreeNarrower {
         checkout.root().writeFile(Path.of(CheckoutLayout.modulesIndexMd()), sb.toString());
     }
 
+    /**
+     * Recount a compartment's README after its members changed, keeping the sweep's
+     * grouping. {@code note} replaces the README's note; null keeps it.
+     */
     static void rewriteModuleReadme(
-            Checkout checkout, String slug, List<IndexEntry> remaining) throws IOException {
+            Checkout checkout, String slug, List<IndexEntry> remaining, String note)
+            throws IOException {
         Map<String, List<IndexEntry>> byFile = new LinkedHashMap<>();
         for (IndexEntry e : remaining) {
             byFile.computeIfAbsent(e.file(), f -> new ArrayList<>()).add(e);
         }
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Module ").append(slug).append("\n\n");
-        sb.append("functions: ").append(remaining.size()).append('\n');
-        sb.append("files: ").append(byFile.size()).append('\n');
-        sb.append("note: member list narrowed by /decompile_checkout_configure\n");
-        sb.append("\n## Files\n\n");
-        sb.append("| file | first | last | functions |\n");
-        sb.append("| --- | --- | --- | ---: |\n");
+        List<ModuleReadme.FileRow> files = new ArrayList<>(byFile.size());
         for (Map.Entry<String, List<IndexEntry>> e : byFile.entrySet()) {
-            List<IndexEntry> rows = e.getValue();
-            String first = rows.get(0).addressHex();
-            String last = rows.get(rows.size() - 1).addressHex();
-            sb.append("| ").append(e.getKey())
-                    .append(" | ").append(first)
-                    .append(" | ").append(last)
-                    .append(" | ").append(rows.size())
-                    .append(" |\n");
+            List<IndexEntry> rows = new ArrayList<>(e.getValue());
+            rows.sort((x, y) -> normalizeHex(x.addressHex()).compareTo(normalizeHex(y.addressHex())));
+            files.add(new ModuleReadme.FileRow(e.getKey(), rows.get(0).addressHex(),
+                    rows.get(rows.size() - 1).addressHex(), rows.size()));
         }
-        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(slug)), sb.toString());
+        Path readme = checkout.root().path().resolve(CheckoutLayout.moduleReadme(slug));
+        ModuleReadme.Grouping grouping = ModuleReadme.parse(
+                Files.isRegularFile(readme) ? Files.readString(readme, StandardCharsets.UTF_8) : null);
+        if (note != null) {
+            grouping = grouping.withNote(note);
+        }
+        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(slug)),
+                ModuleReadme.render(slug, grouping, remaining.size(), files));
     }
 
     static void deleteModuleDir(Path dir) throws IOException {

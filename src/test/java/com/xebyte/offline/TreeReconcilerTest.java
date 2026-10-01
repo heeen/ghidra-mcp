@@ -256,6 +256,40 @@ public class TreeReconcilerTest {
         assertTrue(rows.isEmpty());
     }
 
+    /**
+     * The reconciler used to write its own short README, so the first edit that touched a
+     * compartment dropped method, confidence and evidence (peripheral_pages among them) and
+     * stamped it "narrowed by /decompile_checkout_configure".
+     */
+    @Test
+    public void aReconcileKeepsTheSweepsGroupingAndRecountsTheFiles() throws IOException {
+        String readme = com.xebyte.core.checkout.ModuleReadme.render("m03",
+                new com.xebyte.core.checkout.ModuleReadme.Grouping("mmio-page", 0.84,
+                        new LinkedHashMap<>(Map.of("peripheral_pages", "0x40003000,0x40020000")), null),
+                1, List.of(new com.xebyte.core.checkout.ModuleReadme.FileRow(
+                        "modules/m03/00100000.c", "00100000", "00100000", 1)));
+        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme("m03")), readme);
+
+        CheckoutTreeNarrower.rebuildIndexes(checkout, List.of(
+                entry("00100000", "spi_init", "m03", "modules/m03/00100000.c", "a"),
+                entry("00100100", "spi_send", "m03", "modules/m03/00100000.c", "b")), Set.of("m03"));
+
+        String after = Files.readString(tempRoot.resolve(CheckoutLayout.moduleReadme("m03")));
+        assertTrue(after, after.contains("method: mmio-page\nconfidence: 0.84\nfunctions: 2\n"));
+        assertTrue(after, after.contains("- peripheral_pages: 0x40003000,0x40020000"));
+        assertTrue(after, after.contains("| modules/m03/00100000.c | 00100000 | 00100100 | 2 |"));
+        assertFalse(after, after.contains("narrowed"));
+        assertEquals("a second rewrite changes nothing",
+                after, rewriteAgain());
+    }
+
+    private String rewriteAgain() throws IOException {
+        CheckoutTreeNarrower.rebuildIndexes(checkout, List.of(
+                entry("00100000", "spi_init", "m03", "modules/m03/00100000.c", "a"),
+                entry("00100100", "spi_send", "m03", "modules/m03/00100000.c", "b")), Set.of("m03"));
+        return Files.readString(tempRoot.resolve(CheckoutLayout.moduleReadme("m03")));
+    }
+
     @Test
     public void replacePrimitiveSwapsBlockInPlace() {
         String body = twoBlocks("00100000", "Foo", "00100100", "Bar");

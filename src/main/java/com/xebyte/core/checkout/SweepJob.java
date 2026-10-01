@@ -37,6 +37,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -898,33 +899,17 @@ public final class SweepJob implements Runnable {
 
     private void writeModuleReadme(Partition part, int memberCount, List<EmittedFile> files)
             throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Module ").append(part.slug()).append("\n\n");
-        sb.append("method: ").append(part.method()).append('\n');
-        sb.append("confidence: ")
-                .append(String.format(Locale.ROOT, "%.2f", part.confidence())).append('\n');
-        sb.append("functions: ").append(memberCount).append('\n');
-        sb.append("files: ").append(files.size()).append('\n');
-        // What the grouping asserts, in the reader's terms. Without this an
-        // address-band compartment reads as a defect rather than as the expected
-        // outcome for code that carries no signal.
-        sb.append('\n').append(CheckoutGuidance.interpretation(part.method(), part.confidence()))
-                .append('\n');
-        sb.append("\n## Files\n\n");
-        sb.append("| file | first | last | functions |\n");
-        sb.append("| --- | --- | --- | ---: |\n");
+        Map<String, String> evidence = new LinkedHashMap<>();
+        part.evidence().forEach((k, v) -> evidence.put(k, String.valueOf(v)));
+        List<ModuleReadme.FileRow> rows = new ArrayList<>(files.size());
         for (EmittedFile f : files) {
-            sb.append("| ").append(f.relativePath())
-                    .append(" | ").append(f.firstAddressHex())
-                    .append(" | ").append(f.lastAddressHex())
-                    .append(" | ").append(f.functionCount())
-                    .append(" |\n");
+            rows.add(new ModuleReadme.FileRow(
+                    f.relativePath(), f.firstAddressHex(), f.lastAddressHex(), f.functionCount()));
         }
-        sb.append("\n## Evidence\n\n");
-        for (Map.Entry<String, Object> e : part.evidence().entrySet()) {
-            sb.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append('\n');
-        }
-        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(part.slug())), sb.toString());
+        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(part.slug())),
+                ModuleReadme.render(part.slug(),
+                        new ModuleReadme.Grouping(part.method(), part.confidence(), evidence, null),
+                        memberCount, rows));
     }
 
     private void writeIndexes(
