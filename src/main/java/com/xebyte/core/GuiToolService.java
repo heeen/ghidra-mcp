@@ -91,7 +91,7 @@ public class GuiToolService {
         }
     }
 
-    @McpTool(path = "/tool/goto_address", method = "POST",
+    @McpTool(path = "/tool/goto_address", dryRun = false, method = "POST",
             description = "Move the running CodeBrowser's listing and decompiler to an address, in the "
                 + "program it has current. Reports the function containing the address, if any.",
             category = "utility", access = ToolAccess.WRITE)

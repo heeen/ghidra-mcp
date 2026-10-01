@@ -49,7 +49,7 @@ public class ProjectLifecycleService {
         return resolved.toFile();
     }
 
-    @McpTool(path = "/export_program", method = "POST",
+    @McpTool(path = "/export_program", dryRun = false, method = "POST",
             description = "Export a program to a GZF (Ghidra packed-database) file on disk. The resulting .gzf "
                 + "can be imported into any Ghidra GUI (File \u2192 Import) or back into a project via "
                 + "/import_program. Resolution order: (1) the in-memory program with that name (captures live "
@@ -104,7 +104,7 @@ public class ProjectLifecycleService {
         return Response.ok(body);
     }
 
-    @McpTool(path = "/import_program", method = "POST",
+    @McpTool(path = "/import_program", dryRun = false, method = "POST",
             description = "Import a GZF (Ghidra packed-database) file into the open project. The GZF must already "
                 + "exist on disk at `gzf_path` (typically staged on a shared volume by the orchestrator). Lands at "
                 + "`target_folder/target_name` (defaults: `/` and the GZF basename sans `.gzf`). Set `overwrite=true` "
@@ -143,7 +143,7 @@ public class ProjectLifecycleService {
     // GAR project archive / restore
     // ========================================================================
 
-    @McpTool(path = "/archive_project", method = "POST",
+    @McpTool(path = "/archive_project", dryRun = false, method = "POST",
             description = "Archive the currently open project to a Ghidra-native .gar file. The result can be "
                 + "restored into any Ghidra GUI via File \u2192 Restore Project, or back into a headless instance "
                 + "via /restore_project. Captures the entire project (all programs, folders, settings, "
@@ -195,7 +195,7 @@ public class ProjectLifecycleService {
         return Response.ok(body);
     }
 
-    @McpTool(path = "/restore_project", method = "POST",
+    @McpTool(path = "/restore_project", dryRun = false, method = "POST",
             description = "Restore a Ghidra .gar archive into a fresh on-disk project at `parent_dir/project_name`. "
                 + "The open project is left alone, and the restored one is NOT opened automatically; "
                 + "follow up with /open_project so owner reset and project bookkeeping run via the same code path "

@@ -510,11 +510,12 @@
     {
       "path": "/checkin_program",
       "method": "POST",
-      "category": "project",
+      "category": "server",
       "params": [
         "path",
         "comment",
-        "keep_checked_out"
+        "keep_checked_out",
+        "dry_run"
       ],
       "servers": [
         "gui",

@@ -38,12 +38,14 @@ public class VersionControlService {
 
     // ================================================================== project files
 
-    @McpTool(path = "/checkin_program", method = "POST",
+    @McpTool(path = "/checkin_program", dryRun = false, method = "POST",
             description = "Check a program in to the shared Ghidra Server as a new version. Saves pending "
                 + "edits and closes the program first (a file checked in while open must stay checked "
                 + "out). Requires a shared project and the file checked out. Returns "
-                + "version_before/version/version_bumped.",
-            category = "project", access = ToolAccess.WRITE)
+                + "version_before/version/version_bumped. dry_run=true checks everything and reports "
+                + "what would happen (programs it would save, whether it would close one) without "
+                + "doing any of it.",
+            category = "server", access = ToolAccess.WRITE)
     public Response checkinProgram(
             @Param(value = "path", source = ParamSource.BODY, defaultValue = "",
                    description = "Project path of the file; empty uses the sole open program") String path,
@@ -51,11 +53,14 @@ public class VersionControlService {
                    description = "Check-in comment recorded on the new version") String comment,
             @Param(value = "keep_checked_out", source = ParamSource.BODY, defaultValue = "false",
                    description = "Keep the file checked out after the new version lands, so you can keep "
-                               + "editing. False (the default) releases the checkout.") boolean keepCheckedOut) {
-        return files.checkin(path, comment, keepCheckedOut);
+                               + "editing. False (the default) releases the checkout.") boolean keepCheckedOut,
+            @Param(value = "dry_run", source = ParamSource.BODY, defaultValue = "false",
+                   description = "Report what the check-in would do without saving, closing or "
+                               + "checking in anything.") boolean dryRun) {
+        return files.checkin(path, comment, keepCheckedOut, dryRun);
     }
 
-    @McpTool(path = "/server/version_control/checkout", method = "POST",
+    @McpTool(path = "/server/version_control/checkout", dryRun = false, method = "POST",
             description = "Check out a file of the open shared project into a local working copy. Does not "
                 + "open the program. Requires /open_project on a shared project.",
             category = "server", access = ToolAccess.WRITE)
@@ -68,7 +73,7 @@ public class VersionControlService {
         return files.checkout(path, exclusive);
     }
 
-    @McpTool(path = "/server/version_control/undo_checkout", method = "POST",
+    @McpTool(path = "/server/version_control/undo_checkout", dryRun = false, method = "POST",
             description = "Undo a checkout in the open shared project, discarding local changes that were "
                 + "not checked in. Close the program first: an open file cannot be released.",
             category = "server", access = ToolAccess.DESTRUCTIVE)
@@ -81,7 +86,7 @@ public class VersionControlService {
         return files.undoCheckout(path, keep);
     }
 
-    @McpTool(path = "/server/version_control/add", method = "POST",
+    @McpTool(path = "/server/version_control/add", dryRun = false, method = "POST",
             description = "Add a file of the open shared project to version control.",
             category = "server", access = ToolAccess.WRITE)
     public Response addToVersionControl(
@@ -115,7 +120,7 @@ public class VersionControlService {
         return files.checkouts(path);
     }
 
-    @McpTool(path = "/server/admin/terminate_checkout", method = "POST",
+    @McpTool(path = "/server/admin/terminate_checkout", dryRun = false, method = "POST",
             description = "Force-release the checkouts of a single file. Without checkout_id: this project's "
                 + "own checkout first, then every server checkout of the file.",
             category = "server", access = ToolAccess.DESTRUCTIVE)
@@ -136,7 +141,7 @@ public class VersionControlService {
         return files.terminateCheckout(path, id);
     }
 
-    @McpTool(path = "/server/admin/terminate_all_checkouts", method = "POST",
+    @McpTool(path = "/server/admin/terminate_all_checkouts", dryRun = false, method = "POST",
             description = "Force-release every server checkout under a folder, recursively, and report how "
                 + "many landed.",
             category = "server", access = ToolAccess.DESTRUCTIVE)
@@ -148,7 +153,7 @@ public class VersionControlService {
 
     // ================================================================ server connection
 
-    @McpTool(path = "/server/connect", method = "POST",
+    @McpTool(path = "/server/connect", dryRun = false, method = "POST",
             description = "Establish the Ghidra Server connection, or report the existing one. Takes no "
                 + "parameters: the GUI's connection is its open project, and headless connects with "
                 + "GHIDRA_SERVER_HOST, GHIDRA_SERVER_PORT, GHIDRA_SERVER_USER and GHIDRA_SERVER_PASSWORD.",
@@ -158,7 +163,7 @@ public class VersionControlService {
         return session.connect();
     }
 
-    @McpTool(path = "/server/disconnect", method = "POST",
+    @McpTool(path = "/server/disconnect", dryRun = false, method = "POST",
             description = "Disconnect from the Ghidra Server.",
             category = "server", access = ToolAccess.WRITE)
     public Response disconnect() {
@@ -166,7 +171,7 @@ public class VersionControlService {
         return session.disconnect();
     }
 
-    @McpTool(path = "/server/authenticate", method = "POST",
+    @McpTool(path = "/server/authenticate", dryRun = false, method = "POST",
             description = "Register Ghidra Server credentials for this process, replacing any from the "
                 + "environment. They are used for every server connection from now on, including "
                 + "opening a shared project and /server/connect.",
@@ -316,7 +321,7 @@ public class VersionControlService {
         return row;
     }
 
-    @McpTool(path = "/server/repository/create", method = "POST",
+    @McpTool(path = "/server/repository/create", dryRun = false, method = "POST",
             description = "Create a new repository on the connected Ghidra Server (needs admin access).",
             category = "server", access = ToolAccess.WRITE)
     public Response createRepository(
@@ -361,7 +366,7 @@ public class VersionControlService {
         }
     }
 
-    @McpTool(path = "/server/admin/set_permissions", method = "POST",
+    @McpTool(path = "/server/admin/set_permissions", dryRun = false, method = "POST",
             description = "Set one user's access to a repository (needs admin access). The repository's ACL is "
                 + "read, this one entry replaced or appended, and every other user preserved.",
             category = "server", access = ToolAccess.WRITE)
