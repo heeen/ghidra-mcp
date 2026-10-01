@@ -9,35 +9,50 @@ import java.util.Locale;
  * STATUS.md renderer — shared by create/start/stop endpoints and {@link SweepJob}.
  *
  * <p>Answers "is this tree trustworthy?" with zero Ghidra calls. Written
- * <em>before</em> a sweep as {@code dirty} and again after as
- * {@code clean}/{@code cancelled}/{@code failed}; a crash leaves {@code dirty}.
+ * <em>before</em> any rewrite as {@code dirty} and again after; a crash leaves {@code dirty}.
+ *
+ * <p>States once settled: {@code clean} is exactly the last sweep's output; {@code spliced}
+ * has been kept current block by block since that sweep ({@code spliced_since_sweep} says how
+ * many); {@code stale} is known to diverge from the program ({@code last_error} says why);
+ * {@code empty} was never swept. The modification numbers never go blank once a sweep has
+ * completed: every writer reads them from the checkout's progress.
  */
 public final class CheckoutStatusMd {
 
     private CheckoutStatusMd() {
     }
 
+    /** The state of a sweep in flight or just ended. */
     public static String stateForPhase(SweepProgress.Phase phase) {
         return switch (phase) {
             case QUEUED, WAITING_FOR_ANALYSIS, PARTITIONING, DECOMPILING -> "dirty";
             case COMPLETE -> "clean";
             case CANCELLED -> "cancelled";
             case FAILED -> "failed";
-            case STALE -> "dirty";
+            case STALE -> "stale";
             case IDLE -> "empty";
         };
     }
 
-    public static String render(Checkout checkout, String state, Long sweptAtModificationNumber) {
+    /** The state once a reconcile or splice has finished writing. */
+    public static String settledState(SweepProgress p) {
+        if (p.phase() == SweepProgress.Phase.COMPLETE
+                || (p.phase() == SweepProgress.Phase.IDLE && p.splicedSinceSweep() > 0)) {
+            return p.splicedSinceSweep() > 0 ? "spliced" : "clean";
+        }
+        return stateForPhase(p.phase());
+    }
+
+    public static String render(Checkout checkout, String state) {
         SweepProgress p = checkout.progress();
         StringBuilder sb = new StringBuilder();
         sb.append("# Checkout STATUS\n\n");
         sb.append("state: ").append(state).append('\n');
         sb.append("phase: ").append(p.phase().name().toLowerCase(Locale.ROOT)).append('\n');
         sb.append("checkout_id: ").append(checkout.id()).append('\n');
-        sb.append("swept_at_modification_number: ")
-                .append(sweptAtModificationNumber != null ? sweptAtModificationNumber : "")
-                .append('\n');
+        sb.append("swept_at_modification_number: ").append(orBlank(p.sweptAtModification())).append('\n');
+        sb.append("reconciled_at_modification_number: ")
+                .append(orBlank(p.reconciledAtModification())).append('\n');
         sb.append("functions_total: ").append(p.functionsTotal()).append('\n');
         sb.append("functions_done: ").append(p.functionsDone()).append('\n');
         sb.append("functions_failed: ").append(p.functionsFailed()).append('\n');
@@ -47,14 +62,19 @@ public final class CheckoutStatusMd {
         sb.append("body_recompute_failed: ").append(p.bodyRecomputeFailed()).append('\n');
         sb.append("bytes_written: ").append(p.bytesWritten()).append('\n');
         sb.append("spliced_since_sweep: ").append(p.splicedSinceSweep()).append('\n');
+        sb.append("structural_since_sweep: ").append(p.structuralSinceSweep()).append('\n');
+        if (p.lastError() != null) {
+            sb.append("last_error: ").append(p.lastError().replace('\n', ' ')).append('\n');
+        }
         sb.append("updated: ").append(Instant.now()).append('\n');
         return sb.toString();
     }
 
-    public static void write(Checkout checkout, String state, Long sweptAtModificationNumber)
-            throws IOException {
-        checkout.root().writeFile(
-                Path.of(CheckoutLayout.statusMd()),
-                render(checkout, state, sweptAtModificationNumber));
+    public static void write(Checkout checkout, String state) throws IOException {
+        checkout.root().writeFile(Path.of(CheckoutLayout.statusMd()), render(checkout, state));
+    }
+
+    private static String orBlank(Long value) {
+        return value != null ? value.toString() : "";
     }
 }

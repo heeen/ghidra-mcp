@@ -247,7 +247,7 @@ public class SweepJobTest {
                 .withPhase(SweepProgress.Phase.DECOMPILING)
                 .withCounts(100, 10, 1)
                 .withBytesWritten(4096L));
-        String dirty = CheckoutStatusMd.render(checkout, "dirty", null);
+        String dirty = CheckoutStatusMd.render(checkout, "dirty");
         assertTrue(dirty.contains("state: dirty"));
         assertTrue(dirty.contains("phase: decompiling"));
         assertTrue(dirty.contains("functions_total: 100"));
@@ -260,7 +260,7 @@ public class SweepJobTest {
         assertTrue(dirty.contains("swept_at_modification_number: \n")
                 || dirty.contains("swept_at_modification_number:\n"));
 
-        CheckoutStatusMd.write(checkout, "dirty", null);
+        CheckoutStatusMd.write(checkout, "dirty");
         assertTrue(Files.isRegularFile(tempRoot.resolve("STATUS.md")));
         String onDisk = Files.readString(tempRoot.resolve("STATUS.md"));
         assertTrue(onDisk.contains("state: dirty"));
@@ -269,15 +269,61 @@ public class SweepJobTest {
         checkout.setProgress(checkout.progress()
                 .withPhase(SweepProgress.Phase.COMPLETE)
                 .withCounts(100, 100, 1)
-                .withBytesWritten(9999L));
-        String clean = CheckoutStatusMd.render(checkout, "clean", 7L);
+                .withBytesWritten(9999L)
+                .sweptAt(7L));
+        String clean = CheckoutStatusMd.render(checkout, "clean");
         assertTrue(clean.contains("state: clean"));
         assertTrue(clean.contains("phase: complete"));
         assertTrue(clean.contains("swept_at_modification_number: 7"));
+        assertTrue(clean.contains("reconciled_at_modification_number: 7"));
         assertEquals("clean", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.COMPLETE));
         assertEquals("cancelled", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.CANCELLED));
         assertEquals("failed", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.FAILED));
         assertEquals("dirty", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.DECOMPILING));
+        assertEquals("stale", CheckoutStatusMd.stateForPhase(SweepProgress.Phase.STALE));
+    }
+
+    /**
+     * Found in a live RE session: after any splice STATUS.md said clean, spliced_since_sweep
+     * stayed 0 and swept_at went blank, so nothing told an agent the tree had drifted from
+     * the sweep's output. Every writer now takes the numbers from progress.
+     */
+    @Test
+    public void aSpliceKeepsTheSweptNumberAndSaysTheTreeWasSpliced() {
+        Checkout checkout = new Checkout(
+                CheckoutKey.of("/p/app.exe", tempRoot), "app.exe", CheckoutConfig.defaults(),
+                CheckoutRoot.ofResolved(tempRoot));
+        checkout.setProgress(checkout.progress().withPhase(SweepProgress.Phase.COMPLETE).sweptAt(4L));
+        assertEquals("clean", CheckoutStatusMd.settledState(checkout.progress()));
+
+        // One replaced block (a comment edit), no structural change.
+        checkout.setProgress(checkout.progress().reconciledAt(5L, 1, 0));
+        assertEquals("spliced", CheckoutStatusMd.settledState(checkout.progress()));
+        String status = CheckoutStatusMd.render(checkout, CheckoutStatusMd.settledState(checkout.progress()));
+        assertTrue(status, status.contains("state: spliced"));
+        assertTrue(status, status.contains("swept_at_modification_number: 4\n"));
+        assertTrue(status, status.contains("reconciled_at_modification_number: 5\n"));
+        assertTrue(status, status.contains("spliced_since_sweep: 1\n"));
+        assertTrue(status, status.contains("structural_since_sweep: 0\n"));
+
+        // A fresh sweep is the sweep's output again.
+        checkout.setProgress(checkout.progress().sweptAt(9L));
+        assertEquals("clean", CheckoutStatusMd.settledState(checkout.progress()));
+        assertEquals(Long.valueOf(9L), checkout.progress().reconciledAtModification());
+        assertEquals(0, checkout.progress().splicedSinceSweep());
+    }
+
+    @Test
+    public void aStaleCheckoutSaysWhy() {
+        Checkout checkout = new Checkout(
+                CheckoutKey.of("/p/app.exe", tempRoot), "app.exe", CheckoutConfig.defaults(),
+                CheckoutRoot.ofResolved(tempRoot));
+        checkout.setProgress(checkout.progress()
+                .withPhase(SweepProgress.Phase.STALE)
+                .withLastError("edits were discarded"));
+        String status = CheckoutStatusMd.render(checkout, CheckoutStatusMd.settledState(checkout.progress()));
+        assertTrue(status, status.contains("state: stale"));
+        assertTrue(status, status.contains("last_error: edits were discarded"));
     }
 
     @Test
@@ -386,7 +432,7 @@ public class SweepJobTest {
         checkout.setProgress(checkout.progress()
                 .withDisassemblyCounts(12, 3)
                 .withBodyReflowCounts(10, 2));
-        String status = CheckoutStatusMd.render(checkout, "dirty", null);
+        String status = CheckoutStatusMd.render(checkout, "dirty");
         assertTrue(status.contains("disassembled_on_demand: 12"));
         assertTrue(status.contains("disassembly_failed: 3"));
         assertTrue(status.contains("bodies_recomputed: 10"));

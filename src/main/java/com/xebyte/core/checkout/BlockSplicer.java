@@ -461,7 +461,8 @@ public final class BlockSplicer {
 
         // Dirty before work — a crash mid-refresh must leave STATUS saying dirty.
         checkout.setProgress(checkout.progress().withLastError(null));
-        CheckoutStatusMd.write(checkout, "dirty", null);
+        CheckoutStatusMd.write(checkout, "dirty");
+        long refreshingAt = program.getModificationNumber();
 
         // Live call graph once for both tiers — rename correctness without knowing
         // the old name; neighbours get header patches from current edges.
@@ -574,23 +575,12 @@ public final class BlockSplicer {
             }
         }
 
-        // Clean after — same ordering rule as the sweep.
-        checkout.setProgress(checkout.progress().withLastError(null));
-        String state = CheckoutStatusMd.stateForPhase(checkout.progress().phase());
-        if ("dirty".equals(state) || "empty".equals(state)) {
-            // COMPLETE → clean; STALE stays dirty on disk by design, but a
-            // successful splice still bumps the revision so the poller fires.
-            state = checkout.progress().phase() == SweepProgress.Phase.COMPLETE
-                    ? "clean" : state;
-        }
-        if (checkout.progress().phase() == SweepProgress.Phase.COMPLETE
-                || checkout.progress().phase() == SweepProgress.Phase.IDLE) {
-            CheckoutStatusMd.write(checkout, "clean", null);
-        } else if (checkout.progress().phase() == SweepProgress.Phase.STALE) {
-            CheckoutStatusMd.write(checkout, "dirty", null);
-        } else {
-            CheckoutStatusMd.write(checkout, state, null);
-        }
+        // Settled after — same ordering rule as the sweep. Each refreshed block was
+        // rewritten in place: the tree is no longer byte-for-byte the sweep's output.
+        checkout.setProgress(checkout.progress()
+                .withLastError(null)
+                .reconciledAt(refreshingAt, refreshed.size(), 0));
+        CheckoutStatusMd.write(checkout, CheckoutStatusMd.settledState(checkout.progress()));
 
         return RefreshResult.of(
                 refreshed, headerPatched, unchanged, skipped, skippedReasons,

@@ -8,6 +8,7 @@ import com.xebyte.core.checkout.CheckoutRegistry;
 import com.xebyte.core.checkout.CheckoutRoot;
 import com.xebyte.core.checkout.CheckoutStatusMd;
 import com.xebyte.core.checkout.CheckoutTreeNarrower;
+import com.xebyte.core.checkout.DirtyQueue;
 import com.xebyte.core.checkout.ExclusionEvaluator;
 import com.xebyte.core.checkout.ExclusionRule;
 import com.xebyte.core.checkout.ModuleOverrides;
@@ -462,7 +463,7 @@ public class CheckoutService {
 
         checkout.setProgress(checkout.progress().withPhase(SweepProgress.Phase.QUEUED));
         try {
-            CheckoutStatusMd.write(checkout, "dirty", null);
+            CheckoutStatusMd.write(checkout, "dirty");
         } catch (IOException e) {
             return Response.err("failed to update STATUS.md: " + e.getMessage());
         }
@@ -504,7 +505,7 @@ public class CheckoutService {
                     .withLastError("cancelled by decompile_checkout_run(action=stop)"));
             cancelled = true;
             try {
-                CheckoutStatusMd.write(checkout, "cancelled", null);
+                CheckoutStatusMd.write(checkout, "cancelled");
             } catch (IOException e) {
                 return Response.err("failed to update STATUS.md: " + e.getMessage());
             }
@@ -708,7 +709,7 @@ public class CheckoutService {
                 .create(domainPath, programName, requested);
         writeCheckoutJson(checkout);
         // Nothing has been swept yet — "dirty" would mean a crash mid-sweep.
-        CheckoutStatusMd.write(checkout, "empty", null);
+        CheckoutStatusMd.write(checkout, "empty");
         // Program is already open — attach now so GUI/script edits reach the tree
         // without waiting for a later getProgram cache hit.
         CheckoutRegistry.getInstance().ensureObserver(program);
@@ -747,22 +748,32 @@ public class CheckoutService {
 
         StatusFile statusFile = readStatusMd(derivedRoot);
         Long sweptAt = statusFile.sweptAtModificationNumber();
-        if (sweptAt == null) {
-            sweptAt = longField(disk, "swept_at_modification_number");
+        Long reconciledAt = statusFile.reconciledAtModificationNumber();
+        if (sweptAt != null && checkout.progress().sweptAtModification() == null) {
+            checkout.setProgress(checkout.progress()
+                    .withPhase(SweepProgress.Phase.COMPLETE)
+                    .sweptAt(sweptAt)
+                    .reconciledAt(reconciledAt,
+                            statusFile.count("spliced_since_sweep"),
+                            statusFile.count("structural_since_sweep")));
         }
 
         long liveMod = program.getModificationNumber();
-        // A dirty STATUS.md means the previous sweep did not finish (crash /
-        // cancel / kill). Re-derive id finds the same tree across a Ghidra
-        // restart; STALE tells the agent Grep results may be incomplete.
-        if ("dirty".equalsIgnoreCase(statusFile.state())) {
+        // A dirty STATUS.md means the previous writer did not finish (crash /
+        // cancel / kill); stale was already known to diverge. Re-derive id finds the
+        // same tree across a Ghidra restart; STALE tells the agent Grep results may be
+        // incomplete.
+        String state = statusFile.state();
+        if ("dirty".equalsIgnoreCase(state) || "stale".equalsIgnoreCase(state)) {
+            String why = statusFile.fields().get("last_error");
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.STALE)
-                    .withLastError("previous sweep did not finish (STATUS.md state=dirty)"));
-        } else if (sweptAt != null && sweptAt != liveMod) {
+                    .withLastError(why != null ? why
+                            : "previous sweep did not finish (STATUS.md state=" + state + ")"));
+        } else if (reconciledAt != null && reconciledAt != liveMod) {
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.STALE)
-                    .withLastError("swept_at_modification_number=" + sweptAt
+                    .withLastError("reconciled_at_modification_number=" + reconciledAt
                             + " != live " + liveMod));
         }
 
@@ -774,8 +785,8 @@ public class CheckoutService {
         out.put("files_on_disk", files);
         out.put("swept_at_modification_number", sweptAt);
         out.put("live_modification_number", liveMod);
-        out.put("fresh", sweptAt != null && sweptAt == liveMod
-                && !"dirty".equalsIgnoreCase(statusFile.state()));
+        out.put("fresh", checkout.progress().phase() != SweepProgress.Phase.STALE
+                && reconciledAt != null && reconciledAt == liveMod);
         return Response.ok(out);
     }
 
@@ -828,15 +839,27 @@ public class CheckoutService {
         out.put("last_error", progress.lastError());
         out.put("status_revision", progress.statusRevision());
         out.put("spliced_since_sweep", progress.splicedSinceSweep());
+        out.put("structural_since_sweep", progress.structuralSinceSweep());
+        out.put("swept_at_modification_number", progress.sweptAtModification());
+        out.put("reconciled_at_modification_number", progress.reconciledAtModification());
+        DirtyQueue queue = CheckoutRegistry.getInstance().dirtyQueue();
+        boolean pendingFull = queue.pendingNeedsReconcile(checkout.id());
+        int pending = queue.pendingAddressCount(checkout.id());
+        out.put("pending_dirty", pendingFull ? "full_reconcile" : pending);
+        if (live != null) {
+            // The one answer an agent needs before trusting a grep: does the tree describe
+            // the program as it is right now?
+            out.put("in_sync", progress.phase() != SweepProgress.Phase.STALE
+                    && !pendingFull && pending == 0
+                    && progress.reconciledAtModification() != null
+                    && progress.reconciledAtModification() == live.getModificationNumber());
+        }
         out.put("resource_uri", RESOURCE_URI_PREFIX + checkout.id());
         out.put("config", configToMap(checkout.config()));
 
         if (rootPresent) {
             StatusFile statusFile = readStatusMd(root);
             out.put("status_state", statusFile.state());
-            if (statusFile.sweptAtModificationNumber() != null) {
-                out.put("swept_at_modification_number", statusFile.sweptAtModificationNumber());
-            }
         } else {
             out.put("status_state", null);
         }
@@ -965,35 +988,23 @@ public class CheckoutService {
 
     private static StatusFile readStatusMd(Path root) {
         Path statusPath = root.resolve(CheckoutLayout.statusMd());
-        if (!Files.isRegularFile(statusPath)) {
-            return new StatusFile(null, null);
-        }
-        try {
-            String text = Files.readString(statusPath, StandardCharsets.UTF_8);
-            String state = null;
-            Long sweptAt = null;
-            for (String line : text.split("\n")) {
-                String trimmed = line.trim();
-                if (trimmed.startsWith("state:")) {
-                    state = trimmed.substring("state:".length()).trim();
-                    if (state.isEmpty()) {
-                        state = null;
-                    }
-                } else if (trimmed.startsWith("swept_at_modification_number:")) {
-                    String v = trimmed.substring("swept_at_modification_number:".length()).trim();
-                    if (!v.isEmpty()) {
-                        try {
-                            sweptAt = Long.parseLong(v);
-                        } catch (NumberFormatException ignored) {
-                            // leave null
+        Map<String, String> fields = new LinkedHashMap<>();
+        if (Files.isRegularFile(statusPath)) {
+            try {
+                for (String line : Files.readString(statusPath, StandardCharsets.UTF_8).split("\n")) {
+                    int colon = line.indexOf(':');
+                    if (colon > 0 && !line.startsWith("#")) {
+                        String value = line.substring(colon + 1).trim();
+                        if (!value.isEmpty()) {
+                            fields.put(line.substring(0, colon).trim(), value);
                         }
                     }
                 }
+            } catch (IOException e) {
+                // unreadable reads as absent
             }
-            return new StatusFile(state, sweptAt);
-        } catch (IOException e) {
-            return new StatusFile(null, null);
         }
+        return new StatusFile(fields);
     }
 
     private static CheckoutConfig configFromDisk(Map<String, Object> disk, String rootPath) {
@@ -1120,8 +1131,7 @@ public class CheckoutService {
                                     Map.of()));
                     try {
                         CheckoutStatusMd.write(checkout,
-                                CheckoutStatusMd.stateForPhase(checkout.progress().phase()),
-                                null);
+                                CheckoutStatusMd.settledState(checkout.progress()));
                     } catch (IOException ignored) {
                         // status on disk is best-effort after a successful rewrite
                     }
@@ -1134,7 +1144,7 @@ public class CheckoutService {
                         .withLastError("config widened; resweep needed for pending functions"));
                 out.put("action", "marked_stale");
                 out.put("pending_functions", pending);
-                CheckoutStatusMd.write(checkout, "dirty", null);
+                CheckoutStatusMd.write(checkout, "stale");
             }
             case "repartitioning" -> {
                 checkout.setProgress(checkout.progress()
@@ -1146,7 +1156,7 @@ public class CheckoutService {
                 out.put("requires_full_resweep", true);
                 int pending = estimatePendingFunctions(checkout, live, updated);
                 out.put("pending_functions", pending);
-                CheckoutStatusMd.write(checkout, "dirty", null);
+                CheckoutStatusMd.write(checkout, "stale");
             }
             case "mixed" -> {
                 // Apply the narrow half immediately, then mark STALE for the
@@ -1164,7 +1174,7 @@ public class CheckoutService {
                         .withLastError("config mixed narrow+widen; resweep needed"));
                 out.put("action", "narrowed_and_marked_stale");
                 out.put("pending_functions", pending);
-                CheckoutStatusMd.write(checkout, "dirty", null);
+                CheckoutStatusMd.write(checkout, "stale");
             }
             default -> out.put("action", "none");
         }
@@ -1444,20 +1454,33 @@ public class CheckoutService {
         return null;
     }
 
-    private static Long longField(Map<String, Object> map, String key) {
-        Object v = map.get(key);
-        if (v instanceof Number n) {
-            return n.longValue();
+    /** STATUS.md's {@code key: value} lines; a blank value reads as absent. */
+    private record StatusFile(Map<String, String> fields) {
+        String state() {
+            return fields.get("state");
         }
-        if (v instanceof String s && !s.isBlank()) {
+
+        Long number(String key) {
             try {
-                return Long.parseLong(s.trim());
+                return fields.containsKey(key) ? Long.parseLong(fields.get(key)) : null;
             } catch (NumberFormatException e) {
                 return null;
             }
         }
-        return null;
-    }
 
-    private record StatusFile(String state, Long sweptAtModificationNumber) {}
+        int count(String key) {
+            Long n = number(key);
+            return n == null ? 0 : n.intValue();
+        }
+
+        Long sweptAtModificationNumber() {
+            return number("swept_at_modification_number");
+        }
+
+        /** What the tree reflects: the last reconcile, else the sweep (older files lack it). */
+        Long reconciledAtModificationNumber() {
+            Long reconciled = number("reconciled_at_modification_number");
+            return reconciled != null ? reconciled : sweptAtModificationNumber();
+        }
+    }
 }

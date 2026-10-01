@@ -135,7 +135,7 @@ public final class SweepJob implements Runnable {
                     .withPhase(SweepProgress.Phase.QUEUED)
                     .withStartedEpochMs(System.currentTimeMillis())
                     .withRootRecreated(checkout.root().rootRecreated())
-                    .withLastError(null), "dirty", null);
+                    .withLastError(null), "dirty");
 
             if (!waitForAnalysisIfNeeded()) {
                 return;
@@ -145,7 +145,7 @@ public final class SweepJob implements Runnable {
             }
 
             publish(checkout.progress().withPhase(SweepProgress.Phase.PARTITIONING),
-                    "dirty", null);
+                    "dirty");
 
             CheckoutConfig cfg = checkout.config();
             if (cfg.disassembleMissing()) {
@@ -156,7 +156,7 @@ public final class SweepJob implements Runnable {
                                 disasm.disassembledOnDemand(), disasm.disassemblyFailed())
                         .withBodyReflowCounts(
                                 disasm.bodiesRecomputed(), disasm.bodyRecomputeFailed()),
-                        "dirty", null);
+                        "dirty");
                 if (cancel.isCancelled() || !ensureProgramOpen()) {
                     return;
                 }
@@ -195,7 +195,7 @@ public final class SweepJob implements Runnable {
                     .withBytesWritten(0L)
                     .withScope(scope.eligibleFunctions(), scope.functionsInScope(),
                             scope.removedByRule()),
-                    "dirty", null);
+                    "dirty");
 
             wipePriorTree();
 
@@ -226,7 +226,7 @@ public final class SweepJob implements Runnable {
                         .withRootRecreated(checkout.root().rootRecreated())
                         .withEtaSeconds(etaSeconds(accum.done, total,
                                 checkout.progress().startedEpochMs())),
-                        "dirty", null);
+                        "dirty");
 
                 List<Function> members = new ArrayList<>(part.members());
                 members.sort(Comparator.comparing(Function::getEntryPoint));
@@ -333,7 +333,7 @@ public final class SweepJob implements Runnable {
                         .withRootRecreated(checkout.root().rootRecreated())
                         .withEtaSeconds(etaSeconds(accum.done, total,
                                 checkout.progress().startedEpochMs())),
-                        "dirty", null);
+                        "dirty");
             }
 
             writeIndexes(indexRows, ctx, cascade, partitions, total, scope);
@@ -746,7 +746,7 @@ public final class SweepJob implements Runnable {
         }
 
         publish(checkout.progress().withPhase(SweepProgress.Phase.WAITING_FOR_ANALYSIS),
-                "dirty", null);
+                "dirty");
 
         long deadline = System.nanoTime()
                 + checkout.config().analysisWaitSeconds() * 1_000_000_000L;
@@ -1280,7 +1280,7 @@ public final class SweepJob implements Runnable {
         return total > 0 && auto / (double) total >= 0.9;
     }
 
-    private void publish(SweepProgress progress, String state, Long sweptAt) {
+    private void publish(SweepProgress progress, String state) {
         // decompile_checkout_run(action=stop) may have already stamped CANCELLED; never let a mid-sweep
         // DECOMPILING publish clobber that — the agent is polling for cancel.
         if (cancel.isCancelled()) {
@@ -1296,7 +1296,7 @@ public final class SweepJob implements Runnable {
         }
         checkout.setProgress(progress);
         try {
-            CheckoutStatusMd.write(checkout, state, sweptAt);
+            CheckoutStatusMd.write(checkout, state);
         } catch (IOException e) {
             // Progress is still in memory for /decompile_checkout_status; disk is best-effort
             // mid-sweep (root may be recreating).
@@ -1321,12 +1321,12 @@ public final class SweepJob implements Runnable {
                 .withCurrentPartition(null)
                 .withEtaSeconds(null)
                 .withRootRecreated(checkout.root().rootRecreated());
-        // A fresh sweep is the new ground truth — splice drift starts at zero.
-        if (phase == SweepProgress.Phase.COMPLETE) {
-            next = next.withSplicedSinceSweep(0);
-        }
+        // A fresh sweep is the new ground truth — splice drift starts at zero. A
+        // failed or cancelled one leaves a partly rewritten tree that matches no
+        // modification number.
+        next = phase == SweepProgress.Phase.COMPLETE ? next.sweptAt(sweptAt) : next.sweptAt(null);
         String state = CheckoutStatusMd.stateForPhase(phase);
-        publish(next, state, sweptAt);
+        publish(next, state);
     }
 
     private static Long etaSeconds(int done, int total, long startedEpochMs) {

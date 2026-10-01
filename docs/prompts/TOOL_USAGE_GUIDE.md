@@ -500,8 +500,14 @@ mode; the five write paths (`create` / `configure` / `start` / `stop` / `delete`
 are not.
 
 `STATUS.md` in the checkout root answers "is this tree trustworthy?" with **zero
-Ghidra calls**. `state: dirty` means a sweep did not finish (crash, cancel, or
-still running) — do not Grep a dirty tree as if it were complete.
+Ghidra calls**. `state: clean` is exactly the last sweep's output; `spliced` has been
+kept current block by block since that sweep (`spliced_since_sweep` counts the
+rewritten blocks); `dirty` means a writer did not finish (crash, cancel, or still
+running) — do not Grep a dirty tree as if it were complete; `stale` means the tree is
+known to diverge from the program (`last_error` says why) — resweep.
+`reconciled_at_modification_number` is the program state the tree reflects, and
+`decompile_checkout_status` reports `in_sync` (tree at the live modification number,
+nothing pending) and `pending_dirty`.
 
 ### Measured sweep cost
 
