@@ -416,13 +416,24 @@ def _checkout_headline(payload: dict) -> str:
 
 
 def _checkout_freshness(payload: dict) -> str:
-    swept = payload.get("swept_at_modification_number")
+    """Does the tree describe the program as it is now? The tree reflects
+    ``reconciled_at_modification_number`` (the sweep's, advanced by each splice); older
+    servers only report the sweep's."""
+    tree = payload.get("reconciled_at_modification_number")
+    if tree is None:
+        tree = payload.get("swept_at_modification_number")
     live = payload.get("live_modification_number")
-    if swept is None or live is None:
+    pending = payload.get("pending_dirty")
+    if payload.get("phase") == "stale":
+        return f"stale ({payload.get('last_error') or 'resweep needed'})"
+    if pending:
+        return f"catching up ({pending} pending)"
+    if tree is None or live is None:
         return "unknown"
-    if swept == live:
-        return f"fresh (mod {live})"
-    return f"stale (swept at {swept}, live {live})"
+    if tree == live:
+        spliced = payload.get("spliced_since_sweep") or 0
+        return f"fresh (mod {live})" + (f", {spliced} blocks spliced since sweep" if spliced else "")
+    return f"behind (tree at {tree}, live {live})"
 
 
 def _human_bytes(n) -> str:

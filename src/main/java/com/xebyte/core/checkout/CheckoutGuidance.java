@@ -43,11 +43,14 @@ public final class CheckoutGuidance {
                 .append("`set_function_prototype`, …); the tree follows.\n\n");
 
         sb.append("## Is it current?\n\n");
-        sb.append("`STATUS.md` answers that with no Ghidra call. `state: clean` means the ")
-                .append("last sweep finished; `dirty` means it did not (crash, kill, or still ")
-                .append("running) and the tree is partial. `swept_at_modification_number` ")
-                .append("against the program's live one tells you whether the program has ")
-                .append("moved since.\n\n");
+        sb.append("`STATUS.md` answers that with no Ghidra call. `state: clean` is exactly the ")
+                .append("last sweep's output; `spliced` has been kept current block by block since ")
+                .append("(`spliced_since_sweep` counts them); `dirty` means a writer did not finish ")
+                .append("(crash, kill, or still running) and the tree is partial; `stale` means it ")
+                .append("is known to diverge from the program (`last_error` says why) — resweep. ")
+                .append("`reconciled_at_modification_number` is the program state the tree ")
+                .append("reflects; `decompile_checkout_status` compares it with the live one and ")
+                .append("reports `in_sync`.\n\n");
         sb.append("A rename or comment made through MCP splices the affected blocks in place, ")
                 .append("so the tree normally keeps up. A bulk change (`reanalyze`, a script) ")
                 .append("marks the checkout stale instead — resweep rather than trusting it.\n\n");

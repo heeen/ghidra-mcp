@@ -143,6 +143,27 @@ class TestCheckoutMarkdown(unittest.TestCase):
         self.assertLess(body.index("## Status"), body.index("## Configuration"))
         self.assertLess(body.index("## Configuration"), body.index("## How to read"))
 
+    def test_freshness_follows_the_tree_not_the_sweep(self):
+        """A spliced tree at the live modification number is fresh, and says it was spliced;
+        the sweep's own number lagging behind does not make it stale."""
+        from bridge_mcp_ghidra.render import _checkout_freshness
+        self.assertEqual(
+            _checkout_freshness({"swept_at_modification_number": 3,
+                                 "reconciled_at_modification_number": 5,
+                                 "live_modification_number": 5, "spliced_since_sweep": 2}),
+            "fresh (mod 5), 2 blocks spliced since sweep")
+        self.assertEqual(
+            _checkout_freshness({"reconciled_at_modification_number": 5,
+                                 "live_modification_number": 6}),
+            "behind (tree at 5, live 6)")
+        self.assertEqual(
+            _checkout_freshness({"reconciled_at_modification_number": 5,
+                                 "live_modification_number": 6, "pending_dirty": 3}),
+            "catching up (3 pending)")
+        self.assertEqual(
+            _checkout_freshness({"phase": "stale", "last_error": "edits were discarded"}),
+            "stale (edits were discarded)")
+
     def test_list_shape_renders_compact_table(self):
         body = checkout_markdown({
             "checkouts": [

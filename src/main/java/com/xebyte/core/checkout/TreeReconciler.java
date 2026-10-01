@@ -70,6 +70,9 @@ public final class TreeReconciler {
         Objects.requireNonNull(checkout, "checkout");
         Objects.requireNonNull(program, "program");
         long started = System.currentTimeMillis();
+        // What the tree will reflect when this pass ends; edits arriving meanwhile queue
+        // another pass, so claiming a later number would overstate it.
+        long reconcilingAt = program.getModificationNumber();
 
         Path indexPath = checkout.root().path().resolve(CheckoutLayout.byAddressTsv());
         List<CheckoutTreeNarrower.IndexEntry> indexRows = Files.isRegularFile(indexPath)
@@ -93,7 +96,7 @@ public final class TreeReconciler {
 
         Accumulators acc = new Accumulators();
         checkout.setProgress(checkout.progress().withLastError(null));
-        CheckoutStatusMd.write(checkout, "dirty", null);
+        CheckoutStatusMd.write(checkout, "dirty");
 
         DecompInterface decomp = null;
         int decompileCalls = 0;
@@ -239,28 +242,19 @@ public final class TreeReconciler {
         }
 
         int structural = acc.inserted.size() + acc.removed.size();
-        int newSpliced = checkout.progress().splicedSinceSweep() + structural;
-        checkout.setProgress(checkout.progress()
-                .withLastError(null)
-                .withSplicedSinceSweep(newSpliced));
-
-        String state = CheckoutStatusMd.stateForPhase(checkout.progress().phase());
-        if (checkout.progress().phase() == SweepProgress.Phase.COMPLETE
-                || checkout.progress().phase() == SweepProgress.Phase.IDLE) {
-            CheckoutStatusMd.write(checkout, "clean", null);
-        } else if (checkout.progress().phase() == SweepProgress.Phase.STALE) {
-            // Adopted dirty STATUS — keep dirty on disk; do not invent STALE from writes.
-            CheckoutStatusMd.write(checkout, "dirty", null);
-        } else {
-            CheckoutStatusMd.write(checkout, state, null);
-        }
+        int rewritten = acc.replaced.size() + structural;
+        SweepProgress before = checkout.progress();
+        checkout.setProgress(before
+                .withLastError(before.phase() == SweepProgress.Phase.STALE ? before.lastError() : null)
+                .reconciledAt(reconcilingAt, rewritten, structural));
+        CheckoutStatusMd.write(checkout, CheckoutStatusMd.settledState(checkout.progress()));
 
         return ReconcileResult.of(
                 acc.replaced, acc.inserted, acc.removed, acc.headerPatched, acc.unchanged,
                 acc.failed, acc.failedReasons,
                 acc.filesWritten, acc.filesSplit, acc.filesDeleted,
                 decompileCalls, System.currentTimeMillis() - started,
-                newSpliced);
+                checkout.progress().splicedSinceSweep());
     }
 
     // -------------------------------------------------------------------------

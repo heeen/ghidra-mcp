@@ -272,8 +272,7 @@ public class TreeReconcilerTest {
     @Test
     public void statusMdTracksSplicedSinceSweep() {
         checkout.setProgress(checkout.progress().withSplicedSinceSweep(3));
-        String rendered = com.xebyte.core.checkout.CheckoutStatusMd.render(
-                checkout, "clean", 1L);
+        String rendered = com.xebyte.core.checkout.CheckoutStatusMd.render(checkout, "spliced");
         assertTrue(rendered.contains("spliced_since_sweep: 3"));
     }
 
