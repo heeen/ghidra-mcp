@@ -292,6 +292,26 @@ public class TreeReconcilerTest {
                 + "\n";
     }
 
+    /**
+     * A caller the decompiler resolved through a literal pool has no reference to the
+     * callee, so only its text says it uses the name: the old name must be found in the
+     * body, and a header line or a longer identifier must not count.
+     */
+    @Test
+    public void blocksMentioningFindsBodiesThatStillPrintAName() throws IOException {
+        String file = rebuildBlock("Caller", "00100000", "aaaaaaaaaaaa",
+                        "void Caller(void) {\n  ws2812_set_pixel(1,2);\n}\n")
+                + "\n" + rebuildBlock("Other", "00100100", "bbbbbbbbbbbb",
+                        "void Other(void) {\n  ws2812_set_pixel_fast(1);\n}\n")
+                + "\n" + rebuildBlock("ws2812_set_pixel", "00100200", "cccccccccccc",
+                        "void x(void) {}\n");
+        checkout.root().writeFile(Path.of("modules/c05/00100000.c"), file);
+
+        assertEquals(Set.of("00100000"),
+                TreeReconciler.blocksMentioning(checkout, List.of("ws2812_set_pixel")));
+        assertEquals(Set.of(), TreeReconciler.blocksMentioning(checkout, List.of()));
+    }
+
     private static String rebuildBlock(String name, String addr, String fp, String body) {
         return SweepJob.renderFunctionHeader(
                 name, addr, 16, "c05", "address-band", 0.50, false, fp,

@@ -9,6 +9,7 @@ import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.Reference;
 import ghidra.program.util.FunctionChangeRecord;
 import ghidra.program.util.ProgramChangeRecord;
 import ghidra.program.util.ProgramEvent;
@@ -63,6 +64,9 @@ public final class CheckoutObserver implements DomainObjectListener {
         }
 
         Hint hint = translate(ev, program);
+        if (!hint.retiredNames().isEmpty()) {
+            queue.markRetiredNames(checkoutId, hint.retiredNames());
+        }
         if (hint.needsReconcile()) {
             queue.markNeedsReconcile(checkoutId);
             return;
@@ -78,6 +82,7 @@ public final class CheckoutObserver implements DomainObjectListener {
      */
     public static Hint translate(DomainObjectChangedEvent ev, Program program) {
         Set<String> dirty = new LinkedHashSet<>();
+        Set<String> retired = new LinkedHashSet<>();
         if (ev == null) {
             return Hint.none();
         }
@@ -122,18 +127,53 @@ public final class CheckoutObserver implements DomainObjectListener {
                 continue;
             }
 
+            if (type == ProgramEvent.COMMENT_CHANGED) {
+                addContaining(fm, startOf(rec), dirty);
+                continue;
+            }
+
+            // A name is printed wherever the symbol is used, not only where it lives: a
+            // renamed function appears in every caller's body, a renamed label or global in
+            // every function that references it.
             if (type == ProgramEvent.SYMBOL_RENAMED
                     || type == ProgramEvent.SYMBOL_SCOPE_CHANGED
-                    || type == ProgramEvent.COMMENT_CHANGED) {
+                    || type == ProgramEvent.SYMBOL_ADDED
+                    || type == ProgramEvent.SYMBOL_REMOVED
+                    || type == ProgramEvent.SYMBOL_PRIMARY_STATE_CHANGED) {
+                Address at = startOf(rec);
+                addContaining(fm, at, dirty);
+                if (type == ProgramEvent.SYMBOL_RENAMED
+                        && rec.getOldValue() instanceof String oldName && !oldName.isBlank()) {
+                    retired.add(oldName);
+                }
+                if (!addReferencers(program, fm, at, dirty)) {
+                    return Hint.fullReconcile(retired);
+                }
+                continue;
+            }
+
+            // A new reference changes what its function's code resolves to.
+            if (type == ProgramEvent.REFERENCE_ADDED || type == ProgramEvent.REFERENCE_REMOVED
+                    || type == ProgramEvent.REFERENCE_TYPE_CHANGED) {
                 addContaining(fm, startOf(rec), dirty);
                 continue;
             }
 
             if (type == ProgramEvent.CODE_ADDED || type == ProgramEvent.CODE_REMOVED) {
-                addOverlapping(fm, startOf(rec), endOf(rec), dirty);
+                Address start = startOf(rec);
+                addOverlapping(fm, start, endOf(rec), dirty);
+                // Data defined or cleared outside any function (a typed global, a literal-pool
+                // word) changes how every function reading it decompiles.
+                if (start != null && fm != null && fm.getFunctionContaining(start) == null
+                        && !addReferencers(program, fm, start, dirty)) {
+                    return Hint.fullReconcile(retired);
+                }
+            }
+            if (dirty.size() > DirtyQueue.ADDRESS_BOUND) {
+                return Hint.fullReconcile(retired);
             }
         }
-        return Hint.of(dirty);
+        return new Hint(dirty, false, retired);
     }
 
     /**
@@ -198,6 +238,30 @@ public final class CheckoutObserver implements DomainObjectListener {
         }
     }
 
+    /**
+     * Every function holding a reference to {@code at}. False when there are more than the
+     * queue would track anyway, so the caller asks for a full reconcile rather than
+     * enumerating them on the event thread.
+     */
+    private static boolean addReferencers(
+            Program program, FunctionManager fm, Address at, Set<String> dirty) {
+        if (program == null || fm == null || at == null) {
+            return true;
+        }
+        try {
+            int seen = 0;
+            for (Reference ref : program.getReferenceManager().getReferencesTo(at)) {
+                if (++seen > DirtyQueue.ADDRESS_BOUND) {
+                    return false;
+                }
+                addContaining(fm, ref.getFromAddress(), dirty);
+            }
+        } catch (Exception ignored) {
+            // Best-effort on the EDT — a failed reference walk must not throw.
+        }
+        return true;
+    }
+
     private static void addContaining(FunctionManager fm, Address at, Set<String> dirty) {
         if (fm == null || at == null) {
             return;
@@ -248,23 +312,31 @@ public final class CheckoutObserver implements DomainObjectListener {
         return CheckoutTreeNarrower.normalizeHex(addr.toString(false));
     }
 
-    /** Translation result — addresses to dirty, or a full-reconcile flag. */
-    public record Hint(Set<String> addresses, boolean needsReconcile) {
+    /**
+     * Translation result — addresses to dirty, or a full-reconcile flag — plus the names
+     * symbols were renamed away from, which the drain looks for in the tree's bodies.
+     */
+    public record Hint(Set<String> addresses, boolean needsReconcile, Set<String> retiredNames) {
         public Hint {
             addresses = addresses == null ? Set.of() : Set.copyOf(addresses);
+            retiredNames = retiredNames == null ? Set.of() : Set.copyOf(retiredNames);
         }
 
         static Hint none() {
-            return new Hint(Set.of(), false);
+            return new Hint(Set.of(), false, Set.of());
         }
 
         static Hint of(Set<String> addresses) {
-            return new Hint(addresses, false);
+            return new Hint(addresses, false, Set.of());
         }
 
         /** RESTORED / bound-collapse — reconciler re-diffs; do not enumerate. */
         static Hint fullReconcile() {
-            return new Hint(Set.of(), true);
+            return fullReconcile(Set.of());
+        }
+
+        static Hint fullReconcile(Set<String> retiredNames) {
+            return new Hint(Set.of(), true, retiredNames);
         }
     }
 }

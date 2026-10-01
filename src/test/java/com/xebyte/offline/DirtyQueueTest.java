@@ -190,6 +190,23 @@ public class DirtyQueueTest {
      * Fake clock does not move during {@code Thread.sleep}; poke it forward
      * while the drain is blocked so the deadline can expire.
      */
+    /** The retired name is looked up in the tree, and its blocks join the targeted pass. */
+    @Test
+    public void aRetiredNameAddsTheBlocksThatStillPrintIt() throws Exception {
+        checkout.root().writeFile(java.nio.file.Path.of("modules/c05/00100000.c"),
+                com.xebyte.core.checkout.SweepJob.renderFunctionHeader(
+                        "Caller", "00100400", 16, "c05", "address-band", 0.5, false, "aaaaaaaaaaaa",
+                        java.time.Instant.parse("2026-01-01T00:00:00Z"), 1L, "app.exe",
+                        List.of(), List.of())
+                        + "void Caller(void) {\n  OldName();\n}\n");
+        queue.markDirty(checkout.id(), List.of("00100000"));
+        queue.markRetiredNames(checkout.id(), List.of("OldName"));
+
+        runDrainAdvancingClock(queued.get(0), () -> !reconciles.isEmpty());
+
+        assertEquals(Set.of("00100000", "00100400"), reconciles.get(0));
+    }
+
     private void runDrainAdvancingClock(Runnable drain, java.util.function.BooleanSupplier done)
             throws InterruptedException {
         AtomicBoolean finished = new AtomicBoolean(false);
