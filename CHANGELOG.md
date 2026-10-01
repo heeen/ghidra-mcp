@@ -242,6 +242,12 @@ client's own built-in tools, so the search costs no permission surface.
     finds both SPI3 DMA functions where a grep over the tree found nothing; 3 registers are
     reachable only through the decompiled code. Asking `get_functions` for `refs` now
     decompiles.
+  - **An edit no longer strips a compartment's README.** The reconciler and the narrower
+    wrote their own short README, so the first edit that inserted, removed or replaced a
+    function dropped the compartment's method, confidence, interpretation and evidence
+    (`peripheral_pages` among them) and stamped it "narrowed by
+    /decompile_checkout_configure". One renderer (`ModuleReadme`) now serves all three
+    writers; a rewrite keeps the sweep's grouping and recounts the files.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 
