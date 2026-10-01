@@ -194,11 +194,12 @@ public class ProjectLifecycle {
             // delete it once the new file is created. If createFile fails
             // (corrupt .gzf, I/O error) the original is renamed back, so the
             // overwrite is never destructive on a failed import.
+            // setName returns the renamed file. The handle it was called on still names
+            // the old path, which the import is about to take: deleting through it
+            // deleted the new import and kept the backup, while reporting success.
             DomainFile backup = null;
             if (existing != null) {
-                String backupName = chosenName + ".bak-" + System.currentTimeMillis();
-                existing.setName(backupName);
-                backup = existing;
+                backup = existing.setName(chosenName + ".bak-" + System.currentTimeMillis());
             }
             try {
                 DomainFile created = folder.createFile(chosenName, gzf, monitor);
