@@ -1,6 +1,7 @@
 package com.xebyte.core;
 
 import com.xebyte.core.checkout.Checkout;
+import com.xebyte.core.checkout.CheckoutAddresses;
 import com.xebyte.core.checkout.CheckoutConfig;
 import com.xebyte.core.checkout.CheckoutKey;
 import com.xebyte.core.checkout.CheckoutLayout;
@@ -569,9 +570,6 @@ public class CheckoutService {
         }
 
         List<String> addrList = parseCsvTokens(addresses);
-        // Empty addresses → full reconcile. The old mark_stale path is gone:
-        // unbounded edits are just a full pass.
-        Set<String> addrSet = addrList.isEmpty() ? null : new LinkedHashSet<>(addrList);
 
         Program live = findOpenProgram(checkout);
         if (live == null || live.isClosed()) {
@@ -583,6 +581,16 @@ public class CheckoutService {
             live = pe.program();
         }
 
+        // Empty addresses → full reconcile. The old mark_stale path is gone:
+        // unbounded edits are just a full pass. A caller's spelling (0x1000, ram:1000)
+        // becomes the tree's key, which needs the program to know the default space.
+        Set<String> addrSet = null;
+        if (!addrList.isEmpty()) {
+            addrSet = new LinkedHashSet<>();
+            for (String raw : addrList) {
+                addrSet.add(CheckoutAddresses.canonical(live, raw));
+            }
+        }
         try {
             TreeReconciler.ReconcileResult result =
                     TreeReconciler.reconcile(checkout, live, addrSet);
@@ -646,7 +654,7 @@ public class CheckoutService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", true);
         out.put("function", func.getName());
-        out.put("address", func.getEntryPoint().toString(false));
+        out.put("address", CheckoutAddresses.of(func));
         out.put("pinned", !unpin);
         out.put("module", unpin ? null : slug);
         out.put("map", ModuleOverrides.MAP_NAME);
@@ -1221,7 +1229,7 @@ public class CheckoutService {
                         evaluator.filterPartitions(cascade.partitions(), ctx.size());
                 for (Partition part : filtered.partitions()) {
                     for (Function func : part.members()) {
-                        String hex = normalizeHex(func.getEntryPoint().toString(false));
+                        String hex = CheckoutAddresses.of(func);
                         if (!onDisk.contains(hex)) {
                             pending++;
                         }
@@ -1233,7 +1241,7 @@ public class CheckoutService {
                     if (!evaluator.isInScope(func, null)) {
                         continue;
                     }
-                    String hex = normalizeHex(func.getEntryPoint().toString(false));
+                    String hex = CheckoutAddresses.of(func);
                     if (!onDisk.contains(hex)) {
                         pending++;
                     }
@@ -1259,7 +1267,7 @@ public class CheckoutService {
                 }
                 int tab = line.indexOf('\t');
                 if (tab > 0) {
-                    out.add(normalizeHex(line.substring(0, tab)));
+                    out.add(CheckoutAddresses.normalize(line.substring(0, tab)));
                 }
             }
             return out;
@@ -1268,9 +1276,6 @@ public class CheckoutService {
         }
     }
 
-    private static String normalizeHex(String hex) {
-        return CheckoutTreeNarrower.normalizeHex(hex);
-    }
 
     private static boolean hasRangeRules(CheckoutConfig cfg) {
         for (ExclusionRule r : cfg.exclusions()) {

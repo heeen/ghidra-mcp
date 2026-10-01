@@ -62,13 +62,13 @@ public final class BlockSplicer {
      * callers must fail that address rather than guess an offset.
      */
     public static String findBlock(String fileBody, String addressHex) {
-        String want = CheckoutTreeNarrower.normalizeHex(addressHex);
+        String want = CheckoutAddresses.normalize(addressHex);
         if (want.isEmpty() || fileBody == null) {
             return null;
         }
         for (String chunk : CheckoutTreeNarrower.splitFunctionChunks(fileBody)) {
             String addr = CheckoutTreeNarrower.addressFromChunk(chunk);
-            if (addr != null && want.equals(CheckoutTreeNarrower.normalizeHex(addr))) {
+            if (addr != null && want.equals(CheckoutAddresses.normalize(addr))) {
                 return chunk;
             }
         }
@@ -240,7 +240,7 @@ public final class BlockSplicer {
         for (int i = 0; i < chunks.size(); i++) {
             String addr = CheckoutTreeNarrower.addressFromChunk(chunks.get(i));
             if (addr != null) {
-                indexByAddr.put(CheckoutTreeNarrower.normalizeHex(addr), i);
+                indexByAddr.put(CheckoutAddresses.normalize(addr), i);
             }
         }
 
@@ -252,7 +252,7 @@ public final class BlockSplicer {
         List<String> outChunks = new ArrayList<>(chunks);
 
         for (Map.Entry<String, String> e : addressToNewBlock.entrySet()) {
-            String want = CheckoutTreeNarrower.normalizeHex(e.getKey());
+            String want = CheckoutAddresses.normalize(e.getKey());
             Integer idx = indexByAddr.get(want);
             if (idx == null) {
                 failed.add(want);
@@ -321,7 +321,7 @@ public final class BlockSplicer {
         }
         Map<String, String> want = new LinkedHashMap<>();
         for (Map.Entry<String, String> e : nameByAddress.entrySet()) {
-            want.put(CheckoutTreeNarrower.normalizeHex(e.getKey()), e.getValue());
+            want.put(CheckoutAddresses.normalize(e.getKey()), e.getValue());
         }
         StringBuilder out = new StringBuilder();
         for (String line : indexTsv.split("\n", -1)) {
@@ -337,7 +337,7 @@ public final class BlockSplicer {
                 out.append(line).append('\n');
                 continue;
             }
-            String hex = CheckoutTreeNarrower.normalizeHex(cols[0]);
+            String hex = CheckoutAddresses.normalize(cols[0]);
             String newName = want.get(hex);
             if (newName != null) {
                 cols[1] = newName;
@@ -369,7 +369,7 @@ public final class BlockSplicer {
         }
         Map<String, String> want = new LinkedHashMap<>();
         for (Map.Entry<String, String> e : nameByAddress.entrySet()) {
-            want.put(CheckoutTreeNarrower.normalizeHex(e.getKey()), e.getValue());
+            want.put(CheckoutAddresses.normalize(e.getKey()), e.getValue());
         }
         StringBuilder out = new StringBuilder();
         for (String line : callgraphTsv.split("\n", -1)) {
@@ -386,8 +386,8 @@ public final class BlockSplicer {
                 out.append(line).append('\n');
                 continue;
             }
-            String callerHex = CheckoutTreeNarrower.normalizeHex(cols[0]);
-            String calleeHex = CheckoutTreeNarrower.normalizeHex(cols[1]);
+            String callerHex = CheckoutAddresses.normalize(cols[0]);
+            String calleeHex = CheckoutAddresses.normalize(cols[1]);
             String newCaller = want.get(callerHex);
             String newCallee = want.get(calleeHex);
             if (newCaller != null) {
@@ -451,7 +451,7 @@ public final class BlockSplicer {
             if (raw == null || raw.isBlank()) {
                 continue;
             }
-            String hex = CheckoutTreeNarrower.normalizeHex(raw);
+            String hex = CheckoutAddresses.normalize(raw);
             IndexRow row = index.get(hex);
             if (row == null) {
                 skipped.add(hex);
@@ -506,7 +506,7 @@ public final class BlockSplicer {
                             failedReasons.add("block_not_found");
                             continue;
                         }
-                        Function func = resolveFunction(program, hex);
+                        Function func = CheckoutAddresses.function(program, hex);
                         if (func == null) {
                             failed.add(hex);
                             failedReasons.add("function_not_found");
@@ -643,7 +643,7 @@ public final class BlockSplicer {
                     failedReasons.add("block_not_found");
                     continue;
                 }
-                Function func = resolveFunction(program, hex);
+                Function func = CheckoutAddresses.function(program, hex);
                 if (func == null) {
                     failed.add(hex);
                     failedReasons.add("function_not_found");
@@ -690,7 +690,7 @@ public final class BlockSplicer {
         PartitionContext.CallGraph cg = ctx.callGraph();
         List<Function> fns = ctx.functions();
         for (String hex : seeds) {
-            Function func = resolveFunction(program, hex);
+            Function func = CheckoutAddresses.function(program, hex);
             if (func == null) {
                 continue;
             }
@@ -711,8 +711,7 @@ public final class BlockSplicer {
         }
         for (int i : indices) {
             if (i >= 0 && i < fns.size()) {
-                out.add(CheckoutTreeNarrower.normalizeHex(
-                        fns.get(i).getEntryPoint().toString(false)));
+                out.add(CheckoutAddresses.of(fns.get(i)));
             }
         }
     }
@@ -722,13 +721,13 @@ public final class BlockSplicer {
         if (fileBody == null) {
             fileBody = "";
         }
-        String want = CheckoutTreeNarrower.normalizeHex(addressHex);
+        String want = CheckoutAddresses.normalize(addressHex);
         List<String> chunks = CheckoutTreeNarrower.splitFunctionChunks(fileBody);
         boolean found = false;
         List<String> outChunks = new ArrayList<>(chunks.size());
         for (String chunk : chunks) {
             String addr = CheckoutTreeNarrower.addressFromChunk(chunk);
-            if (addr != null && want.equals(CheckoutTreeNarrower.normalizeHex(addr))) {
+            if (addr != null && want.equals(CheckoutAddresses.normalize(addr))) {
                 outChunks.add(trimTrailingExtraBlanks(newBlock));
                 found = true;
             } else {
@@ -771,18 +770,6 @@ public final class BlockSplicer {
         }
     }
 
-    private static Function resolveFunction(Program program, String hex) {
-        var addr = ServiceUtils.parseAddress(program, hex);
-        if (addr == null) {
-            return null;
-        }
-        Function at = program.getFunctionManager().getFunctionAt(addr);
-        if (at != null) {
-            return at;
-        }
-        return program.getFunctionManager().getFunctionContaining(addr);
-    }
-
     private static Map<String, IndexRow> loadIndex(Path indexPath) throws IOException {
         Map<String, IndexRow> out = new LinkedHashMap<>();
         if (!Files.isRegularFile(indexPath)) {
@@ -796,7 +783,7 @@ public final class BlockSplicer {
             if (cols.length < 4) {
                 continue;
             }
-            String hex = CheckoutTreeNarrower.normalizeHex(cols[0]);
+            String hex = CheckoutAddresses.normalize(cols[0]);
             out.put(hex, new IndexRow(
                     cols[0],
                     cols[1],

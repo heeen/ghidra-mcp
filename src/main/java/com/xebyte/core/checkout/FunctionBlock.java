@@ -75,7 +75,7 @@ public final class FunctionBlock {
         String body = failed
                 ? SweepJob.renderFailedBody(String.valueOf(facts.getOrDefault("decompile_error", "no output")))
                 : String.valueOf(facts.get("decompiled_code"));
-        String addressHex = func.getEntryPoint().toString(false);
+        String addressHex = CheckoutAddresses.of(func);
         Placement where = new Placement(partitionSlug, method, confidence, evidenceBacked,
                 SweepJob.shortContentHash(body), Instant.now(), modificationNumber,
                 SweepJob.functionResourceUri(programName, addressHex));

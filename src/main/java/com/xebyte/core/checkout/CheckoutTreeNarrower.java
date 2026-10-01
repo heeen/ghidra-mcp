@@ -33,7 +33,7 @@ public final class CheckoutTreeNarrower {
 
     /** First header line: {@code // fn: Name @ <addr> size=N} */
     private static final Pattern FN_HEADER = Pattern.compile(
-            "^// fn: .* @ ([0-9A-Fa-f]+) size=");
+            "^// fn: .* @ ((?:[A-Za-z0-9_.]+:)?[0-9A-Fa-f]+) size=");
 
     private CheckoutTreeNarrower() {
     }
@@ -73,7 +73,7 @@ public final class CheckoutTreeNarrower {
             if (inScope) {
                 kept.add(entry);
             } else {
-                removedAddresses.add(normalizeHex(entry.addressHex()));
+                removedAddresses.add(CheckoutAddresses.normalize(entry.addressHex()));
                 perPartitionRemoved.merge(entry.slug(), 1, Integer::sum);
             }
         }
@@ -145,14 +145,14 @@ public final class CheckoutTreeNarrower {
         }
         Set<String> removed = new LinkedHashSet<>();
         for (String a : removedAddresses) {
-            removed.add(normalizeHex(a));
+            removed.add(CheckoutAddresses.normalize(a));
         }
 
         List<String> chunks = splitFunctionChunks(fileBody);
         StringBuilder out = new StringBuilder();
         for (String chunk : chunks) {
             String addr = addressFromChunk(chunk);
-            if (addr != null && removed.contains(normalizeHex(addr))) {
+            if (addr != null && removed.contains(CheckoutAddresses.normalize(addr))) {
                 continue;
             }
             out.append(chunk);
@@ -268,7 +268,7 @@ public final class CheckoutTreeNarrower {
         writeIndex(checkout, rows);
         Set<String> entries = new java.util.HashSet<>();
         for (IndexEntry e : rows) {
-            entries.add(normalizeHex(e.addressHex()));
+            entries.add(CheckoutAddresses.normalize(e.addressHex()));
         }
         AddressIndex.retain(checkout, entries);
         Map<String, List<IndexEntry>> bySlug = new LinkedHashMap<>();
@@ -293,7 +293,7 @@ public final class CheckoutTreeNarrower {
         StringBuilder sb = new StringBuilder(SweepJob.byAddressHeader());
         // Address order — Grep/agents expect the TSV sorted the same way a sweep leaves it.
         List<IndexEntry> sorted = new ArrayList<>(kept);
-        sorted.sort((a, b) -> normalizeHex(a.addressHex()).compareTo(normalizeHex(b.addressHex())));
+        sorted.sort((a, b) -> CheckoutAddresses.normalize(a.addressHex()).compareTo(CheckoutAddresses.normalize(b.addressHex())));
         for (IndexEntry e : sorted) {
             sb.append(SweepJob.formatByAddressRow(
                     e.addressHex(), e.name(), e.slug(), e.file(),
@@ -342,7 +342,7 @@ public final class CheckoutTreeNarrower {
         List<ModuleReadme.FileRow> files = new ArrayList<>(byFile.size());
         for (Map.Entry<String, List<IndexEntry>> e : byFile.entrySet()) {
             List<IndexEntry> rows = new ArrayList<>(e.getValue());
-            rows.sort((x, y) -> normalizeHex(x.addressHex()).compareTo(normalizeHex(y.addressHex())));
+            rows.sort((x, y) -> CheckoutAddresses.normalize(x.addressHex()).compareTo(CheckoutAddresses.normalize(y.addressHex())));
             files.add(new ModuleReadme.FileRow(e.getKey(), rows.get(0).addressHex(),
                     rows.get(rows.size() - 1).addressHex(), rows.size()));
         }
@@ -378,23 +378,6 @@ public final class CheckoutTreeNarrower {
                 return FileVisitResult.CONTINUE;
             }
         });
-    }
-
-    public static String normalizeHex(String hex) {
-        if (hex == null) {
-            return "";
-        }
-        String t = hex.trim();
-        if (t.startsWith("0x") || t.startsWith("0X")) {
-            t = t.substring(2);
-        }
-        // Strip a space: prefix if present (mem:00100000 → 00100000 for compare
-        // against header hex which is toString(false)).
-        int colon = t.lastIndexOf(':');
-        if (colon >= 0) {
-            t = t.substring(colon + 1);
-        }
-        return t.toLowerCase(Locale.ROOT);
     }
 
     public record NarrowResult(int functionsRemoved, int functionsRemaining, List<String> modulesTouched) {}

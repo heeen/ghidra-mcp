@@ -94,7 +94,7 @@ public final class DirtyQueue {
             if (raw == null || raw.isBlank()) {
                 continue;
             }
-            b.addresses.add(CheckoutTreeNarrower.normalizeHex(raw));
+            b.addresses.add(CheckoutAddresses.normalize(raw));
             if (b.addresses.size() >= ADDRESS_BOUND) {
                 // Bound is a safety valve: splicing thousands of analysis
                 // births one-by-one is pathological. Fall back to full reconcile.

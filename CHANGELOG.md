@@ -248,6 +248,16 @@ client's own built-in tools, so the search costs no permission surface.
     (`peripheral_pages` among them) and stamped it "narrowed by
     /decompile_checkout_configure". One renderer (`ModuleReadme`) now serves all three
     writers; a rewrite keeps the sweep's grouping and recounts the files.
+  - **Two functions at one offset stay two functions.** The checkout keyed everything by
+    bare hex, so a function in an overlay (or any second space) and the default-space
+    function at the same offset shared a by-address row, a file name and a block lookup; a
+    splice of either could overwrite the other. Addresses outside the default space are now
+    `space:hex` in block headers, both TSVs, file names (`OVL_00001000.c`), URIs and
+    `get_functions` (entry, body, callers/callees, xrefs, call context, disassembly, refs).
+    The default space stays bare, so a single-space program's tree is spelled exactly as
+    before (live: all 338 firmware rows unchanged). `CheckoutAddresses` is the one place
+    that formats, parses and compares them; it replaced `normalizeHex` and three copies of
+    the address-to-function lookup.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

@@ -32,6 +32,17 @@ public final class CheckoutLayout {
     }
 
     /**
+     * The file name for a first function's tree key ({@link CheckoutAddresses}): the padded
+     * offset, prefixed with the space outside the default one ({@code ovl1_00001000.c}) so
+     * two functions at one offset in different spaces never share a file.
+     */
+    public static String compartmentFileName(String key, int pointerSizeBytes) {
+        String space = CheckoutAddresses.space(key);
+        String name = compartmentFileName(CheckoutAddresses.offset(key), pointerSizeBytes);
+        return space.isEmpty() ? name : sanitiseName(space) + "_" + name;
+    }
+
+    /**
      * Legacy one-function form ({@code <addr>_<name>.c}). Prefer
      * {@link #compartmentFileName} for checkout trees — grouping is deliberate.
      */

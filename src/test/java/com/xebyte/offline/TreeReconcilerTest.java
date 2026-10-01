@@ -217,7 +217,7 @@ public class TreeReconcilerTest {
             String path = TreeReconciler.filePathForBody("c05", half, 4);
             for (String chunk : CheckoutTreeNarrower.splitFunctionChunks(half)) {
                 addrToFile.put(
-                        CheckoutTreeNarrower.normalizeHex(
+                        com.xebyte.core.checkout.CheckoutAddresses.normalize(
                                 CheckoutTreeNarrower.addressFromChunk(chunk)),
                         path);
             }

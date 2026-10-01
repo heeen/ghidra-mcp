@@ -2,6 +2,7 @@ package com.xebyte.core.checkout;
 
 import com.xebyte.core.FunctionFacts;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Program;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +33,10 @@ public final class AddressIndex {
     private AddressIndex() {
     }
 
-    /** One row. {@code address} and {@code via} are {@code 0x...}; {@code entry} is bare hex, as in by-address.tsv. */
+    /**
+     * One row. {@code address} and {@code via} as {@link CheckoutAddresses#display}; {@code entry}
+     * is the tree key, as in by-address.tsv.
+     */
     public record Row(String address, String kind, String via, String function, String entry) {
     }
 
@@ -41,11 +45,13 @@ public final class AddressIndex {
 
     /** {@code func}'s rows. */
     public static List<Row> rows(Function func, List<FunctionFacts.AddressRef> refs) {
-        String entry = func.getEntryPoint().toString(false);
+        String entry = CheckoutAddresses.of(func);
+        Program program = func.getProgram();
         List<Row> out = new ArrayList<>(refs.size());
         for (FunctionFacts.AddressRef r : refs) {
-            out.add(new Row("0x" + r.address().toString(false), r.kind(),
-                    r.via() != null ? "0x" + r.via().toString(false) : "", func.getName(), entry));
+            out.add(new Row(CheckoutAddresses.display(r.address(), program), r.kind(),
+                    r.via() != null ? CheckoutAddresses.display(r.via(), program) : "",
+                    func.getName(), entry));
         }
         return out;
     }
