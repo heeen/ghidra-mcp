@@ -58,7 +58,7 @@ public class HeadlessManagementService {
     // Project management
     // ========================================================================
 
-    @McpTool(path = "/create_project", method = "POST", description = "Create a new Ghidra project", category = "headless", access = ToolAccess.WRITE)
+    @McpTool(path = "/create_project", dryRun = false, method = "POST", description = "Create a new Ghidra project", category = "headless", access = ToolAccess.WRITE)
     public Response createProject(
             @Param(value = "parentDir", source = ParamSource.BODY,
                    description = "Existing filesystem directory that will CONTAIN the new project, e.g. "
@@ -110,7 +110,7 @@ public class HeadlessManagementService {
         }
     }
 
-    @McpTool(path = "/delete_project", method = "POST", description = "Delete a Ghidra project from disk", category = "project", access = ToolAccess.DESTRUCTIVE)
+    @McpTool(path = "/delete_project", dryRun = false, method = "POST", description = "Delete a Ghidra project from disk", category = "project", access = ToolAccess.DESTRUCTIVE)
     public Response deleteProject(
             @Param(value = "projectPath", source = ParamSource.BODY,
                    description = "The project's .gpr file or its directory. Must resolve inside the "
@@ -128,7 +128,7 @@ public class HeadlessManagementService {
         }
     }
 
-    @McpTool(path = "/open_project", method = "POST",
+    @McpTool(path = "/open_project", dryRun = false, method = "POST",
             description = "Open a Ghidra project: a local .gpr/directory, or a shared "
                 + "Ghidra Server repository via ghidra://host[:port]/repo (creates a "
                 + "persistent local shared project under ~/.ghidra-mcp/shared-projects/ "
@@ -174,7 +174,7 @@ public class HeadlessManagementService {
                 : ("Failed to open project: " + projectPath));
     }
 
-    @McpTool(path = "/close_project", method = "POST", description = "Close the currently open project", category = "headless", access = ToolAccess.DESTRUCTIVE)
+    @McpTool(path = "/close_project", dryRun = false, method = "POST", description = "Close the currently open project", category = "headless", access = ToolAccess.DESTRUCTIVE)
     public Response closeProject() {
         if (!programProvider.hasProject()) {
             return Response.err("No project currently open");

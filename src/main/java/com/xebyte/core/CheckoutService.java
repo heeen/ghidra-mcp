@@ -139,7 +139,7 @@ public class CheckoutService {
     // /decompile_checkout_create — WRITE, no sweep
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_create", method = "POST",
+    @McpTool(path = "/decompile_checkout_create", dryRun = false, method = "POST",
         description = "Create a decompilation checkout: a program's decompiled C "
             + "materialised as a file tree you can Grep and Glob. Use this when you need "
             + "corpus-wide search — 'which functions reference this string, constant or "
@@ -245,7 +245,7 @@ public class CheckoutService {
     // /decompile_checkout_configure — WRITE, persist + classify only (no delete/resweep)
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_configure", method = "POST",
+    @McpTool(path = "/decompile_checkout_configure", dryRun = false, method = "POST",
         description = "Change a checkout's configuration: exclusions (tag: / partition: / "
             + "range:), enabled strategies, band size, max file bytes, throttle. Exclusions "
             + "are how you keep library code out of the tree — on a driver DLL, excluding two "
@@ -406,7 +406,7 @@ public class CheckoutService {
     // /decompile_checkout_run — WRITE, start or stop the sweep
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_run", method = "POST",
+    @McpTool(path = "/decompile_checkout_run", dryRun = false, method = "POST",
         description = "Start or stop the sweep that fills a checkout's tree. action=start enqueues it "
             + "(then poll decompile_checkout_status): returns in milliseconds with phase queued and "
             + "the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to "
@@ -521,7 +521,7 @@ public class CheckoutService {
     // /decompile_checkout_refresh — WRITE, reconcile tree with program
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_refresh", method = "POST",
+    @McpTool(path = "/decompile_checkout_refresh", dryRun = false, method = "POST",
         description = "Reconcile a checkout tree with the live program. Three primitives "
             + "cover every change: replace (re-decompile a function still in both), insert "
             + "(place a new function by pin or address containment, split the file if over "
@@ -598,7 +598,7 @@ public class CheckoutService {
     // /decompile_checkout_pin_module — WRITE, program property (survives resweep)
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_pin_module", method = "POST",
+    @McpTool(path = "/decompile_checkout_pin_module", dryRun = false, method = "POST",
         description = "Pin a function to a checkout compartment forever. Use this when you "
             + "have learned the real module boundary — e.g. after reading evidence that a "
             + "function belongs with driver code despite the cascade placing it in an "
@@ -663,7 +663,7 @@ public class CheckoutService {
     // /decompile_checkout_delete — DESTRUCTIVE
     // =========================================================================
 
-    @McpTool(path = "/decompile_checkout_delete", method = "POST",
+    @McpTool(path = "/decompile_checkout_delete", dryRun = false, method = "POST",
         description = "Deregister a checkout; with delete_files=true also remove its "
             + "on-disk tree (containment-checked). The program itself is untouched — this "
             + "only removes generated files.",

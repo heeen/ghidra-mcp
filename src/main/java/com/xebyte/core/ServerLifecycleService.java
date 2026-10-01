@@ -23,7 +23,7 @@ public class ServerLifecycleService {
         this.lifecycle = lifecycle;
     }
 
-    @McpTool(path = "/exit_ghidra", method = "POST",
+    @McpTool(path = "/exit_ghidra", dryRun = false, method = "POST",
             description = "Save every open program (and, in the GUI, debugger traces), then stop the "
                 + "server process. The response reports what was saved. Nothing can be called after it.",
             category = "program", access = ToolAccess.DESTRUCTIVE)

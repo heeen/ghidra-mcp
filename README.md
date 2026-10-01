@@ -915,7 +915,6 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 ### Project Organization
 
 - `archive_project` - Archive the currently open project to a Ghidra-native .gar file
-- `checkin_program` - Check an open program back in to the shared Ghidra Server as a new version
 - `create_folder` - Create a folder in the project
 - `delete_file` - Delete a file from the project
 - `delete_project` - Delete a Ghidra project **(headless only)**
@@ -1102,6 +1101,7 @@ Available on the standalone headless server (`GhidraMCPHeadlessServer`).
 
 ### Ghidra Server & Version Control
 
+- `checkin_program` - Check an open program back in to the shared Ghidra Server as a new version
 - `server_admin_set_permissions` - Set user permissions on a repository
 - `server_admin_terminate_all_checkouts` - Terminate all checkouts in a folder recursively
 - `server_admin_terminate_checkout` - Terminate all checkouts on a single file
