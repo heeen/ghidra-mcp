@@ -72,6 +72,16 @@ A headless client doing version-controlled work hit these one after another:
     with `reopen_required`, because its edits cannot move into the checkout.
   - Adding an open file with `keep_checked_out=false` left it checked out. It is
     now saved and closed first, as checkin already did.
+- **Opening or saving a checked-out file with no edits marked it modified.** `open_program`
+  wrote the "don't ask to analyze" flag and saved on every open, even for an analyzed
+  program Ghidra would never prompt about; `save_program` and `save_all_programs` wrote
+  the file with nothing to save. A file checked out and left untouched therefore read
+  `modified_since_checkout: true`, and the next check-in was an empty version. Reproduced
+  against a Ghidra Server: check in keeping the checkout, restart, open, adopt and sweep a
+  decompile checkout, save; every step now leaves the file unmodified. The flag is written
+  only when Ghidra would ask; a save of an unchanged program reports `saved: false`, and
+  `save_all_programs` lists unchanged programs under `unchanged` instead of failing on a
+  read-only copy that has nothing to lose.
 - **`rename_symbol` had no `strict_mode`.** `rename_function` takes a per-call
   `enforce`/`warn`/`off` override; `rename_symbol` now does too, and its refusal
   names it.
