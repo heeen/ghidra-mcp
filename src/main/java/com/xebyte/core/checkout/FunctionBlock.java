@@ -37,8 +37,7 @@ public final class FunctionBlock {
 
     /** Where the block sits in the tree; not a fact about the function. */
     public record Placement(String partitionSlug, String method, double confidence,
-            boolean evidenceBacked, String fingerprint, java.time.Instant dts,
-            long modificationNumber, String uri) {
+            boolean evidenceBacked, java.time.Instant dts, long modificationNumber, String uri) {
     }
 
     /**
@@ -77,7 +76,7 @@ public final class FunctionBlock {
                 : String.valueOf(facts.get("decompiled_code"));
         String addressHex = CheckoutAddresses.of(func);
         Placement where = new Placement(partitionSlug, method, confidence, evidenceBacked,
-                SweepJob.shortContentHash(body), Instant.now(), modificationNumber,
+                Instant.now(), modificationNumber,
                 SweepJob.functionResourceUri(programName, addressHex));
         HighFunction high = decompiled[0] != null ? decompiled[0].getHighFunction() : null;
         List<AddressIndex.Row> addresses = AddressIndex.rows(func,
@@ -85,8 +84,63 @@ public final class FunctionBlock {
         return new Built(render(facts, body, where), failed, addresses);
     }
 
-    /** Header plus body. {@code body} is the C, or the failure marker when there is none. */
+    /**
+     * Header plus body. {@code body} is the C, or the failure marker when there is none. The
+     * {@code // fp:} line is {@link #fingerprint} of the rest, computed here so it always
+     * describes the block it sits in.
+     */
     public static String render(Map<String, Object> facts, String body, Placement where) {
+        return withFingerprint(renderWithFp(facts, body, where, ""));
+    }
+
+    /**
+     * A short hash of the block as written, without the lines that change on every render
+     * ({@code dts}, {@code mod}) and without the {@code fp} line itself. A full reconcile
+     * rebuilds a block whose text no longer matches its {@code fp}: one edited by hand, cut
+     * short, or patched without its fingerprint, which the program's inputs alone cannot
+     * reveal.
+     */
+    public static String fingerprint(String block) {
+        StringBuilder sb = new StringBuilder(block.length());
+        for (String line : block.split("\n", -1)) {
+            if (line.startsWith("// dts: ") || line.startsWith("// mod: ") || line.startsWith("// fp: ")) {
+                continue;
+            }
+            sb.append(line).append('\n');
+        }
+        return SweepJob.shortContentHash(sb.toString().strip());
+    }
+
+    /** {@code block} with its {@code fp} line set to {@link #fingerprint} of the rest. */
+    public static String withFingerprint(String block) {
+        String fp = fingerprint(block);
+        StringBuilder sb = new StringBuilder(block.length() + 16);
+        boolean done = false;
+        for (String line : block.split("\n", -1)) {
+            if (!done && line.startsWith("// fp: ")) {
+                line = "// fp: " + fp;
+                done = true;
+            }
+            sb.append(line).append('\n');
+        }
+        sb.setLength(sb.length() - 1);
+        return sb.toString();
+    }
+
+    /** Whether {@code block}'s text still matches its {@code fp} line. */
+    public static boolean intact(String block) {
+        for (String line : block.split("\n", -1)) {
+            if (line.equals(HEADER_END)) {
+                break;
+            }
+            if (line.startsWith("// fp: ")) {
+                return line.substring("// fp: ".length()).strip().equals(fingerprint(block));
+            }
+        }
+        return false;
+    }
+
+    private static String renderWithFp(Map<String, Object> facts, String body, Placement where, String fp) {
         StringBuilder sb = new StringBuilder();
         line(sb, "fn", str(facts.get("name")) + " @ " + str(facts.get("entry_point"))
                 + " size=" + str(facts.get("size")));
@@ -157,7 +211,7 @@ public final class FunctionBlock {
         line(sb, "part", where.partitionSlug() + " " + where.method()
                 + " conf=" + String.format(Locale.ROOT, "%.2f", where.confidence())
                 + " evidence_backed=" + where.evidenceBacked());
-        line(sb, "fp", where.fingerprint());
+        sb.append("// fp: ").append(fp).append('\n');
         line(sb, "dts", where.dts());
         line(sb, "mod", where.modificationNumber());
         line(sb, "uri", where.uri());

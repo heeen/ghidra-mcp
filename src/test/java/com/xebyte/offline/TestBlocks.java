@@ -15,7 +15,7 @@ final class TestBlocks {
     private TestBlocks() {
     }
 
-    static String block(String name, String addr, String fp, List<String> calls,
+    static String block(String name, String addr, List<String> calls,
             List<String> callers, String body) {
         Map<String, Object> facts = new LinkedHashMap<>();
         facts.put("name", name);
@@ -24,12 +24,12 @@ final class TestBlocks {
         facts.put("callees", neighbours(calls));
         facts.put("callers", neighbours(callers));
         return FunctionBlock.render(facts, body, new FunctionBlock.Placement("c05", "address-band",
-                0.50, false, fp, Instant.parse("2026-01-01T00:00:00Z"), 1L,
+                0.50, false, Instant.parse("2026-01-01T00:00:00Z"), 1L,
                 SweepJob.functionResourceUri("x", addr)));
     }
 
-    static String block(String name, String addr, String fp, String body) {
-        return block(name, addr, fp, List.of(), List.of(), body);
+    static String block(String name, String addr, String body) {
+        return block(name, addr, List.of(), List.of(), body);
     }
 
     private static List<Map<String, Object>> neighbours(List<String> names) {

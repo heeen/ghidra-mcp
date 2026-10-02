@@ -1,6 +1,6 @@
 package com.xebyte.offline;
 
-import com.xebyte.core.checkout.CheckoutTreeNarrower;
+import com.xebyte.core.checkout.TreeFiles;
 import org.junit.Test;
 
 import java.util.List;
@@ -14,7 +14,7 @@ import static org.junit.Assert.assertTrue;
  * Offline tests for configure-time tree narrowing: a partially-excluded
  * partition file is rewritten, not deleted.
  */
-public class CheckoutTreeNarrowerTest {
+public class TreeFilesTest {
 
     private static final String PARTITION_BODY = ""
             + "// fn: Foo @ 00100000 size=16\n"
@@ -46,31 +46,11 @@ public class CheckoutTreeNarrowerTest {
             + "\n";
 
     @Test
-    public void rewriteRemovesOnlyExcludedMembersNotWholeFile() {
-        String rewritten = CheckoutTreeNarrower.rewritePartitionFile(
-                PARTITION_BODY, Set.of("00100100"));
-
-        assertTrue("kept Foo", rewritten.contains("// fn: Foo @ 00100000"));
-        assertTrue("kept Baz", rewritten.contains("// fn: Baz @ 00100200"));
-        assertFalse("removed Bar", rewritten.contains("// fn: Bar @ 00100100"));
-        assertFalse("removed Bar body", rewritten.contains("void Bar(void)"));
-        // File must still exist as content — not an empty delete signal.
-        assertTrue(rewritten.length() > 100);
-    }
-
-    @Test
-    public void rewriteRemovingAllLeavesEmpty() {
-        String rewritten = CheckoutTreeNarrower.rewritePartitionFile(
-                PARTITION_BODY, Set.of("00100000", "00100100", "00100200"));
-        assertTrue(rewritten.isBlank() || rewritten.isEmpty());
-    }
-
-    @Test
     public void splitChunksRoundTripAddresses() {
-        List<String> chunks = CheckoutTreeNarrower.splitFunctionChunks(PARTITION_BODY);
+        List<String> chunks = TreeFiles.splitFunctionChunks(PARTITION_BODY);
         assertEquals(3, chunks.size());
-        assertEquals("00100000", CheckoutTreeNarrower.addressFromChunk(chunks.get(0)));
-        assertEquals("00100100", CheckoutTreeNarrower.addressFromChunk(chunks.get(1)));
-        assertEquals("00100200", CheckoutTreeNarrower.addressFromChunk(chunks.get(2)));
+        assertEquals("00100000", TreeFiles.addressFromChunk(chunks.get(0)));
+        assertEquals("00100100", TreeFiles.addressFromChunk(chunks.get(1)));
+        assertEquals("00100200", TreeFiles.addressFromChunk(chunks.get(2)));
     }
 }

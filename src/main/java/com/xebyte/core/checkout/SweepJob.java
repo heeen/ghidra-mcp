@@ -37,9 +37,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -72,8 +70,6 @@ public final class SweepJob implements Runnable {
      * Secondary per-file cap: a compartment of tiny stubs must not produce one
      * enormous-count file even when each stub is well under the byte budget.
      */
-    public static final int MAX_FUNCTIONS_PER_FILE = 200;
-
     private static final String FAILED_MARKER_PREFIX = "// DECOMPILATION FAILED: ";
 
     private final Checkout checkout;
@@ -228,79 +224,36 @@ public final class SweepJob implements Runnable {
                 List<Function> members = new ArrayList<>(part.members());
                 members.sort(Comparator.comparing(Function::getEntryPoint));
 
-                // Compartment → N Read-budget files. Bytes (not function count)
-                // decide the split: median C is ~386 B but max is 23 KB, so a
-                // fixed count of 20 swings between ~8 KB and ~460 KB.
-                int pointerSize = Math.max(1, program.getDefaultPointerSize());
-                int maxFileBytes = cfg.maxFileBytes();
-                StringBuilder fileBody = new StringBuilder();
-                int fileBytes = 0;
-                int fileFnCount = 0;
-                String relativeFile = null;
-                String fileFirstHex = null;
-                String fileLastHex = null;
-                List<EmittedFile> emitted = new ArrayList<>();
+                // The compartment's files, laid out by the same packer a reconcile uses.
+                CompartmentPacker packer = new CompartmentPacker(part.slug(), cfg.maxFileBytes(),
+                        program.getDefaultPointerSize());
 
                 for (Function func : members) {
                     if (cancel.isCancelled()) {
-                        flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex, fileLastHex,
-                                fileFnCount, emitted);
+                        writePackedBestEffort(packer.finish());
                         finishTerminal(SweepProgress.Phase.CANCELLED,
                                 cancelReason != null ? cancelReason : "cancelled",
                                 null);
                         return;
                     }
                     if (!ensureProgramOpen()) {
-                        flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex, fileLastHex,
-                                fileFnCount, emitted);
+                        writePackedBestEffort(packer.finish());
                         return;
                     }
 
                     if (functionsSinceAnalysisCheck >= ANALYSIS_POLL_EVERY) {
                         functionsSinceAnalysisCheck = 0;
                         if (!waitForAnalysisIfNeeded()) {
-                            flushOpenFileBestEffort(relativeFile, fileBody, fileFirstHex,
-                                    fileLastHex, fileFnCount, emitted);
+                            writePackedBestEffort(packer.finish());
                             return;
                         }
                     }
 
                     boolean evidenceBacked = isEvidenceBacked(part, func, ctx);
                     FunctionEmit emit = decompileOne(func, part, evidenceBacked, sweptMod, ctx);
-                    int addition = encodedBlockBytes(emit.text());
-
-                    // Close BEFORE adding so the budget is a hard Read ceiling;
-                    // an empty file always accepts the next block (oversized
-                    // single function → its own file, never split).
-                    if (fileFnCount > 0
-                            && (fileBytes + addition > maxFileBytes
-                                || fileFnCount >= MAX_FUNCTIONS_PER_FILE)) {
-                        flushOpenFile(relativeFile, fileBody, fileFirstHex, fileLastHex,
-                                fileFnCount, emitted);
-                        fileBody.setLength(0);
-                        fileBytes = 0;
-                        fileFnCount = 0;
-                        relativeFile = null;
-                        fileFirstHex = null;
-                        fileLastHex = null;
-                    }
-
-                    if (relativeFile == null) {
-                        relativeFile = CheckoutLayout.moduleFunctionFile(
-                                part.slug(),
-                                CheckoutLayout.compartmentFileName(
-                                        CheckoutAddresses.of(func), pointerSize));
-                    }
-
-                    appendBlock(fileBody, emit.text());
-                    fileBytes += addition;
-                    fileFnCount++;
-
                     String addrHex = CheckoutAddresses.of(func);
-                    if (fileFirstHex == null) {
-                        fileFirstHex = addrHex;
-                    }
-                    fileLastHex = addrHex;
+                    writePacked(packer.add(addrHex, emit.text()));
+                    String relativeFile = packer.currentPath();
 
                     addressRows.addAll(emit.addresses());
                     indexRows.add(new IndexRow(
@@ -321,9 +274,7 @@ public final class SweepJob implements Runnable {
                     sliceStartNs = maybeThrottle(sliceStartNs, cfg.throttlePercent());
                 }
 
-                flushOpenFile(relativeFile, fileBody, fileFirstHex, fileLastHex,
-                        fileFnCount, emitted);
-                writeModuleReadme(part, members.size(), emitted);
+                writePacked(packer.finish());
                 publish(checkout.progress()
                         .withCounts(total, accum.done, accum.failed)
                         .withBytesWritten(accum.bytes)
@@ -334,10 +285,18 @@ public final class SweepJob implements Runnable {
                         "dirty");
             }
 
-            writeIndexes(indexRows, ctx, cascade, partitions, total, scope);
+            // The grouping first: every derived file below is rendered from it and the rows,
+            // by the same code a reconcile uses, so either path writes the same tree.
+            PartitionMeta meta = PartitionMeta.of(cascade, partitions, scope,
+                    ctx.literals().functionsWithStrings());
+            meta.write(checkout);
             AddressIndex.write(checkout, addressRows);
-            writeTopReadme(total, partitions.size());
-            writeAgentsMd(partitions);
+            List<TreeFiles.IndexEntry> entries = new ArrayList<>(indexRows.size());
+            for (IndexRow r : indexRows) {
+                entries.add(new TreeFiles.IndexEntry(r.addressHex(), r.name(), r.slug(),
+                        r.file(), r.evidenceBacked(), r.ifp()));
+            }
+            DerivedFiles.writeAll(checkout, program, entries, meta, ctx);
 
             if (cancel.isCancelled()) {
                 finishTerminal(SweepProgress.Phase.CANCELLED,
@@ -435,62 +394,6 @@ public final class SweepJob implements Runnable {
         } catch (NoSuchAlgorithmException e) {
             return "000000000000";
         }
-    }
-
-    /**
-     * Assign each block to a file index under a byte budget + function-count
-     * cap. Pure so offline tests pin the split without a Program.
-     *
-     * <p>Close <em>before</em> adding when the next block would exceed the
-     * budget or the open file already holds {@code maxFunctionsPerFile}
-     * members. An oversized first block still opens a file alone — the block
-     * is atomic for {@link BlockSplicer}.
-     *
-     * @param blockBytes           UTF-8 size of each encoded block (header+body
-     *                             + the blank-line separator the writer adds)
-     * @param maxFileBytes         Read budget (already clamped by config)
-     * @param maxFunctionsPerFile  secondary cap (typically {@link #MAX_FUNCTIONS_PER_FILE})
-     * @return parallel array of 0-based file indices, one per block
-     */
-    public static int[] assignBlocksToFiles(
-            int[] blockBytes, int maxFileBytes, int maxFunctionsPerFile) {
-        if (blockBytes == null || blockBytes.length == 0) {
-            return new int[0];
-        }
-        int budget = Math.max(1, maxFileBytes);
-        int fnCap = Math.max(1, maxFunctionsPerFile);
-        int[] out = new int[blockBytes.length];
-        int fileIdx = 0;
-        int fileBytes = 0;
-        int fileCount = 0;
-        for (int i = 0; i < blockBytes.length; i++) {
-            int addition = Math.max(0, blockBytes[i]);
-            if (fileCount > 0
-                    && (fileBytes + addition > budget || fileCount >= fnCap)) {
-                fileIdx++;
-                fileBytes = 0;
-                fileCount = 0;
-            }
-            out[i] = fileIdx;
-            fileBytes += addition;
-            fileCount++;
-        }
-        return out;
-    }
-
-    /**
-     * Bytes the sweep will write for one function block: body UTF-8, a trailing
-     * newline if missing, then the blank-line separator between functions.
-     */
-    public static int encodedBlockBytes(String blockText) {
-        if (blockText == null) {
-            return 1; // just the separator newline
-        }
-        int n = blockText.getBytes(StandardCharsets.UTF_8).length;
-        if (!blockText.endsWith("\n")) {
-            n += 1;
-        }
-        return n + 1; // blank-line separator
     }
 
     /**
@@ -858,84 +761,18 @@ public final class SweepJob implements Runnable {
         });
     }
 
-    private static void appendBlock(StringBuilder fileBody, String text) {
-        if (text == null) {
-            text = "";
+    private void writePacked(CompartmentPacker.PackedFile file) throws IOException {
+        if (file != null) {
+            checkout.root().writeFile(Path.of(file.path()), file.body());
         }
-        fileBody.append(text);
-        if (!text.endsWith("\n")) {
-            fileBody.append('\n');
-        }
-        fileBody.append('\n');
     }
 
-    private void flushOpenFile(
-            String relativeFile,
-            StringBuilder body,
-            String firstHex,
-            String lastHex,
-            int fnCount,
-            List<EmittedFile> emitted) throws IOException {
-        if (relativeFile == null || body == null || body.isEmpty() || fnCount <= 0) {
-            return;
-        }
-        checkout.root().writeFile(Path.of(relativeFile), body.toString());
-        emitted.add(new EmittedFile(relativeFile, firstHex, lastHex, fnCount));
-    }
-
-    private void flushOpenFileBestEffort(
-            String relativeFile,
-            StringBuilder body,
-            String firstHex,
-            String lastHex,
-            int fnCount,
-            List<EmittedFile> emitted) {
+    private void writePackedBestEffort(CompartmentPacker.PackedFile file) {
         try {
-            flushOpenFile(relativeFile, body, firstHex, lastHex, fnCount, emitted);
+            writePacked(file);
         } catch (IOException ignored) {
             // Cancel/close path — best effort so Grep still sees what finished.
         }
-    }
-
-    private void writeModuleReadme(Partition part, int memberCount, List<EmittedFile> files)
-            throws IOException {
-        Map<String, String> evidence = new LinkedHashMap<>();
-        part.evidence().forEach((k, v) -> evidence.put(k, String.valueOf(v)));
-        List<ModuleReadme.FileRow> rows = new ArrayList<>(files.size());
-        for (EmittedFile f : files) {
-            rows.add(new ModuleReadme.FileRow(
-                    f.relativePath(), f.firstAddressHex(), f.lastAddressHex(), f.functionCount()));
-        }
-        checkout.root().writeFile(Path.of(CheckoutLayout.moduleReadme(part.slug())),
-                ModuleReadme.render(part.slug(),
-                        new ModuleReadme.Grouping(part.method(), part.confidence(), evidence, null),
-                        memberCount, rows));
-    }
-
-    private void writeIndexes(
-            List<IndexRow> rows,
-            PartitionContext ctx,
-            PartitionCascade.Result cascade,
-            List<Partition> partitions,
-            int total,
-            ExclusionEvaluator.ScopeStats scope) throws IOException {
-
-        StringBuilder byAddr = new StringBuilder(byAddressHeader());
-        rows.sort(Comparator.comparing(IndexRow::addressHex));
-        for (IndexRow row : rows) {
-            byAddr.append(formatByAddressRow(
-                    row.addressHex(), row.name(), row.slug(), row.file(),
-                    row.evidenceBacked(), row.ifp()));
-        }
-        checkout.root().writeFile(Path.of(CheckoutLayout.byAddressTsv()), byAddr.toString());
-
-        checkout.root().writeFile(
-                Path.of(CheckoutLayout.callgraphTsv()),
-                renderCallgraphTsv(ctx));
-
-        checkout.root().writeFile(
-                Path.of(CheckoutLayout.modulesIndexMd()),
-                renderModulesIndex(ctx, cascade, partitions, total, scope, rows));
     }
 
     /**
@@ -955,159 +792,6 @@ public final class SweepJob implements Runnable {
             }
         }
         return sb.toString();
-    }
-
-    private String renderModulesIndex(
-            PartitionContext ctx,
-            PartitionCascade.Result cascade,
-            List<Partition> partitions,
-            int total,
-            ExclusionEvaluator.ScopeStats scope,
-            List<IndexRow> rows) {
-        PartitionContext.LiteralIndex li = ctx.literals();
-        int withStrings = li.functionsWithStrings();
-        int eligible = scope.eligibleFunctions();
-        int inScope = scope.functionsInScope();
-        double pct = eligible == 0 ? 0.0 : (100.0 * withStrings / eligible);
-
-        Map<String, Integer> filesPerSlug = countDistinctFilesPerSlug(rows);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Modules\n\n");
-        sb.append("eligible_functions: ").append(eligible).append('\n');
-        sb.append("functions_in_scope: ").append(inScope).append('\n');
-        sb.append("assigned_functions: ").append(cascade.assignedFunctions()).append('\n');
-        sb.append("partitions: ").append(partitions.size()).append('\n');
-        sb.append("functions_in_tree: ").append(total).append('\n');
-        if (!scope.removedByRule().isEmpty()) {
-            sb.append('\n');
-            sb.append("## Exclusions removed\n\n");
-            for (Map.Entry<String, Integer> e : scope.removedByRule().entrySet()) {
-                sb.append("- ").append(e.getKey()).append(": removed ")
-                        .append(e.getValue()).append('\n');
-            }
-        }
-        sb.append('\n');
-
-        sb.append("## Coverage\n\n");
-        sb.append(String.format(Locale.ROOT,
-                "%d of %d eligible functions (%.1f%%) carry a referenced-string signal; "
-                        + "the rest inherit their compartment by address containment.\n\n",
-                withStrings, eligible, pct));
-        // The caveat has to be about THIS binary. An earlier version restated one
-        // specimen's numbers (1299/3230 = 40%) verbatim into every tree, which on a
-        // 25k-function ELF whose real figure is 9.9% was simply a false claim — in
-        // the one file whose whole purpose is to be honest about coverage.
-        sb.append("Compartments are structural, not semantic: they are coherent but "
-                + "unscored (no ground-truth comparison exists yet). A slug names no "
-                + "meaning — read each compartment's README.md for the rule and evidence "
-                + "that formed it, and treat a low evidence-backed count as a boundary "
-                + "around a poorly-evidenced interior rather than a claim about its "
-                + "contents.\n\n");
-
-        sb.append("## Strategy log\n\n");
-        for (Map.Entry<String, Object> e : cascade.strategyLog().entrySet()) {
-            sb.append("### ").append(e.getKey()).append("\n\n");
-            Object val = e.getValue();
-            if (val instanceof Map<?, ?> m) {
-                for (Map.Entry<?, ?> field : m.entrySet()) {
-                    sb.append("- ").append(field.getKey()).append(": ")
-                            .append(field.getValue()).append('\n');
-                }
-            } else {
-                sb.append(val).append('\n');
-            }
-            sb.append('\n');
-        }
-
-        sb.append("## Compartments\n\n");
-        sb.append("| slug | method | functions | files | confidence |\n");
-        sb.append("| --- | --- | ---: | ---: | ---: |\n");
-        for (Partition p : partitions) {
-            sb.append("| ").append(p.slug())
-                    .append(" | ").append(p.method())
-                    .append(" | ").append(p.size())
-                    .append(" | ").append(filesPerSlug.getOrDefault(p.slug(), 0))
-                    .append(" | ").append(String.format(Locale.ROOT, "%.2f", p.confidence()))
-                    .append(" |\n");
-        }
-        return sb.toString();
-    }
-
-    /** Distinct {@code .c} paths per compartment — what the Files column reports. */
-    static Map<String, Integer> countDistinctFilesPerSlug(List<IndexRow> rows) {
-        Map<String, Set<String>> sets = new java.util.LinkedHashMap<>();
-        for (IndexRow row : rows) {
-            sets.computeIfAbsent(row.slug(), s -> new java.util.LinkedHashSet<>())
-                    .add(row.file());
-        }
-        Map<String, Integer> out = new java.util.LinkedHashMap<>();
-        for (Map.Entry<String, Set<String>> e : sets.entrySet()) {
-            out.put(e.getKey(), e.getValue().size());
-        }
-        return out;
-    }
-
-    private void writeTopReadme(int total, int partitionCount) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Decompilation checkout: ").append(checkout.programName()).append("\n\n");
-        sb.append("checkout_id: ").append(checkout.id()).append('\n');
-        sb.append("domain_path: ").append(checkout.domainPath()).append('\n');
-        sb.append("functions: ").append(total).append('\n');
-        sb.append("partitions: ").append(partitionCount).append('\n');
-        sb.append("\n## How to read\n\n");
-        sb.append("- `AGENTS.md` — **start here**: what this tree is, whether it is current, "
-                + "and how to search it\n");
-        sb.append("- `modules/index.md` — strategy log (including not-applicable reasons) "
-                + "and compartment table\n");
-                sb.append("- `modules/<slug>/*.c` — Read-budget files inside each compartment "
-                + "(named by first-function address); each function has a 9-line header "
-                + "with calls/callers and a resolvable `ghidra://function/...` uri\n");
-        sb.append("- `index/by-address.tsv` — complete address → file map "
-                + "(failed decompiles still appear); `ifp` column is a "
-                + "DB-cheap input fingerprint for reconcile without re-decompiling\n");
-        sb.append("- `index/addresses.tsv` — every address each function uses "
-                + "(data references, literal-pool values, memory read and written), "
-                + "for `grep 0x<address>`\n");
-        sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
-        checkout.root().writeFile(Path.of(CheckoutLayout.readmeMd()), sb.toString());
-    }
-
-    /**
-     * The reading contract. Two of its caveats are conditional on this binary, so
-     * a tree that cannot hit them does not carry the warning as noise.
-     */
-    private void writeAgentsMd(List<Partition> partitions) throws IOException {
-        boolean hasPeripherals = partitions.stream()
-                .anyMatch(p -> "mmio-page".equals(p.method()));
-        checkout.root().writeFile(
-                Path.of(CheckoutLayout.agentsMd()),
-                CheckoutGuidance.agentsMd(
-                        checkout.programName(),
-                        checkout.id(),
-                        checkout.root().path().toString(),
-                        isStripped(),
-                        hasPeripherals));
-    }
-
-    /**
-     * True when almost every name is Ghidra's own, which makes name-based Grep
-     * useless: measured, `ls` carries 12 real names across 25,231 functions.
-     */
-    private boolean isStripped() {
-        int auto = 0;
-        int total = 0;
-        for (Function f : program.getFunctionManager().getFunctions(true)) {
-            if (f.isExternal() || f.isThunk()) {
-                continue;
-            }
-            total++;
-            String n = f.getName();
-            if (n.startsWith("FUN_") || n.startsWith("SUB_")) {
-                auto++;
-            }
-        }
-        return total > 0 && auto / (double) total >= 0.9;
     }
 
     private void publish(SweepProgress progress, String state) {
@@ -1210,13 +894,6 @@ public final class SweepJob implements Runnable {
             String file,
             boolean evidenceBacked,
             String ifp) {}
-
-    /** One Read-budget {@code .c} flushed during a compartment sweep. */
-    private record EmittedFile(
-            String relativePath,
-            String firstAddressHex,
-            String lastAddressHex,
-            int functionCount) {}
 
     private static final class SweepAccum {
         int done;

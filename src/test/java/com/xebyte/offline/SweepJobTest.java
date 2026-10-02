@@ -105,64 +105,6 @@ public class SweepJobTest {
     }
 
     @Test
-    public void assignBlocksSplitsAtByteBudget() {
-        // Three 400-byte blocks into a 1000-byte budget → files [0,0,1]
-        int[] sizes = {400, 400, 400};
-        int[] files = SweepJob.assignBlocksToFiles(sizes, 1000, 200);
-        assertEquals(0, files[0]);
-        assertEquals(0, files[1]);
-        assertEquals(1, files[2]);
-    }
-
-    @Test
-    public void assignBlocksOversizedSingleFunctionGetsOwnFileNeverSplit() {
-        int[] sizes = {500, 5000, 500};
-        int[] files = SweepJob.assignBlocksToFiles(sizes, 1000, 200);
-        assertEquals(0, files[0]);
-        assertEquals(1, files[1]); // alone despite > budget
-        assertEquals(2, files[2]);
-    }
-
-    @Test
-    public void assignBlocksSecondaryCapOf200Functions() {
-        int[] sizes = new int[201];
-        for (int i = 0; i < sizes.length; i++) {
-            sizes[i] = 10; // tiny — byte budget alone would keep them together
-        }
-        int[] files = SweepJob.assignBlocksToFiles(sizes, 1_000_000, SweepJob.MAX_FUNCTIONS_PER_FILE);
-        assertEquals(0, files[0]);
-        assertEquals(0, files[199]);
-        assertEquals(1, files[200]);
-    }
-
-    @Test
-    public void indexRowsPointAtContainingFileAfterPacking() {
-        // Simulate the sweep's index construction from assignBlocksToFiles.
-        long[] addrs = {0x1000L, 0x1100L, 0x1200L, 0x1300L};
-        int[] sizes = {400, 400, 400, 400}; // budget 1000 → two per file
-        int[] fileIdx = SweepJob.assignBlocksToFiles(sizes, 1000, 200);
-        String[] paths = new String[addrs.length];
-        String currentPath = null;
-        int currentFile = -1;
-        for (int i = 0; i < addrs.length; i++) {
-            if (fileIdx[i] != currentFile) {
-                currentFile = fileIdx[i];
-                currentPath = "modules/c03/"
-                        + CheckoutLayout.compartmentFileName(addrs[i], 4);
-            }
-            paths[i] = currentPath;
-        }
-        assertEquals("modules/c03/00001000.c", paths[0]);
-        assertEquals("modules/c03/00001000.c", paths[1]);
-        assertEquals("modules/c03/00001200.c", paths[2]);
-        assertEquals("modules/c03/00001200.c", paths[3]);
-        // by-address row for fn[2] must name the file that starts at fn[2].
-        String row = SweepJob.formatByAddressRow(
-                "00001200", "Fn2", "c03", paths[2], false, "deadbeefcafe");
-        assertTrue(row.contains("\tmodules/c03/00001200.c\t"));
-    }
-
-    @Test
     public void moduleReadmeListsEveryFileWithRange() {
         // Shape the Files table the sweep writes — navigable without opening .c.
         String readme = ""
