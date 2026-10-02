@@ -890,17 +890,21 @@ public class CheckoutService {
     private List<Map<String, Object>> scanAdoptable(Set<String> knownRoots) {
         List<Map<String, Object>> found = new ArrayList<>();
         Path parent = CheckoutRegistry.defaultParent();
-        if (!Files.isDirectory(parent)) {
-            return found;
-        }
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(parent)) {
+        try {
             List<Path> dirs = new ArrayList<>();
-            for (Path entry : stream) {
-                if (Files.isDirectory(entry)) {
-                    dirs.add(entry);
+            if (Files.isDirectory(parent)) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(parent)) {
+                    for (Path entry : stream) {
+                        if (Files.isDirectory(entry)) {
+                            dirs.add(entry);
+                        }
+                    }
                 }
             }
             dirs.sort(Comparator.comparing(p -> p.getFileName().toString()));
+            // Trees at roots a caller chose live anywhere; the registry remembers them. First,
+            // so the scan cap can never crowd out a root someone named deliberately.
+            dirs.addAll(0, CheckoutRegistry.getInstance().knownRoots().list());
             int scanned = 0;
             for (Path dir : dirs) {
                 if (scanned >= ADOPT_SCAN_CAP) {

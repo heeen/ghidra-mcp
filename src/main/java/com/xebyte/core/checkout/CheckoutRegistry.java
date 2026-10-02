@@ -284,6 +284,13 @@ public final class CheckoutRegistry {
      * {@code id} / directory suffix = SHA-256({@code domain|parent})[0:8],
      * files live at {@code parent/<basename>-<hash>/}.
      */
+    private final KnownRoots knownRoots = KnownRoots.forThisInstance();
+
+    /** Explicit roots created on this instance, for the status scan. */
+    public KnownRoots knownRoots() {
+        return knownRoots;
+    }
+
     public static Path defaultParent() {
         return Path.of(System.getProperty("java.io.tmpdir"), "ghidra-mcp-checkout")
                 .toAbsolutePath()
@@ -333,6 +340,9 @@ public final class CheckoutRegistry {
         root.ensureExists();
         Checkout checkout = new Checkout(key, programName, resolved, root);
         byId.put(checkout.id(), checkout);
+        if (!root.path().getParent().equals(defaultParent())) {
+            knownRoots.add(root.path());
+        }
         return checkout;
     }
 
@@ -405,6 +415,7 @@ public final class CheckoutRegistry {
         // Drop the listener before the tree — a deleted checkout must not keep
         // splicing into a path that no longer exists.
         detachObserver(id);
+        knownRoots.remove(removed.root().path());
         if (deleteFiles) {
             removed.root().deleteTree();
         }
