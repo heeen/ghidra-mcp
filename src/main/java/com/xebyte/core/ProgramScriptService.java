@@ -135,7 +135,17 @@ public class ProgramScriptService {
         }
     }
 
+    /**
+     * Keep the GUI from asking to analyze a program opened through the MCP. Only when it
+     * would ask: writing the flag unconditionally changed and saved every program on open,
+     * so a versioned file checked out with no edits read modified_since_checkout=true after
+     * a mere open_program (reported by the stealth RE session, reproduced against a Ghidra
+     * Server). An analyzed program, or one already marked, is left untouched.
+     */
     private void suppressAnalysisPrompt(Program program) throws IOException, ghidra.util.exception.CancelledException {
+        if (!ghidra.program.util.GhidraProgramUtilities.shouldAskToAnalyze(program)) {
+            return;
+        }
         ghidra.program.util.GhidraProgramUtilities.markProgramNotToAskToAnalyze(program);
         persistProgram(program, "Suppress analysis prompt");
     }
@@ -876,6 +886,17 @@ public class ProgramScriptService {
                         errorMsg.set("Program has no domain file");
                         return;
                     }
+                    // Nothing to save. Saving anyway writes the file, so a checked-out file
+                    // read modified_since_checkout=true after a save with no edits.
+                    if (!program.isChanged()) {
+                        resultData.set(JsonHelper.mapOf(
+                            "success", true,
+                            "program", program.getName(),
+                            "saved", false,
+                            "message", "No unsaved changes"
+                        ));
+                        return;
+                    }
                     String unsaveable = ProgramSaves.unsaveableReason(program);
                     if (unsaveable != null) {
                         errorMsg.set(unsaveable);
@@ -885,6 +906,7 @@ public class ProgramScriptService {
                     resultData.set(JsonHelper.mapOf(
                         "success", true,
                         "program", program.getName(),
+                        "saved", true,
                         "message", "Program saved successfully"
                     ));
                 } catch (Throwable e) {
@@ -926,6 +948,7 @@ public class ProgramScriptService {
 
         final AtomicReference<List<Map<String, Object>>> saved = new AtomicReference<>(new ArrayList<>());
         final AtomicReference<List<Map<String, Object>>> errors = new AtomicReference<>(new ArrayList<>());
+        final AtomicReference<List<String>> unchanged = new AtomicReference<>(new ArrayList<>());
 
         Runnable saveTask = () -> {
             Set<Program> seen = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -944,6 +967,13 @@ public class ProgramScriptService {
                         continue;
                     }
                     info.put("path", df.getPathname());
+                    // Nothing to save. Saving anyway writes the file: a checked-out file then
+                    // reads modified_since_checkout=true with no edit made, and a read-only
+                    // copy reports an error for a program that loses nothing.
+                    if (!program.isChanged()) {
+                        unchanged.get().add(df.getPathname());
+                        continue;
+                    }
                     // A DomainFile that is not in a writable project is a proxy
                     // (no on-disk location) \u2014 calling save() on it throws the
                     // cryptic "Location does not exist for a save operation!".
@@ -979,6 +1009,7 @@ public class ProgramScriptService {
             "saved_count", saved.get().size(),
             "open_program_count", programs.length,
             "programs", saved.get(),
+            "unchanged", unchanged.get(),
             "errors", errors.get()
         ));
     }
