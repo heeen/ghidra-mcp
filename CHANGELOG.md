@@ -258,6 +258,15 @@ client's own built-in tools, so the search costs no permission surface.
     before (live: all 338 firmware rows unchanged). `CheckoutAddresses` is the one place
     that formats, parses and compares them; it replaced `normalizeHex` and three copies of
     the address-to-function lookup.
+  - **A header-only change reaches the tree.** The splicer judged a rebuilt block unchanged
+    when its `// fp:` (a hash of the C alone) matched, so a change only the header shows was
+    computed and dropped: a function renamed a second time kept its intermediate name on
+    every callee's `// xref:` lines, and a grep for the old name found false hits. Blocks
+    now compare whole, ignoring only the render stamps (`dts`, `mod`).
+  - **Status finds checkouts at custom roots after a restart.** The no-selector scan listed
+    only trees under the default root. Explicit roots are now remembered in the instance's
+    Ghidra settings directory, listed first, and forgotten when their tree is gone or the
+    checkout is deleted.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

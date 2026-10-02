@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -288,6 +289,39 @@ public class TreeReconcilerTest {
                 entry("00100000", "spi_init", "m03", "modules/m03/00100000.c", "a"),
                 entry("00100100", "spi_send", "m03", "modules/m03/00100000.c", "b")), Set.of("m03"));
         return Files.readString(tempRoot.resolve(CheckoutLayout.moduleReadme("m03")));
+    }
+
+    /**
+     * Found live: a function renamed a second time kept its intermediate name in its
+     * callees' header lines. The splice judged "unchanged" by {@code // fp:}, a hash of the
+     * C alone, so a change only the header shows was computed and dropped.
+     */
+    @Test
+    public void aHeaderOnlyChangeIsSplicedEvenWhenTheBodyIsIdentical() {
+        String body = "void Callee(void) {}\n";
+        String old = TestBlocks.block("Callee", "00100100", "aaaaaaaaaaaa", List.of(),
+                List.of("syna_eiv_moc_enrollment_update"), body);
+        String renamed = TestBlocks.block("Callee", "00100100", "aaaaaaaaaaaa", List.of(),
+                List.of("syna_enroll_onchip_update"), body);
+
+        BlockSplicer.SpliceResult splice = BlockSplicer.spliceFile(old, Map.of("00100100", renamed));
+
+        assertEquals(List.of("00100100"), splice.refreshed());
+        assertTrue(splice.newBody(), splice.newBody().contains("syna_enroll_onchip_update"));
+        assertFalse(splice.newBody(), splice.newBody().contains("syna_eiv_moc_enrollment_update"));
+    }
+
+    @Test
+    public void aRerenderThatOnlyMovesTheTimestampAndModNumberIsUnchanged() {
+        String block = TestBlocks.block("Callee", "00100100", "aaaaaaaaaaaa", "void Callee(void) {}\n");
+        String rerendered = block.replace("// mod: 1\n", "// mod: 97\n")
+                .replace("// dts: 2026-01-01T00:00:00Z", "// dts: 2026-10-02T09:00:00Z");
+        assertNotEquals(block, rerendered);
+
+        BlockSplicer.SpliceResult splice = BlockSplicer.spliceFile(block, Map.of("00100100", rerendered));
+
+        assertFalse(splice.rewritten());
+        assertEquals(List.of("00100100"), splice.unchanged());
     }
 
     @Test

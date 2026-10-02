@@ -576,7 +576,7 @@ public final class TreeReconciler {
             return ReplaceOutcome.fail("block_not_found");
         }
         if (!splice.rewritten()) {
-            // fp match — still refresh ifp so a future full pass stays cheap.
+            // Block unchanged — still refresh ifp so a future full pass stays cheap.
             working.put(hex, row.withIfp(InputFingerprint.of(func))
                     .withName(func.getName()));
             return ReplaceOutcome.skippedUnchanged();

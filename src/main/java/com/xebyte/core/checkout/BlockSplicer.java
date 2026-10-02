@@ -44,7 +44,6 @@ import java.util.regex.Pattern;
  */
 public final class BlockSplicer {
 
-    private static final Pattern FP_LINE = Pattern.compile("^// fp:\\s*([0-9a-fA-F]+)\\s*$");
     private static final Pattern PART_LINE = Pattern.compile(
             "^// part: (\\S+) (\\S+) conf=([0-9.]+) evidence_backed=(true|false)\\s*$");
     private static final String FAILED_MARKER_PREFIX = "// DECOMPILATION FAILED: ";
@@ -75,18 +74,29 @@ public final class BlockSplicer {
         return null;
     }
 
-    /** Fingerprint from the {@code // fp:} header line, or null if missing. */
-    public static String fingerprintFromBlock(String block) {
-        if (block == null) {
-            return null;
-        }
+    /**
+     * Whether two renderings of a block say the same thing: equal but for the lines that
+     * change on every render ({@code // dts:}, {@code // mod:}).
+     *
+     * <p>This used to compare {@code // fp:}, a hash of the decompiled C alone. Since the
+     * header carries facts the C never prints (callers' names on {@code // xref:} lines,
+     * tags, refs, labels), a change to those alone was computed, judged unchanged and
+     * dropped: a function renamed a second time kept its old name in every callee's
+     * {@code // xref:} lines.
+     */
+    static boolean sameBlock(String a, String b) {
+        return withoutRenderStamps(a).equals(withoutRenderStamps(b));
+    }
+
+    private static String withoutRenderStamps(String block) {
+        StringBuilder sb = new StringBuilder(block.length());
         for (String line : block.split("\n", -1)) {
-            Matcher m = FP_LINE.matcher(line);
-            if (m.matches()) {
-                return m.group(1).toLowerCase(Locale.ROOT);
+            if (line.startsWith("// dts: ") || line.startsWith("// mod: ")) {
+                continue;
             }
+            sb.append(line).append('\n');
         }
-        return null;
+        return sb.toString().strip();
     }
 
     /**
@@ -260,9 +270,7 @@ public final class BlockSplicer {
             }
             String oldBlock = outChunks.get(idx);
             String newBlock = e.getValue();
-            String oldFp = fingerprintFromBlock(oldBlock);
-            String newFp = fingerprintFromBlock(newBlock);
-            if (oldFp != null && oldFp.equals(newFp)) {
+            if (sameBlock(oldBlock, newBlock)) {
                 unchanged.add(want);
                 continue;
             }
