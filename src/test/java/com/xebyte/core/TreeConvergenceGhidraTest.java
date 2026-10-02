@@ -259,7 +259,7 @@ public class TreeConvergenceGhidraTest {
     @Test
     public void aTreeMissingWhatOnlyASweepWritesIsSweptNotPatched() throws IOException {
         Checkout a = swept("a", CheckoutConfig.defaults());
-        Files.delete(a.root().path().resolve(CheckoutLayout.addressesTsv()));
+        Files.delete(a.root().path().resolve(CheckoutLayout.partitionsJson()));
         assertTrue(TreeReconciler.reconcile(a, program, null).sweepQueued());
     }
 

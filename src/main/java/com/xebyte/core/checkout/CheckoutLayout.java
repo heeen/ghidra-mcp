@@ -141,10 +141,6 @@ public final class CheckoutLayout {
         return "index/partitions.json";
     }
 
-    public static String addressesTsv() {
-        return "index/addresses.tsv";
-    }
-
     public static String callgraphTsv() {
         return "callgraph.tsv";
     }

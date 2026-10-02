@@ -58,8 +58,8 @@ public final class CheckoutGuidance {
         sb.append("Every function block carries what `get_functions` returns for it, one "
                 + "`// key: value` header line per fact, ending at `// ----` (the C follows): "
                 + "`signature:`, `return_type:`, `tags:`, `plate:`, `calls:` / `callers:` "
-                + "(`name@address`), `refs:` (data addresses used, including literal-pool "
-                + "values), `param:`, `local:`, `label:`, `comment:`, `xref:`, `jump:`. Grep "
+                + "(`name@address`), `refs:` (every address used, pool values as "
+                + "`value<word`), `param:`, `local:`, `label:`, `comment:`, `xref:`, `jump:`. Grep "
                 + "a header line (`// callers:.*Foo`, `// refs:.*0x40020000`) and the block "
                 + "answers without another tool round-trip. Read the `uri:` resource for "
                 + "call-site context. Disassembly, p-code and type layouts are MCP tools, not "
@@ -72,11 +72,12 @@ public final class CheckoutGuidance {
                 .append("including functions whose decompilation failed. The `ifp` column ")
                 .append("is a short hash of DB-cheap inputs (name, prototype, comments, ")
                 .append("refs) — used to detect change without re-decompiling.\n");
-        sb.append("- `index/addresses.tsv` lists every address a function uses, one row per ")
-                .append("address, kind, via and function: `grep 0x40003c0c index/addresses.tsv` names ")
-                .append("the functions that touch a register however the C spells it. `kind` is ")
-                .append("`data` (a reference), `pointer` (the value of a literal-pool word, the word in ")
-                .append("`via`), or `load`/`store` (memory the decompiled code reads or writes).\n");
+        sb.append("- Every address a function uses is on its `// refs:` line, however the C ")
+                .append("spells it: data references, memory the code reads and writes (so a register ")
+                .append("reached as base + offset is there as itself), and literal-pool values, written ")
+                .append("`0x40020000<0x08016e58` (the value, then the pool word it was loaded from). ")
+                .append("`grep -rn 0x40003c0c modules/` finds every function that touches a register; ")
+                .append("the nearest `// fn:` line above a hit names the function.\n");
         if (strippedBinary) {
             sb.append("\n**This binary is stripped — do not search for function names.** ")
                     .append("Almost every name here is Ghidra's own `FUN_<addr>`, so grepping ")
@@ -93,7 +94,7 @@ public final class CheckoutGuidance {
                     .append("resweep; the loads then fold into constants or the labels at their ")
                     .append("targets (measured on one firmware: 1123 pool reads became 4). A register ")
                     .append("reached as base + offset still prints as the base plus `0xc0c`; its own ")
-                    .append("address is on the block's `// refs:` line and in `index/addresses.tsv`.\n");
+                    .append("address is on the block's `// refs:` line.\n");
         }
 
         sb.append("\n## Compartments\n\n");

@@ -88,7 +88,8 @@ public class FunctionBundleService {
                                + "addresses the function uses: data references, the values of "
                                + "literal-pool words, and the memory the decompiled code reads and "
                                + "writes, so a register reached as base + offset is listed by its "
-                               + "own address; asking for refs decompiles). "
+                               + "own address; a pool value is written value<word; asking for refs "
+                               + "decompiles). "
                                + "Omit or leave empty for the full bundle.") String fieldsParam,
             @Param(value = "include_call_context", defaultValue = "true",
                    description = "Include each caller's decompiled call-site line. Costs one "

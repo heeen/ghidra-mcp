@@ -519,7 +519,7 @@ renderer writes every index and README, from `index/by-address.tsv` and the grou
 sweep kept in `index/partitions.json`. A full reconcile also repairs: a deleted or
 hand-edited `.c` file, README, index or `AGENTS.md` comes back as the sweep wrote it (a block
 whose text no longer matches its `// fp:` is rebuilt). A tree swept before
-`partitions.json` and `addresses.tsv` existed cannot be reproduced without the sweep's own
+`partitions.json` existed cannot be reproduced without the sweep's own
 work, so a full reconcile of one runs a sweep instead and says so (`sweep_queued`).
 Re-partitioning is the one thing a reconcile does not do: functions added since the sweep
 join the compartment that contains their address; resweep to regroup.
@@ -559,7 +559,7 @@ field. The header is one `// key: value` line per fact, so each greps on its own
 // plate_issue: missing Parameters section
 // calls: read_status@08002000             (name@address, sorted, capped at 50 "+N more")
 // callers: led_on@08005000
-// refs: 0x08004100 0x40003c0c 0x40020000  (addresses used: data refs, literal-pool values, memory read/written)
+// refs: 0x08004100 0x40003c0c 0x40020000<0x08004100  (every address used; value<pool word)
 // param: #0 uint * port @r0:4
 // local: int extraout_r0 @r0 [phantom]
 // label: +0x14 done (USER_DEFINED)
@@ -577,22 +577,21 @@ Typical greps: `// callers:.*led_on`, `// refs:.*0x40020000`, `// tags:.*hal`,
 (it costs a decompile per caller, and every caller's own block is in the tree);
 `callgraph.tsv` lists every call edge by the same rule as the `calls:` lines.
 
-`index/addresses.tsv` has one row per address a function uses, with how it gets there:
+Every address a function uses is on its `// refs:` line, however the C spells it: data
+references, memory the decompiled code reads or writes (so a register reached as
+base + offset, which the C prints as the base plus `0xc`, is there as itself), and the values
+of literal-pool words, written `value<word`:
 
 ```text
-address     kind     via         function    entry
-0x40003c0c  store                dma_start   08002000
-0x40020000  pointer  0x08016e58  gpio_init   08001000
+// refs: 0x08016e58 0x40003c0c 0x40020000<0x08016e58
 ```
 
-`data` is a reference, `pointer` the value of a literal-pool word (the word in `via`), and
-`load`/`store` memory the decompiled code reads or writes. `grep 0x40003c0c
-index/addresses.tsv` names every function that touches a register, including one reached as
-base + offset, which the C prints as the base plus `0xc`. The `// refs:` line carries the same
-addresses (capped at 200), so a grep over the tree hits the block too.
+`grep -rn 0x40003c0c modules/` finds every function that touches that register; the nearest
+`// fn:` line above a hit names it. `0x40020000<0x08016e58` says the base was loaded from
+pool word `0x08016e58`, the word to retype or label. The list is not capped.
 
 Addresses are bare hex in the program's default space and `space:hex` in any other
-(`// fn: init @ OVL:00001000`), in the headers, both TSVs, the file names
+(`// fn: init @ OVL:00001000`), in the headers, the TSVs, the file names
 (`OVL_00001000.c`) and the `uri:` line, the same spelling `get_functions` uses.
 
 Grep finds the hit; the `uri:` line is how you pull call-site context afterwards. Do not
@@ -616,10 +615,9 @@ searching the files.
    `set_memory_block(block="ram", write=false)`, then resweep. Measured on a 339-function
    firmware: pool reads went from 1123 to 4, and the bases printed as constants or the
    labels at their targets (`(uint *)&GPIOC_CFGR`). A register reached as base + offset
-   still prints as the base plus the offset; grep its own address in
-   `index/addresses.tsv` or the `// refs:` lines, which take it from the decompiled code.
-   Those `load`/`store` rows need the pool words read-only too: a writable word can change
-   at run time, so the decompiler does not fold it.
+   still prints as the base plus the offset; its own address is on the block's `// refs:`
+   line, taken from the decompiled code. That needs the pool words read-only too: a writable
+   word can change at run time, so the decompiler does not fold it.
 
 ## Shared projects: check out before you edit
 

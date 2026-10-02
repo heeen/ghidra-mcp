@@ -209,7 +209,6 @@ public final class SweepJob implements Runnable {
 
             SweepAccum accum = new SweepAccum();
             List<IndexRow> indexRows = new ArrayList<>(total);
-            List<AddressIndex.Row> addressRows = new ArrayList<>();
             long sliceStartNs = System.nanoTime();
             int functionsSinceAnalysisCheck = 0;
 
@@ -262,7 +261,6 @@ public final class SweepJob implements Runnable {
                     writePacked(packer.add(addrHex, emit.text()));
                     String relativeFile = packer.currentPath();
 
-                    addressRows.addAll(emit.addresses());
                     indexRows.add(new IndexRow(
                             addrHex,
                             func.getName(),
@@ -297,7 +295,6 @@ public final class SweepJob implements Runnable {
             PartitionMeta meta = PartitionMeta.of(cascade, partitions, scope,
                     ctx.literals().functionsWithStrings());
             meta.write(checkout);
-            AddressIndex.write(checkout, addressRows);
             List<TreeFiles.IndexEntry> entries = new ArrayList<>(indexRows.size());
             for (IndexRow r : indexRows) {
                 entries.add(new TreeFiles.IndexEntry(r.addressHex(), r.name(), r.slug(),
@@ -444,7 +441,7 @@ public final class SweepJob implements Runnable {
         FunctionBlock.Built block = FunctionBlock.build(func, decomp,
                 checkout.config().decompileTimeoutSeconds(), cancel.monitor(), part.slug(),
                 part.method(), part.confidence(), evidenceBacked, modNumber, program.getName());
-        return new FunctionEmit(block.text(), block.failed(), block.addresses());
+        return new FunctionEmit(block.text(), block.failed());
     }
 
     private static long functionSize(Function func) {
@@ -859,7 +856,7 @@ public final class SweepJob implements Runnable {
         }
     }
 
-    private record FunctionEmit(String text, boolean failed, List<AddressIndex.Row> addresses) {}
+    private record FunctionEmit(String text, boolean failed) {}
 
     private record IndexRow(
             String addressHex,

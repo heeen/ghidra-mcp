@@ -90,8 +90,7 @@ public final class TreeReconciler {
         // grouping and the address index were kept cannot be brought there without the
         // sweep's own work (partitioning, a decompile of every function), so do that instead.
         PartitionMeta meta = PartitionMeta.read(checkout);
-        if (addresses == null && (meta == null || !Files.isRegularFile(
-                checkout.root().path().resolve(CheckoutLayout.addressesTsv())))) {
+        if (addresses == null && meta == null) {
             CheckoutRegistry.getInstance().requestSweep(checkout, program);
             return ReconcileResult.sweepQueued(System.currentTimeMillis() - started,
                     checkout.progress().splicedSinceSweep());
@@ -167,7 +166,6 @@ public final class TreeReconciler {
 
             Set<String> touchedSlugs = new LinkedHashSet<>();
             Set<String> seedForNeighbours = new LinkedHashSet<>();
-            Map<String, List<AddressIndex.Row>> addressRows = new LinkedHashMap<>();
             // Rebuilt blocks, by key, waiting to be packed into their compartment's files.
             Map<String, String> rebuilt = new LinkedHashMap<>();
             Map<String, String> oldFile = new LinkedHashMap<>();
@@ -198,7 +196,6 @@ public final class TreeReconciler {
                 FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
                         partitionOf(existing, row, meta), mod, timeout, program.getName());
                 decompileCalls++;
-                addressRows.put(hex, built.addresses());
                 working.put(hex, row.withIfp(InputFingerprint.of(func)).withName(func.getName()));
                 if (existing != null && BlockSplicer.sameBlock(existing, built.text())) {
                     acc.unchanged.add(hex);
@@ -227,7 +224,6 @@ public final class TreeReconciler {
                                 placement.confidence(), placement.evidenceBacked()),
                         mod, timeout, program.getName());
                 decompileCalls++;
-                addressRows.put(hex, built.addresses());
                 working.put(hex, new TreeFiles.IndexEntry(hex, func.getName(),
                         placement.slug(), "", placement.evidenceBacked(), InputFingerprint.of(func)));
                 rebuilt.put(hex, built.text());
@@ -248,7 +244,7 @@ public final class TreeReconciler {
             Repack repack = new Repack(checkout, program, meta, working, rebuilt, oldFile, tree,
                     mod, timeout);
             for (String slug : touchedSlugs) {
-                repack.compartment(slug, acc, addressRows);
+                repack.compartment(slug, acc);
             }
             decompileCalls += repack.decompileCalls;
             repack.close();
@@ -259,10 +255,7 @@ public final class TreeReconciler {
             // outOfScope may have recounted the scope into partitions.json.
             DerivedFiles.writeAll(checkout, program, finalRows,
                     outOfScope.isEmpty() ? meta : PartitionMeta.read(checkout), ctx);
-            Set<String> inTree = new java.util.HashSet<>();
-            finalRows.forEach(r -> inTree.add(CheckoutAddresses.normalize(r.addressHex())));
-            AddressIndex.update(checkout, addressRows);
-            AddressIndex.retain(checkout, inTree);
+
         } finally {
             if (decomp != null) {
                 try {
@@ -574,7 +567,7 @@ public final class TreeReconciler {
 
         /**
          * A full pass that found a tree it cannot rebuild exactly (swept before
-         * {@code partitions.json} or {@code addresses.tsv} were kept) and queued a sweep.
+         * {@code partitions.json} was kept) and queued a sweep.
          */
         static ReconcileResult sweepQueued(long elapsedMs, int splicedSinceSweep) {
             return new ReconcileResult(List.of(), List.of(), List.of(), List.of(), List.of(),
@@ -626,8 +619,8 @@ public final class TreeReconciler {
             out.put("spliced_since_sweep", splicedSinceSweep);
             if (sweepQueued) {
                 out.put("sweep_queued", true);
-                out.put("sweep_reason", "the tree predates index/partitions.json or "
-                        + "index/addresses.tsv, which only a sweep can write; reconciling would "
+                out.put("sweep_reason", "the tree predates index/partitions.json, "
+                        + "which only a sweep can write; reconciling would "
                         + "leave a tree a fresh sweep would not produce");
             }
             if (!failed.isEmpty()) {
@@ -727,8 +720,7 @@ public final class TreeReconciler {
             this.timeout = timeout;
         }
 
-        void compartment(String slug, Accumulators acc, Map<String, List<AddressIndex.Row>> addressRows)
-                throws IOException {
+        void compartment(String slug, Accumulators acc) throws IOException {
             List<String> keys = new ArrayList<>();
             working.forEach((k, r) -> {
                 if (slug.equals(r.slug())) {
@@ -744,7 +736,7 @@ public final class TreeReconciler {
                 }
                 // Missing, or no longer the block that was written: rebuild it.
                 if (text == null || !FunctionBlock.intact(text)) {
-                    text = restore(key, text, acc, addressRows);
+                    text = restore(key, text, acc);
                 }
                 if (text != null) {
                     blocks.add(Map.entry(key, text));
@@ -775,8 +767,7 @@ public final class TreeReconciler {
         }
 
         /** Rebuild a block the files lost. */
-        private String restore(String key, String damaged, Accumulators acc,
-                Map<String, List<AddressIndex.Row>> addressRows) throws IOException {
+        private String restore(String key, String damaged, Accumulators acc) throws IOException {
             Function func = CheckoutAddresses.function(program, key);
             TreeFiles.IndexEntry row = working.get(key);
             if (func == null || row == null) {
@@ -790,7 +781,6 @@ public final class TreeReconciler {
             FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
                     partitionOf(damaged, row, meta), mod, timeout, program.getName());
             decompileCalls++;
-            addressRows.put(key, built.addresses());
             acc.replaced.add(key);
             return built.text();
         }

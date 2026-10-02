@@ -234,14 +234,14 @@ client's own built-in tools, so the search costs no permission surface.
     after splices. Sweep 5.5 s → 6.0 s, tree 844 KB → 1.3 MB.
   - **A register greps by its own address.** `refs` (and so every block's `// refs:` line)
     adds the memory the decompiled code reads and writes, so a register reached as
-    base + offset is listed as itself, not only as the base the C prints. The new
-    `index/addresses.tsv` lists every address each function uses, uncapped, with how it gets
-    there (`data`, `pointer` with the literal-pool word in `via`, `load`, `store`). The sweep
-    writes it and every pass that rewrites blocks keeps it current. On the 339-function
-    firmware with flash read-only: 9,386 rows, 76 peripheral addresses, `grep 0x40003c0c`
-    finds both SPI3 DMA functions where a grep over the tree found nothing; 3 registers are
-    reachable only through the decompiled code. Asking `get_functions` for `refs` now
-    decompiles.
+    base + offset is listed as itself, not only as the base the C prints. A literal-pool
+    value carries the word it was loaded from (`0x40020000<0x08016e58`), and the list is no
+    longer capped (at 200). On the 339-function firmware with flash read-only,
+    `grep 0x40003c0c` over the tree finds both SPI3 DMA functions where it found nothing;
+    3 registers are reachable only through the decompiled code. Asking `get_functions` for
+    `refs` now decompiles. (A separate `index/addresses.tsv` was tried and dropped: at
+    448 KB, a third of the tree, it repeated the `refs:` lines and added only the pool word,
+    which the line now carries.)
   - **An edit no longer strips a compartment's README.** The reconciler and the narrower
     wrote their own short README, so the first edit that inserted, removed or replaced a
     function dropped the compartment's method, confidence, interpretation and evidence
@@ -272,8 +272,7 @@ client's own built-in tools, so the search costs no permission surface.
     were two writers: the reconciler kept its own file layout (insert into the covering
     file, split on overflow, rename on a new first function), its own thinner
     `modules/index.md` ("full strategy log rewritten on next sweep") and module READMEs, and
-    a full reconcile of a tree swept before `addresses.tsv` existed rewrote all 339 blocks
-    and left the index missing. Now:
+    a full reconcile could leave a tree a sweep would not write. Now:
     - `CompartmentPacker` is the one layout rule; the sweep packs as it decompiles, the
       reconciler re-packs each touched compartment (every compartment on a full pass) from
       its blocks. Neighbour header patches go through it too.
@@ -287,15 +286,16 @@ client's own built-in tools, so the search costs no permission surface.
       and the scope counts are recomputed as the sweep counts them. The separate narrower,
       `BlockSplicer.refresh` (no caller since the reconciler took over) and three other
       copies of the packing and index-writing logic are gone.
-    - A full reconcile of a tree that predates `partitions.json` or `addresses.tsv` runs a
-      sweep and reports `sweep_queued`; adoption rewrites `checkout.json` for the tree's new
-      id.
+    - A full reconcile of a tree that predates `partitions.json` runs a sweep and reports
+      `sweep_queued`; adoption rewrites `checkout.json` for the tree's new id, and adopting
+      a checkout already registered in this session reconciles too (its files may have
+      been replaced underneath; on an intact tree that writes and decompiles nothing).
 
     - A sweep updates the tree in place: a file whose content is unchanged apart from the
       `dts`/`mod` stamps is not rewritten, and files no row points at are deleted at the end
       instead of the tree being wiped first (readers see the old tree, not an empty one,
       while it runs). Measured on the stealth session's 2760-function tree: a resweep of an
-      unchanged program rewrote all 329 files; now 0 of 69 on the firmware.
+      unchanged program rewrote all 329 files; now none on the firmware.
     - One writer per tree at a time (`Checkout.treeLock`, held by sweeps and reconciles): a
       refresh racing the full reconcile an adoption queues left deleted files unrestored.
     - The dirty queue no longer waits on the executor it shares with sweeps. A drain that

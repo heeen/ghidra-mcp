@@ -753,9 +753,13 @@ public class CheckoutService {
         Long reconciledAt = statusFile.reconciledAtModificationNumber();
         long liveMod = program.getModificationNumber();
         if (existing != null) {
-            // Already tracked in this session: its in-memory state is the truth, and the
-            // tree has been kept current by the observer. Re-creating only re-reads config.
+            // Already tracked in this session, but the files may have been replaced under it
+            // (measured: a tree copied over a registered root kept the old root in AGENTS.md
+            // while status said in_sync). A full reconcile of an intact tree writes nothing
+            // and decompiles nothing, so check rather than trust.
+            writeCheckoutJson(checkout);
             CheckoutRegistry.getInstance().ensureObserver(program);
+            CheckoutRegistry.getInstance().dirtyQueue().markNeedsReconcile(checkout.id());
             Map<String, Object> out = statusMap(checkout);
             out.put("adopted", true);
             out.put("files_on_disk", countFiles(derivedRoot));
