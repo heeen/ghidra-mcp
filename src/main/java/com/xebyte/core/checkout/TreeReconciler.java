@@ -71,6 +71,16 @@ public final class TreeReconciler {
             Checkout checkout, Program program, Set<String> addresses) throws IOException {
         Objects.requireNonNull(checkout, "checkout");
         Objects.requireNonNull(program, "program");
+        checkout.treeLock().lock();
+        try {
+            return reconcileLocked(checkout, program, addresses);
+        } finally {
+            checkout.treeLock().unlock();
+        }
+    }
+
+    private static ReconcileResult reconcileLocked(
+            Checkout checkout, Program program, Set<String> addresses) throws IOException {
         long started = System.currentTimeMillis();
         // What the tree will reflect when this pass ends; edits arriving meanwhile queue
         // another pass, so claiming a later number would overstate it.
@@ -744,7 +754,7 @@ public final class TreeReconciler {
             for (CompartmentPacker.PackedFile f : CompartmentPacker.pack(slug,
                     checkout.config().maxFileBytes(), program.getDefaultPointerSize(), blocks)) {
                 produced.add(f.path());
-                if (DerivedFiles.writeIfChanged(checkout, f.path(), f.body())) {
+                if (DerivedFiles.writeIfContentChanged(checkout, f.path(), f.body())) {
                     acc.filesWritten++;
                 }
                 for (String key : f.keys()) {

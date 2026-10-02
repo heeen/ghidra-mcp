@@ -83,7 +83,7 @@ public final class AddressIndex {
 
     /** Write the whole index (the sweep). */
     public static void write(Checkout checkout, Collection<Row> rows) throws IOException {
-        checkout.root().writeFile(Path.of(CheckoutLayout.addressesTsv()), render(rows));
+        DerivedFiles.writeIfChanged(checkout, CheckoutLayout.addressesTsv(), render(rows));
     }
 
     /**

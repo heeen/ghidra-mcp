@@ -132,29 +132,29 @@ public class DirtyQueueTest {
         assertEquals(Set.of("00100000"), reconciles.get(0));
     }
 
+    /**
+     * Found live: drains and sweeps share one thread, and a drain that waited for a QUEUED
+     * sweep kept it from ever starting. The drain now hands the thread back, keeps the work,
+     * and the sweep re-arms it when it ends.
+     */
     @Test
-    public void sweepWinsOverDirtyDrain() throws Exception {
+    public void aDrainDuringASweepYieldsTheThreadAndResumesAfterIt() throws Exception {
         sweepActive.set(true);
         queue.markDirty(checkout.id(), List.of("00100000"));
+        clock.addAndGet(DirtyQueue.DEBOUNCE_MS + 10);
 
-        AtomicBoolean finished = new AtomicBoolean(false);
-        Thread runner = new Thread(() -> {
-            queued.get(0).run();
-            finished.set(true);
-        }, "test-drain-sweep");
-        runner.start();
+        queued.get(0).run();   // returns at once: the thread is free for the sweep
 
-        for (int i = 0; i < 5; i++) {
-            clock.addAndGet(DirtyQueue.DEBOUNCE_MS + 10);
-            Thread.sleep(40);
-        }
         assertTrue(reconciles.isEmpty());
-        assertTrue(runner.isAlive());
+        assertTrue("the work is kept", queue.hasPending(checkout.id()));
 
         sweepActive.set(false);
-        runDrainAdvancingClock(runner, finished::get);
+        queue.resume(checkout.id());
+        assertEquals("resume arms a new drain", 2, queued.size());
+        clock.addAndGet(DirtyQueue.DEBOUNCE_MS + 10);
+        queued.get(1).run();
 
-        assertEquals(1, reconciles.size());
+        assertEquals(List.of(Set.of("00100000")), reconciles);
     }
 
     @Test

@@ -25,6 +25,19 @@ public final class Checkout {
     /** Names given to symbols since the last save: what a discarded session may leave behind. */
     private final java.util.Set<String> namesSinceSave = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * Held by every writer of the tree (a sweep, a reconcile) for its whole run. Each reads the
+     * index and files, computes, then writes; two at once each work from a view the other is
+     * changing, and the later write undoes the earlier one. Measured: a refresh racing the
+     * full reconcile an adoption queues left deleted files unrestored.
+     */
+    private final java.util.concurrent.locks.ReentrantLock treeLock =
+            new java.util.concurrent.locks.ReentrantLock();
+
+    public java.util.concurrent.locks.ReentrantLock treeLock() {
+        return treeLock;
+    }
+
     public Checkout(CheckoutKey key, String programName, CheckoutConfig config, CheckoutRoot root) {
         this.key = Objects.requireNonNull(key, "key");
         this.programName = Objects.requireNonNull(programName, "programName");
