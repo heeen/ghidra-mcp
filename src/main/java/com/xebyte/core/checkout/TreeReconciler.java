@@ -4,7 +4,6 @@ import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.partition.PartitionContext;
 import ghidra.app.decompiler.DecompInterface;
-import ghidra.app.decompiler.DecompileOptions;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -15,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,7 +22,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /**
@@ -77,12 +76,23 @@ public final class TreeReconciler {
         // another pass, so claiming a later number would overstate it.
         long reconcilingAt = program.getModificationNumber();
 
+        // A full pass must leave the tree a fresh sweep would write. A tree swept before the
+        // grouping and the address index were kept cannot be brought there without the
+        // sweep's own work (partitioning, a decompile of every function), so do that instead.
+        PartitionMeta meta = PartitionMeta.read(checkout);
+        if (addresses == null && (meta == null || !Files.isRegularFile(
+                checkout.root().path().resolve(CheckoutLayout.addressesTsv())))) {
+            CheckoutRegistry.getInstance().requestSweep(checkout, program);
+            return ReconcileResult.sweepQueued(System.currentTimeMillis() - started,
+                    checkout.progress().splicedSinceSweep());
+        }
+
         Path indexPath = checkout.root().path().resolve(CheckoutLayout.byAddressTsv());
-        List<CheckoutTreeNarrower.IndexEntry> indexRows = Files.isRegularFile(indexPath)
-                ? CheckoutTreeNarrower.readIndex(indexPath)
+        List<TreeFiles.IndexEntry> indexRows = Files.isRegularFile(indexPath)
+                ? TreeFiles.readIndex(indexPath)
                 : List.of();
-        Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex = new LinkedHashMap<>();
-        for (CheckoutTreeNarrower.IndexEntry row : indexRows) {
+        Map<String, TreeFiles.IndexEntry> indexByHex = new LinkedHashMap<>();
+        for (TreeFiles.IndexEntry row : indexRows) {
             indexByHex.put(CheckoutAddresses.normalize(row.addressHex()), row);
         }
 
@@ -96,6 +106,11 @@ public final class TreeReconciler {
         }
 
         WorkPlan plan = planWork(indexByHex, programByHex, addresses);
+        // A full pass also drops what the current exclusions put out of scope: a fresh sweep
+        // would not write it. That is all narrowing a checkout's config is.
+        Set<String> outOfScope = addresses == null
+                ? outOfScope(checkout, indexByHex, programByHex, evaluator, meta)
+                : Set.of();
 
         Accumulators acc = new Accumulators();
         checkout.setProgress(checkout.progress().withLastError(null));
@@ -104,7 +119,7 @@ public final class TreeReconciler {
         DecompInterface decomp = null;
         int decompileCalls = 0;
         try {
-            Map<String, CheckoutTreeNarrower.IndexEntry> working =
+            Map<String, TreeFiles.IndexEntry> working =
                     new LinkedHashMap<>(indexByHex);
 
             // Pre-filter full-reconcile replaces by ifp so an unchanged tree
@@ -112,7 +127,10 @@ public final class TreeReconciler {
             Set<String> replaceNow = new LinkedHashSet<>();
             if (addresses == null) {
                 for (String hex : plan.replace) {
-                    CheckoutTreeNarrower.IndexEntry row = working.get(hex);
+                    if (outOfScope.contains(hex)) {
+                        continue;
+                    }
+                    TreeFiles.IndexEntry row = working.get(hex);
                     Function func = programByHex.get(hex);
                     if (row == null || func == null) {
                         acc.failed.add(hex);
@@ -136,53 +154,50 @@ public final class TreeReconciler {
             }
             long mod = program.getModificationNumber();
             int timeout = checkout.config().decompileTimeoutSeconds();
-            int pointerSize = Math.max(1, program.getDefaultPointerSize());
-            int maxFileBytes = checkout.config().maxFileBytes();
 
             Set<String> touchedSlugs = new LinkedHashSet<>();
             Set<String> seedForNeighbours = new LinkedHashSet<>();
             Map<String, List<AddressIndex.Row>> addressRows = new LinkedHashMap<>();
+            // Rebuilt blocks, by key, waiting to be packed into their compartment's files.
+            Map<String, String> rebuilt = new LinkedHashMap<>();
+            Map<String, String> oldFile = new LinkedHashMap<>();
+            working.forEach((k, r) -> oldFile.put(k, r.file()));
+            TreeText tree = new TreeText(checkout);
 
-            // Removes first — frees file budget before inserts land in the same file.
-            for (String hex : plan.remove) {
-                CheckoutTreeNarrower.IndexEntry row = working.get(hex);
+            Set<String> removeNow = new LinkedHashSet<>(plan.remove);
+            removeNow.addAll(outOfScope);
+            for (String hex : removeNow) {
+                TreeFiles.IndexEntry row = working.remove(hex);
                 if (row == null) {
                     continue;
                 }
-                RemoveOutcome out = removeFromTree(
-                        checkout, working, hex, row, pointerSize);
                 acc.removed.add(hex);
-                acc.filesWritten += out.filesWritten;
-                acc.filesDeleted += out.filesDeleted;
                 touchedSlugs.add(row.slug());
                 seedForNeighbours.add(hex);
             }
 
             for (String hex : replaceNow) {
-                CheckoutTreeNarrower.IndexEntry row = working.get(hex);
+                TreeFiles.IndexEntry row = working.get(hex);
                 Function func = programByHex.get(hex);
                 if (row == null || func == null) {
                     acc.failed.add(hex);
                     acc.failedReasons.add("replace_missing");
                     continue;
                 }
-                BlockSplicer.PartitionMeta part = partitionMetaForReplace(checkout, row);
-                FunctionBlock.Built built = BlockSplicer.decompileBlock(
-                        decomp, func, part, mod, timeout, program.getName());
+                String existing = tree.block(row.file(), hex);
+                FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
+                        partitionOf(existing, row, meta), mod, timeout, program.getName());
                 decompileCalls++;
                 addressRows.put(hex, built.addresses());
-                ReplaceOutcome out = replaceInTree(checkout, working, hex, row, func, built.text());
-                if (out.skipped()) {
+                working.put(hex, row.withIfp(InputFingerprint.of(func)).withName(func.getName()));
+                if (existing != null && BlockSplicer.sameBlock(existing, built.text())) {
                     acc.unchanged.add(hex);
-                } else if (out.ok()) {
-                    acc.replaced.add(hex);
-                    acc.filesWritten += out.filesWritten();
-                    touchedSlugs.add(row.slug());
-                    seedForNeighbours.add(hex);
-                } else {
-                    acc.failed.add(hex);
-                    acc.failedReasons.add(out.reason());
+                    continue;
                 }
+                rebuilt.put(hex, built.text());
+                acc.replaced.add(hex);
+                touchedSlugs.add(row.slug());
+                seedForNeighbours.add(hex);
             }
 
             for (String hex : plan.insert) {
@@ -197,42 +212,47 @@ public final class TreeReconciler {
                     // Out of scope under current exclusions — tree must not claim it.
                     continue;
                 }
-                BlockSplicer.PartitionMeta part = new BlockSplicer.PartitionMeta(
-                        placement.slug(), placement.method(), placement.confidence(),
-                        placement.evidenceBacked());
-                FunctionBlock.Built built = BlockSplicer.decompileBlock(
-                        decomp, func, part, mod, timeout, program.getName());
+                FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
+                        new BlockSplicer.PartitionMeta(placement.slug(), placement.method(),
+                                placement.confidence(), placement.evidenceBacked()),
+                        mod, timeout, program.getName());
                 decompileCalls++;
-                InsertOutcome out = insertIntoTree(
-                        checkout, working, func, built.text(), placement,
-                        pointerSize, maxFileBytes);
-                if (out.ok) {
-                    addressRows.put(hex, built.addresses());
-                    acc.inserted.add(hex);
-                    acc.filesWritten += out.filesWritten;
-                    acc.filesSplit += out.filesSplit;
-                    touchedSlugs.add(placement.slug());
-                    seedForNeighbours.add(hex);
-                } else {
-                    acc.failed.add(hex);
-                    acc.failedReasons.add(out.reason);
-                }
+                addressRows.put(hex, built.addresses());
+                working.put(hex, new TreeFiles.IndexEntry(hex, func.getName(),
+                        placement.slug(), "", placement.evidenceBacked(), InputFingerprint.of(func)));
+                rebuilt.put(hex, built.text());
+                acc.inserted.add(hex);
+                touchedSlugs.add(placement.slug());
+                seedForNeighbours.add(hex);
             }
 
-            // Neighbours of every structural change need header-only calls/callers.
-            acc.filesWritten += patchNeighbourHeaders(
-                    checkout, program, ctx, working, seedForNeighbours, acc);
+            // Neighbours of every change need their calls/callers header lines patched.
+            patchNeighbourHeaders(program, ctx, working, tree, seedForNeighbours, rebuilt,
+                    touchedSlugs, acc);
 
-            if (!touchedSlugs.isEmpty() || !acc.replaced.isEmpty()
-                    || !acc.inserted.isEmpty() || !acc.removed.isEmpty()) {
-                List<CheckoutTreeNarrower.IndexEntry> finalRows =
-                        new ArrayList<>(working.values());
-                CheckoutTreeNarrower.rebuildIndexes(checkout, finalRows, touchedSlugs);
-                AddressIndex.update(checkout, addressRows);
-                checkout.root().writeFile(
-                        Path.of(CheckoutLayout.callgraphTsv()),
-                        SweepJob.renderCallgraphTsv(ctx));
+            // A full pass re-packs every compartment: whatever the files say now, they end as
+            // the sweep would lay these blocks out, and a block missing from them is rebuilt.
+            if (addresses == null) {
+                working.values().forEach(r -> touchedSlugs.add(r.slug()));
             }
+            Repack repack = new Repack(checkout, program, meta, working, rebuilt, oldFile, tree,
+                    mod, timeout);
+            for (String slug : touchedSlugs) {
+                repack.compartment(slug, acc, addressRows);
+            }
+            decompileCalls += repack.decompileCalls;
+            repack.close();
+
+            // Every pass ends with the derived files rendered as the sweep renders them, so
+            // whatever got the tree here, it reads the same. Unchanged files are not rewritten.
+            List<TreeFiles.IndexEntry> finalRows = new ArrayList<>(working.values());
+            // outOfScope may have recounted the scope into partitions.json.
+            DerivedFiles.writeAll(checkout, program, finalRows,
+                    outOfScope.isEmpty() ? meta : PartitionMeta.read(checkout), ctx);
+            Set<String> inTree = new java.util.HashSet<>();
+            finalRows.forEach(r -> inTree.add(CheckoutAddresses.normalize(r.addressHex())));
+            AddressIndex.update(checkout, addressRows);
+            AddressIndex.retain(checkout, inTree);
         } finally {
             if (decomp != null) {
                 try {
@@ -264,7 +284,7 @@ public final class TreeReconciler {
         return ReconcileResult.of(
                 acc.replaced, acc.inserted, acc.removed, acc.headerPatched, acc.unchanged,
                 acc.failed, acc.failedReasons,
-                acc.filesWritten, acc.filesSplit, acc.filesDeleted,
+                acc.filesWritten, acc.filesDeleted,
                 decompileCalls, System.currentTimeMillis() - started,
                 checkout.progress().splicedSinceSweep());
     }
@@ -290,9 +310,9 @@ public final class TreeReconciler {
         }
         try (java.util.stream.Stream<Path> files = Files.walk(modules)) {
             for (Path file : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".c"))::iterator) {
-                for (String chunk : CheckoutTreeNarrower.splitFunctionChunks(
+                for (String chunk : TreeFiles.splitFunctionChunks(
                         Files.readString(file, StandardCharsets.UTF_8))) {
-                    String hex = CheckoutTreeNarrower.addressFromChunk(chunk);
+                    String hex = TreeFiles.addressFromChunk(chunk);
                     if (hex != null && bodyMatches(chunk, any)) {
                         found.add(CheckoutAddresses.normalize(hex));
                     }
@@ -319,7 +339,7 @@ public final class TreeReconciler {
      * ifp skip happens later at replace time only for full mode.
      */
     public static WorkPlan planWork(
-            Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex,
+            Map<String, TreeFiles.IndexEntry> indexByHex,
             Map<String, Function> programByHex,
             Set<String> addresses) {
 
@@ -381,14 +401,14 @@ public final class TreeReconciler {
     public static Placement place(
             Function func,
             Program program,
-            Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex) {
+            Map<String, TreeFiles.IndexEntry> indexByHex) {
         Address entry = func.getEntryPoint();
         Optional<String> pinned = ModuleOverrides.slugFor(program, entry);
         if (pinned.isPresent()) {
             // Inherit confidence from an existing member of that slug when present;
             // a brand-new slug still records pinned/1.0 — the pin IS the evidence.
             double conf = 1.0;
-            for (CheckoutTreeNarrower.IndexEntry row : indexByHex.values()) {
+            for (TreeFiles.IndexEntry row : indexByHex.values()) {
                 if (pinned.get().equals(row.slug())) {
                     conf = 1.0;
                     break;
@@ -405,7 +425,7 @@ public final class TreeReconciler {
      * Method {@link #METHOD_CONTAINMENT}, {@code evidence_backed=false}.
      */
     public static Placement placeByContainment(
-            String addressHex, Map<String, CheckoutTreeNarrower.IndexEntry> indexByHex) {
+            String addressHex, Map<String, TreeFiles.IndexEntry> indexByHex) {
         String want = CheckoutAddresses.normalize(addressHex);
         long addr = CheckoutAddresses.offset(want);
         // Offsets compare only within one address space; an overlay function placed by a
@@ -416,7 +436,7 @@ public final class TreeReconciler {
 
         Map<String, long[]> spans = new LinkedHashMap<>();
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (CheckoutTreeNarrower.IndexEntry row : indexByHex.values()) {
+        for (TreeFiles.IndexEntry row : indexByHex.values()) {
             if (anyInSpace && !CheckoutAddresses.space(row.addressHex()).equals(space)) {
                 continue;
             }
@@ -467,395 +487,49 @@ public final class TreeReconciler {
         return new Placement("b000", METHOD_CONTAINMENT, 0.1, false);
     }
 
-    /**
-     * Insert {@code newBlock} into {@code fileBody} in address order.
-     * Pure — offline tests pin the ordering.
-     */
-    public static String insertBlockInAddressOrder(String fileBody, String newBlock) {
-        String want = CheckoutTreeNarrower.addressFromChunk(newBlock);
-        if (want == null) {
-            return (fileBody == null ? "" : fileBody) + ensureBlockSeparator(newBlock);
-        }
-        String wantNorm = CheckoutAddresses.normalize(want);
-        List<String> chunks = CheckoutTreeNarrower.splitFunctionChunks(
-                fileBody == null ? "" : fileBody);
-        List<String> out = new ArrayList<>();
-        boolean inserted = false;
-        for (String chunk : chunks) {
-            String addr = CheckoutTreeNarrower.addressFromChunk(chunk);
-            if (!inserted && addr != null
-                    && CheckoutAddresses.normalize(addr).compareTo(wantNorm) > 0) {
-                out.add(trimTrailingExtraBlanks(newBlock));
-                inserted = true;
-            }
-            out.add(chunk);
-        }
-        if (!inserted) {
-            out.add(trimTrailingExtraBlanks(newBlock));
-        }
-        return joinChunks(out);
-    }
-
-    /**
-     * Remove the block at {@code addressHex}. Returns empty string when the
-     * file empties (caller deletes).
-     */
-    public static String removeBlockFromFile(String fileBody, String addressHex) {
-        return CheckoutTreeNarrower.rewritePartitionFile(
-                fileBody, Set.of(CheckoutAddresses.normalize(addressHex)));
-    }
-
-    /**
-     * Split an over-budget file body into N file bodies under the same rules
-     * as {@link SweepJob#assignBlocksToFiles}. Returns one body per file; the
-     * caller names each after its first address.
-     */
-    public static List<String> splitFileBody(
-            String fileBody, int maxFileBytes, int maxFunctionsPerFile) {
-        List<String> chunks = CheckoutTreeNarrower.splitFunctionChunks(
-                fileBody == null ? "" : fileBody);
-        if (chunks.isEmpty()) {
-            return List.of();
-        }
-        int[] sizes = new int[chunks.size()];
-        for (int i = 0; i < chunks.size(); i++) {
-            sizes[i] = SweepJob.encodedBlockBytes(chunks.get(i));
-        }
-        int[] assign = SweepJob.assignBlocksToFiles(
-                sizes, maxFileBytes, maxFunctionsPerFile);
-        int maxIdx = 0;
-        for (int a : assign) {
-            maxIdx = Math.max(maxIdx, a);
-        }
-        List<List<String>> buckets = new ArrayList<>(maxIdx + 1);
-        for (int i = 0; i <= maxIdx; i++) {
-            buckets.add(new ArrayList<>());
-        }
-        for (int i = 0; i < chunks.size(); i++) {
-            buckets.get(assign[i]).add(chunks.get(i));
-        }
-        List<String> bodies = new ArrayList<>();
-        for (List<String> bucket : buckets) {
-            if (!bucket.isEmpty()) {
-                bodies.add(joinChunks(bucket));
-            }
-        }
-        return bodies;
-    }
-
-    /**
-     * After a split, the relative path for file half {@code body} under
-     * {@code slug}. Named for the first function's entry — same rule as the sweep.
-     */
-    public static String filePathForBody(String slug, String body, int pointerSize) {
-        String addr = CheckoutTreeNarrower.addressFromChunk(
-                CheckoutTreeNarrower.splitFunctionChunks(body).get(0));
-        return CheckoutLayout.moduleFunctionFile(
-                slug, CheckoutLayout.compartmentFileName(addr, pointerSize));
-    }
-
     // -------------------------------------------------------------------------
     // Disk mutation helpers
     // -------------------------------------------------------------------------
 
-    private static ReplaceOutcome replaceInTree(
-            Checkout checkout,
-            Map<String, CheckoutTreeNarrower.IndexEntry> working,
-            String hex,
-            CheckoutTreeNarrower.IndexEntry row,
-            Function func,
-            String newBlock) throws IOException {
-        Path abs = checkout.root().path().resolve(row.file());
-        if (!Files.isRegularFile(abs)) {
-            return ReplaceOutcome.fail("file_missing:" + row.file());
-        }
-        String original = Files.readString(abs, StandardCharsets.UTF_8);
-        Map<String, String> reps = Map.of(hex, newBlock);
-        BlockSplicer.SpliceResult splice = BlockSplicer.spliceFile(original, reps);
-        if (!splice.failed().isEmpty()) {
-            return ReplaceOutcome.fail("block_not_found");
-        }
-        if (!splice.rewritten()) {
-            // Block unchanged — still refresh ifp so a future full pass stays cheap.
-            working.put(hex, row.withIfp(InputFingerprint.of(func))
-                    .withName(func.getName()));
-            return ReplaceOutcome.skippedUnchanged();
-        }
-        checkout.root().writeFile(Path.of(row.file()), splice.newBody());
-        String name = func.getName();
-        working.put(hex, row.withIfp(InputFingerprint.of(func)).withName(name));
-        return ReplaceOutcome.rewritten(1);
-    }
-
-    private static RemoveOutcome removeFromTree(
-            Checkout checkout,
-            Map<String, CheckoutTreeNarrower.IndexEntry> working,
-            String hex,
-            CheckoutTreeNarrower.IndexEntry row,
-            int pointerSize) throws IOException {
-        Path abs = checkout.root().path().resolve(row.file());
-        int filesWritten = 0;
-        int filesDeleted = 0;
-        if (Files.isRegularFile(abs)) {
-            String original = Files.readString(abs, StandardCharsets.UTF_8);
-            String filtered = removeBlockFromFile(original, hex);
-            if (filtered.isBlank()) {
-                Files.deleteIfExists(abs);
-                filesDeleted++;
-            } else {
-                // First address of the file may have changed — rename to match.
-                String newPath = maybeRenameFileAfterFirstChanged(
-                        checkout, row.slug(), row.file(), filtered, pointerSize);
-                if (!newPath.equals(row.file())) {
-                    for (Map.Entry<String, CheckoutTreeNarrower.IndexEntry> e :
-                            new ArrayList<>(working.entrySet())) {
-                        if (row.file().equals(e.getValue().file())
-                                && !hex.equals(e.getKey())) {
-                            working.put(e.getKey(), e.getValue().withFile(newPath));
-                        }
-                    }
-                    Files.deleteIfExists(abs);
-                }
-                checkout.root().writeFile(Path.of(newPath), filtered);
-                filesWritten++;
-            }
-        }
-        working.remove(hex);
-        return new RemoveOutcome(filesWritten, filesDeleted);
-    }
-
-    private static InsertOutcome insertIntoTree(
-            Checkout checkout,
-            Map<String, CheckoutTreeNarrower.IndexEntry> working,
-            Function func,
-            String newBlock,
-            Placement placement,
-            int pointerSize,
-            int maxFileBytes) throws IOException {
-        String hex = CheckoutAddresses.of(func);
-        String targetFile = chooseTargetFile(working, placement.slug(), hex, pointerSize);
-
-        Path abs = checkout.root().path().resolve(targetFile);
-        String original = Files.isRegularFile(abs)
-                ? Files.readString(abs, StandardCharsets.UTF_8)
-                : "";
-        String withInsert = insertBlockInAddressOrder(original, newBlock);
-
-        int filesWritten = 0;
-        int filesSplit = 0;
-        List<String> bodies = splitFileBody(
-                withInsert, maxFileBytes, SweepJob.MAX_FUNCTIONS_PER_FILE);
-        if (bodies.isEmpty()) {
-            return InsertOutcome.fail("empty_after_insert");
-        }
-
-        // Delete the original target only when the first half got a new name,
-        // or when we produced multiple halves (split).
-        Set<String> writtenPaths = new LinkedHashSet<>();
-        boolean split = bodies.size() > 1;
-        if (split) {
-            filesSplit++;
-        }
-
-        // Clear old file-path rows for every address that was in the target file.
-        Set<String> affectedHex = new LinkedHashSet<>();
-        affectedHex.add(hex);
-        for (Map.Entry<String, CheckoutTreeNarrower.IndexEntry> e : working.entrySet()) {
-            if (targetFile.equals(e.getValue().file())) {
-                affectedHex.add(e.getKey());
-            }
-        }
-
-        for (String body : bodies) {
-            String path = filePathForBody(placement.slug(), body, pointerSize);
-            checkout.root().writeFile(Path.of(path), body);
-            writtenPaths.add(path);
-            filesWritten++;
-            for (String chunk : CheckoutTreeNarrower.splitFunctionChunks(body)) {
-                String addr = CheckoutTreeNarrower.addressFromChunk(chunk);
-                if (addr == null) {
-                    continue;
-                }
-                String aHex = CheckoutAddresses.normalize(addr);
-                String name = BlockSplicer.nameFromBlock(chunk);
-                if (name == null) {
-                    name = aHex;
-                }
-                boolean evidence = placement.evidenceBacked();
-                String ifp = "";
-                if (aHex.equals(hex)) {
-                    ifp = InputFingerprint.of(func);
-                    name = func.getName();
-                    evidence = placement.evidenceBacked();
-                } else {
-                    CheckoutTreeNarrower.IndexEntry prior = working.get(aHex);
-                    if (prior != null) {
-                        ifp = prior.ifp() != null ? prior.ifp() : "";
-                        evidence = prior.evidenceBacked();
-                        name = prior.name();
-                    }
-                }
-                working.put(aHex, new CheckoutTreeNarrower.IndexEntry(
-                        addr, name, placement.slug(), path, evidence, ifp));
-            }
-        }
-
-        if (!writtenPaths.contains(targetFile) && Files.isRegularFile(abs)) {
-            Files.deleteIfExists(abs);
-        }
-        return InsertOutcome.ok(filesWritten, filesSplit);
-    }
-
     /**
-     * Prefer the file that already holds the address-predecessor (or successor)
-     * inside {@code slug}; otherwise mint a new address-named file.
+     * Patch the {@code calls:}/{@code callers:} lines of every neighbour of {@code seeds} to the
+     * live graph. Patched blocks join {@code rebuilt} and their compartments are re-packed, like
+     * any other changed block.
      */
-    static String chooseTargetFile(
-            Map<String, CheckoutTreeNarrower.IndexEntry> working,
-            String slug,
-            String newHex,
-            int pointerSize) {
-        TreeMap<String, String> addrToFile = new TreeMap<>();
-        for (CheckoutTreeNarrower.IndexEntry row : working.values()) {
-            if (slug.equals(row.slug())) {
-                addrToFile.put(
-                        CheckoutAddresses.normalize(row.addressHex()), row.file());
-            }
-        }
-        if (addrToFile.isEmpty()) {
-            return CheckoutLayout.moduleFunctionFile(
-                    slug, CheckoutLayout.compartmentFileName(newHex, pointerSize));
-        }
-        String floor = addrToFile.floorKey(newHex);
-        if (floor != null) {
-            return addrToFile.get(floor);
-        }
-        return addrToFile.firstEntry().getValue();
-    }
-
-    private static String maybeRenameFileAfterFirstChanged(
-            Checkout checkout, String slug, String oldRelative, String body, int pointerSize)
-            throws IOException {
-        String expected = filePathForBody(slug, body, pointerSize);
-        if (expected.equals(oldRelative)) {
-            return oldRelative;
-        }
-        return expected;
-    }
-
-    private static BlockSplicer.PartitionMeta partitionMetaForReplace(
-            Checkout checkout, CheckoutTreeNarrower.IndexEntry row) throws IOException {
-        Path abs = checkout.root().path().resolve(row.file());
-        if (Files.isRegularFile(abs)) {
-            String body = Files.readString(abs, StandardCharsets.UTF_8);
-            String block = BlockSplicer.findBlock(body, row.addressHex());
-            BlockSplicer.PartitionMeta meta = BlockSplicer.partitionMetaFromBlock(block);
-            if (meta != null) {
-                return meta;
-            }
-        }
-        return new BlockSplicer.PartitionMeta(
-                row.slug(), "address-band", 0.0, row.evidenceBacked());
-    }
-
-    private static int patchNeighbourHeaders(
-            Checkout checkout,
+    private static void patchNeighbourHeaders(
             Program program,
             PartitionContext ctx,
-            Map<String, CheckoutTreeNarrower.IndexEntry> working,
+            Map<String, TreeFiles.IndexEntry> working,
+            TreeText tree,
             Set<String> seeds,
+            Map<String, String> rebuilt,
+            Set<String> touchedSlugs,
             Accumulators acc) throws IOException {
         if (seeds.isEmpty()) {
-            return 0;
+            return;
         }
         Set<String> neighbours = BlockSplicer.neighbourAddresses(ctx, program, seeds);
         neighbours.removeAll(seeds);
-        // Also drop addresses no longer in the tree.
-        neighbours.removeIf(h -> !working.containsKey(h));
-
-        Map<String, List<String>> byFile = new LinkedHashMap<>();
         for (String hex : neighbours) {
-            CheckoutTreeNarrower.IndexEntry row = working.get(hex);
-            if (row == null) {
+            TreeFiles.IndexEntry row = working.get(hex);
+            Function func = CheckoutAddresses.function(program, hex);
+            if (row == null || func == null || rebuilt.containsKey(hex)) {
                 continue;
             }
-            byFile.computeIfAbsent(row.file(), f -> new ArrayList<>()).add(hex);
-        }
-
-        int filesWritten = 0;
-        for (Map.Entry<String, List<String>> fileEntry : byFile.entrySet()) {
-            String relative = fileEntry.getKey();
-            Path abs = checkout.root().path().resolve(relative);
-            if (!Files.isRegularFile(abs)) {
+            String oldBlock = tree.block(row.file(), hex);
+            if (oldBlock == null) {
                 continue;
             }
-            String body = Files.readString(abs, StandardCharsets.UTF_8);
-            boolean any = false;
-            for (String hex : fileEntry.getValue()) {
-                String oldBlock = BlockSplicer.findBlock(body, hex);
-                if (oldBlock == null) {
-                    continue;
-                }
-                Function func = CheckoutAddresses.function(program, hex);
-                if (func == null) {
-                    continue;
-                }
-                String[] now = FunctionBlock.neighbourValues(func);
-                String callsVal = now[0];
-                String callersVal = now[1];
-                String[] existing = BlockSplicer.neighbourhoodValuesFromBlock(oldBlock);
-                if (Objects.equals(callsVal, existing[0])
-                        && Objects.equals(callersVal, existing[1])) {
-                    continue;
-                }
-                String newBlock = BlockSplicer.patchNeighbourhoodLines(
-                        oldBlock, callsVal, callersVal);
-                String replaced = BlockSplicer.replaceBlock(body, hex, newBlock);
-                if (replaced == null) {
-                    continue;
-                }
-                body = replaced;
-                any = true;
-                acc.headerPatched.add(hex);
+            String[] now = FunctionBlock.neighbourValues(func);
+            String[] existing = BlockSplicer.neighbourhoodValuesFromBlock(oldBlock);
+            if (Objects.equals(now[0], existing[0]) && Objects.equals(now[1], existing[1])) {
+                continue;
             }
-            if (any) {
-                checkout.root().writeFile(Path.of(relative), body);
-                filesWritten++;
-            }
+            rebuilt.put(hex, FunctionBlock.withFingerprint(
+                    BlockSplicer.patchNeighbourhoodLines(oldBlock, now[0], now[1])));
+            touchedSlugs.add(row.slug());
+            acc.headerPatched.add(hex);
         }
-        return filesWritten;
-    }
-
-    private static String joinChunks(List<String> chunks) {
-        StringBuilder sb = new StringBuilder();
-        for (String chunk : chunks) {
-            sb.append(chunk);
-            if (!chunk.endsWith("\n")) {
-                sb.append('\n');
-            }
-            if (!chunk.endsWith("\n\n")) {
-                sb.append('\n');
-            }
-        }
-        return sb.toString();
-    }
-
-    private static String ensureBlockSeparator(String block) {
-        String t = trimTrailingExtraBlanks(block);
-        if (!t.endsWith("\n")) {
-            t = t + "\n";
-        }
-        return t + "\n";
-    }
-
-    private static String trimTrailingExtraBlanks(String s) {
-        if (s == null) {
-            return "";
-        }
-        while (s.endsWith("\n\n")) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s;
     }
 
     // -------------------------------------------------------------------------
@@ -882,11 +556,20 @@ public final class TreeReconciler {
             List<String> failed,
             List<String> failedReasons,
             int filesWritten,
-            int filesSplit,
             int filesDeleted,
             int decompileCalls,
             long elapsedMs,
-            int splicedSinceSweep) {
+            int splicedSinceSweep,
+            boolean sweepQueued) {
+
+        /**
+         * A full pass that found a tree it cannot rebuild exactly (swept before
+         * {@code partitions.json} or {@code addresses.tsv} were kept) and queued a sweep.
+         */
+        static ReconcileResult sweepQueued(long elapsedMs, int splicedSinceSweep) {
+            return new ReconcileResult(List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), 0, 0, 0, elapsedMs, splicedSinceSweep, true);
+        }
 
         public static ReconcileResult of(
                 List<String> replaced,
@@ -897,7 +580,6 @@ public final class TreeReconciler {
                 List<String> failed,
                 List<String> failedReasons,
                 int filesWritten,
-                int filesSplit,
                 int filesDeleted,
                 int decompileCalls,
                 long elapsedMs,
@@ -910,8 +592,8 @@ public final class TreeReconciler {
                     List.copyOf(unchanged),
                     List.copyOf(failed),
                     List.copyOf(failedReasons),
-                    filesWritten, filesSplit, filesDeleted,
-                    decompileCalls, elapsedMs, splicedSinceSweep);
+                    filesWritten, filesDeleted,
+                    decompileCalls, elapsedMs, splicedSinceSweep, false);
         }
 
         public Map<String, Object> toMap(String checkoutId, boolean busy, String phase) {
@@ -928,11 +610,16 @@ public final class TreeReconciler {
             out.put("unchanged", unchanged.size());
             out.put("failed", failed.size());
             out.put("files_written", filesWritten);
-            out.put("files_split", filesSplit);
             out.put("files_deleted", filesDeleted);
             out.put("decompile_calls", decompileCalls);
             out.put("elapsed_ms", elapsedMs);
             out.put("spliced_since_sweep", splicedSinceSweep);
+            if (sweepQueued) {
+                out.put("sweep_queued", true);
+                out.put("sweep_reason", "the tree predates index/partitions.json or "
+                        + "index/addresses.tsv, which only a sweep can write; reconciling would "
+                        + "leave a tree a fresh sweep would not produce");
+            }
             if (!failed.isEmpty()) {
                 List<Map<String, String>> rows = new ArrayList<>();
                 for (int i = 0; i < failed.size(); i++) {
@@ -957,33 +644,216 @@ public final class TreeReconciler {
         final List<String> failed = new ArrayList<>();
         final List<String> failedReasons = new ArrayList<>();
         int filesWritten;
-        int filesSplit;
         int filesDeleted;
     }
 
-    private record RemoveOutcome(int filesWritten, int filesDeleted) {}
+    // -------------------------------------------------------------------------
+    // The shared base: blocks in, compartment files out
+    // -------------------------------------------------------------------------
 
-    private record ReplaceOutcome(boolean ok, boolean skipped, int filesWritten, String reason) {
-        static ReplaceOutcome rewritten(int files) {
-            return new ReplaceOutcome(true, false, files, null);
+    /** The block text on disk, read once per file. */
+    private static final class TreeText {
+        private final Checkout checkout;
+        private final Map<String, Map<String, String>> byFile = new LinkedHashMap<>();
+
+        TreeText(Checkout checkout) {
+            this.checkout = checkout;
         }
 
-        static ReplaceOutcome skippedUnchanged() {
-            return new ReplaceOutcome(true, true, 0, null);
+        /** {@code key}'s block in {@code file}, or null when either is missing. */
+        String block(String file, String key) throws IOException {
+            if (file == null || file.isEmpty()) {
+                return null;
+            }
+            Map<String, String> blocks = byFile.get(file);
+            if (blocks == null) {
+                blocks = new LinkedHashMap<>();
+                Path abs = checkout.root().path().resolve(file);
+                if (Files.isRegularFile(abs)) {
+                    for (String chunk : TreeFiles.splitFunctionChunks(
+                            Files.readString(abs, StandardCharsets.UTF_8))) {
+                        String addr = TreeFiles.addressFromChunk(chunk);
+                        if (addr != null) {
+                            blocks.put(CheckoutAddresses.normalize(addr), chunk);
+                        }
+                    }
+                }
+                byFile.put(file, blocks);
+            }
+            return blocks.get(CheckoutAddresses.normalize(key));
         }
 
-        static ReplaceOutcome fail(String reason) {
-            return new ReplaceOutcome(false, false, 0, reason);
+    }
+
+    /**
+     * Re-pack compartments with {@link CompartmentPacker}, the sweep's layout rule, from the
+     * rebuilt blocks and the blocks already on disk. A block the files no longer hold (a file
+     * deleted or edited by hand) is rebuilt, so a full pass restores it.
+     */
+    private static final class Repack {
+        private final Checkout checkout;
+        private final Program program;
+        private final PartitionMeta meta;
+        private final Map<String, TreeFiles.IndexEntry> working;
+        private final Map<String, String> rebuilt;
+        private final Map<String, String> oldFile;
+        private final TreeText tree;
+        private final long mod;
+        private final int timeout;
+        private DecompInterface decomp;
+        int decompileCalls;
+
+        Repack(Checkout checkout, Program program, PartitionMeta meta,
+                Map<String, TreeFiles.IndexEntry> working, Map<String, String> rebuilt,
+                Map<String, String> oldFile, TreeText tree, long mod, int timeout) {
+            this.checkout = checkout;
+            this.program = program;
+            this.meta = meta;
+            this.working = working;
+            this.rebuilt = rebuilt;
+            this.oldFile = oldFile;
+            this.tree = tree;
+            this.mod = mod;
+            this.timeout = timeout;
+        }
+
+        void compartment(String slug, Accumulators acc, Map<String, List<AddressIndex.Row>> addressRows)
+                throws IOException {
+            List<String> keys = new ArrayList<>();
+            working.forEach((k, r) -> {
+                if (slug.equals(r.slug())) {
+                    keys.add(k);
+                }
+            });
+            keys.sort(Comparator.comparing((String k) -> addressOf(k)).thenComparing(k -> k));
+            List<Map.Entry<String, String>> blocks = new ArrayList<>(keys.size());
+            for (String key : keys) {
+                String text = rebuilt.get(key);
+                if (text == null) {
+                    text = tree.block(oldFile.get(key), key);
+                }
+                // Missing, or no longer the block that was written: rebuild it.
+                if (text == null || !FunctionBlock.intact(text)) {
+                    text = restore(key, text, acc, addressRows);
+                }
+                if (text != null) {
+                    blocks.add(Map.entry(key, text));
+                }
+            }
+            Set<String> produced = new LinkedHashSet<>();
+            for (CompartmentPacker.PackedFile f : CompartmentPacker.pack(slug,
+                    checkout.config().maxFileBytes(), program.getDefaultPointerSize(), blocks)) {
+                produced.add(f.path());
+                if (DerivedFiles.writeIfChanged(checkout, f.path(), f.body())) {
+                    acc.filesWritten++;
+                }
+                for (String key : f.keys()) {
+                    working.put(key, working.get(key).withFile(f.path()));
+                }
+            }
+            Path dir = checkout.root().path().resolve(CheckoutLayout.moduleReadme(slug)).getParent();
+            if (Files.isDirectory(dir)) {
+                try (java.nio.file.DirectoryStream<Path> files = Files.newDirectoryStream(dir, "*.c")) {
+                    for (Path file : files) {
+                        String rel = checkout.root().path().relativize(file).toString().replace('\\', '/');
+                        if (!produced.contains(rel) && Files.deleteIfExists(file)) {
+                            acc.filesDeleted++;
+                        }
+                    }
+                }
+            }
+        }
+
+        /** Rebuild a block the files lost. */
+        private String restore(String key, String damaged, Accumulators acc,
+                Map<String, List<AddressIndex.Row>> addressRows) throws IOException {
+            Function func = CheckoutAddresses.function(program, key);
+            TreeFiles.IndexEntry row = working.get(key);
+            if (func == null || row == null) {
+                acc.failed.add(key);
+                acc.failedReasons.add("block_missing_and_function_gone");
+                return null;
+            }
+            if (decomp == null) {
+                decomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
+            }
+            FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
+                    partitionOf(damaged, row, meta), mod, timeout, program.getName());
+            decompileCalls++;
+            addressRows.put(key, built.addresses());
+            acc.replaced.add(key);
+            return built.text();
+        }
+
+        private ghidra.program.model.address.Address addressOf(String key) {
+            ghidra.program.model.address.Address a = ServiceUtils.parseAddress(program, key);
+            return a != null ? a : program.getAddressFactory().getDefaultAddressSpace().getAddress(0);
+        }
+
+        void close() {
+            if (decomp != null) {
+                try {
+                    decomp.dispose();
+                } catch (Exception ignored) {
+                    // must not mask the reconcile outcome
+                }
+            }
         }
     }
 
-    private record InsertOutcome(boolean ok, int filesWritten, int filesSplit, String reason) {
-        static InsertOutcome ok(int written, int split) {
-            return new InsertOutcome(true, written, split, null);
+    /**
+     * The tree rows the current exclusions put out of scope. Counts them into the sweep's
+     * scope stats the way the sweep's own filter would, and saves those, so
+     * {@code modules/index.md} reports what a fresh sweep under the new config reports.
+     */
+    private static Set<String> outOfScope(Checkout checkout,
+            Map<String, TreeFiles.IndexEntry> index, Map<String, Function> program,
+            ExclusionEvaluator evaluator, PartitionMeta meta) throws IOException {
+        Map<String, List<Function>> bySlug = new LinkedHashMap<>();
+        index.forEach((k, r) -> {
+            Function f = program.get(k);
+            if (f != null) {
+                bySlug.computeIfAbsent(r.slug(), x -> new ArrayList<>()).add(f);
+            }
+        });
+        List<com.xebyte.core.partition.Partition> parts = new ArrayList<>();
+        bySlug.forEach((slug, fns) -> parts.add(
+                new com.xebyte.core.partition.Partition(slug, "", 0.0, fns, Map.of())));
+        ExclusionEvaluator.FilterResult kept = evaluator.filterPartitions(parts,
+                meta.eligibleFunctions());
+        Set<String> keep = new java.util.HashSet<>();
+        kept.partitions().forEach(p -> p.members().forEach(f -> keep.add(CheckoutAddresses.of(f))));
+        Set<String> out = new LinkedHashSet<>();
+        for (String k : index.keySet()) {
+            if (program.containsKey(k) && !keep.contains(k)) {
+                out.add(k);
+            }
         }
+        if (!out.isEmpty()) {
+            Map<String, String> removed = new LinkedHashMap<>(meta.removedByRule());
+            kept.stats().removedByRule().forEach((rule, n) -> removed.merge(rule, String.valueOf(n),
+                    (a, b) -> String.valueOf(Integer.parseInt(a) + Integer.parseInt(b))));
+            new PartitionMeta(meta.eligibleFunctions(), keep.size(), meta.assignedFunctions(),
+                    meta.functionsWithStrings(), removed, meta.strategyLog(), meta.partitions())
+                    .write(checkout);
+        }
+        return out;
+    }
 
-        static InsertOutcome fail(String reason) {
-            return new InsertOutcome(false, 0, 0, reason);
+    /**
+     * How a rebuilt block records its compartment: as its existing block did, else as the
+     * sweep formed the compartment, else as an unexplained address band.
+     */
+    static BlockSplicer.PartitionMeta partitionOf(String existingBlock,
+            TreeFiles.IndexEntry row, PartitionMeta meta) {
+        BlockSplicer.PartitionMeta fromBlock = existingBlock != null
+                ? BlockSplicer.partitionMetaFromBlock(existingBlock) : null;
+        if (fromBlock != null) {
+            return fromBlock;
         }
+        PartitionMeta.Part part = meta != null ? meta.part(row.slug()) : null;
+        return part != null
+                ? new BlockSplicer.PartitionMeta(row.slug(), part.method(), part.confidence(), row.evidenceBacked())
+                : new BlockSplicer.PartitionMeta(row.slug(), "address-band", 0.0, row.evidenceBacked());
     }
 }

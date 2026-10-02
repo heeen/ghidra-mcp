@@ -3,7 +3,7 @@ package com.xebyte.core;
 import com.xebyte.core.checkout.BlockSplicer;
 import com.xebyte.core.checkout.CheckoutAddresses;
 import com.xebyte.core.checkout.CheckoutLayout;
-import com.xebyte.core.checkout.CheckoutTreeNarrower;
+import com.xebyte.core.checkout.TreeFiles;
 import com.xebyte.core.checkout.FunctionBlock;
 import ghidra.GhidraApplicationLayout;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
@@ -108,7 +108,7 @@ public class OverlayAddressKeysGhidraTest {
         assertTrue(b, b.startsWith("// fn: in_overlay @ OVL:00001000 size="));
         assertTrue("the resource URI carries the space: " + b,
             b.contains("/OVL:00001000\n"));
-        assertEquals("OVL:00001000", CheckoutTreeNarrower.addressFromChunk(b));
+        assertEquals("OVL:00001000", TreeFiles.addressFromChunk(b));
 
         String file = a + "\n" + b;
         assertSame(null, BlockSplicer.findBlock(file, "00001001"));

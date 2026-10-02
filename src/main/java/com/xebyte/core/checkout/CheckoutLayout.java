@@ -137,6 +137,10 @@ public final class CheckoutLayout {
         return "index/by-address.tsv";
     }
 
+    public static String partitionsJson() {
+        return "index/partitions.json";
+    }
+
     public static String addressesTsv() {
         return "index/addresses.tsv";
     }

@@ -194,8 +194,7 @@ public class DirtyQueueTest {
     @Test
     public void aRetiredNameAddsTheBlocksThatStillPrintIt() throws Exception {
         checkout.root().writeFile(java.nio.file.Path.of("modules/c05/00100000.c"),
-                TestBlocks.block("Caller", "00100400", "aaaaaaaaaaaa",
-                        "void Caller(void) {\n  OldName();\n}\n"));
+                TestBlocks.block("Caller", "00100400", "void Caller(void) {\n  OldName();\n}\n"));
         queue.markDirty(checkout.id(), List.of("00100000"));
         queue.markRetiredNames(checkout.id(), List.of("OldName"));
 

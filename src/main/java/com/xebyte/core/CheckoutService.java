@@ -8,7 +8,7 @@ import com.xebyte.core.checkout.CheckoutLayout;
 import com.xebyte.core.checkout.CheckoutRegistry;
 import com.xebyte.core.checkout.CheckoutRoot;
 import com.xebyte.core.checkout.CheckoutStatusMd;
-import com.xebyte.core.checkout.CheckoutTreeNarrower;
+import com.xebyte.core.checkout.TreeFiles;
 import com.xebyte.core.checkout.DirtyQueue;
 import com.xebyte.core.checkout.ExclusionEvaluator;
 import com.xebyte.core.checkout.ExclusionRule;
@@ -461,17 +461,11 @@ public class CheckoutService {
         if (live == null || live.isClosed()) {
             return Response.err("program is closed; cannot start checkout sweep");
         }
-
-        checkout.setProgress(checkout.progress().withPhase(SweepProgress.Phase.QUEUED));
         try {
-            CheckoutStatusMd.write(checkout, "dirty");
+            CheckoutRegistry.getInstance().requestSweep(checkout, live);
         } catch (IOException e) {
             return Response.err("failed to update STATUS.md: " + e.getMessage());
         }
-
-        SweepJob job = new SweepJob(checkout, live);
-        CheckoutRegistry.getInstance().enqueueSweep(job);
-
         return Response.ok(startResponse(checkout));
     }
 
@@ -563,7 +557,7 @@ public class CheckoutService {
             Map<String, Object> busy = TreeReconciler.ReconcileResult.of(
                     List.of(), List.of(), List.of(), List.of(), List.of(),
                     List.of(), List.of(),
-                    0, 0, 0, 0, 0L, checkout.progress().splicedSinceSweep())
+                    0, 0, 0, 0L, checkout.progress().splicedSinceSweep())
                     .toMap(checkout.id(), true, phaseName);
             busy.put("reason", "sweep_in_progress");
             return Response.ok(busy);
@@ -793,6 +787,9 @@ public class CheckoutService {
                             : "previous sweep did not finish (STATUS.md state=" + state + ")"));
         }
 
+        // The tree may have been moved or copied: checkout.json names this checkout from
+        // now on, as the derived files will after the reconcile below.
+        writeCheckoutJson(checkout);
         CheckoutRegistry.getInstance().ensureObserver(program);
         if (!stale && sweptAt != null) {
             CheckoutRegistry.getInstance().dirtyQueue().markNeedsReconcile(checkout.id());
@@ -1138,28 +1135,11 @@ public class CheckoutService {
                     throw new IllegalArgumentException(
                             "program is closed; cannot narrow on-disk checkout files");
                 }
-                ExclusionEvaluator evaluator = ExclusionEvaluator.of(live, updated);
-                CheckoutTreeNarrower.NarrowResult nr =
-                        CheckoutTreeNarrower.narrow(checkout, live, evaluator);
-                out.put("action", "deleted_out_of_scope_functions");
-                out.put("functions_removed", nr.functionsRemoved());
-                out.put("modules_touched", nr.modulesTouched());
-                // Tree now matches the narrower config — keep phase if it was
-                // complete; only stamp STALE when there was nothing to remove
-                // but the agent still needs a resweep signal (shouldn't happen).
-                if (nr.functionsRemoved() > 0) {
-                    checkout.setProgress(checkout.progress()
-                            .withScope(
-                                    checkout.progress().eligibleFunctions(),
-                                    nr.functionsRemaining(),
-                                    Map.of()));
-                    try {
-                        CheckoutStatusMd.write(checkout,
-                                CheckoutStatusMd.settledState(checkout.progress()));
-                    } catch (IOException ignored) {
-                        // status on disk is best-effort after a successful rewrite
-                    }
-                }
+                // A full reconcile under the new config: it drops what is now out of scope
+                // and re-renders the tree exactly as a sweep with that config would.
+                TreeReconciler.ReconcileResult r = TreeReconciler.reconcile(checkout, live, null);
+                out.put("action", r.sweepQueued() ? "sweep_queued" : "deleted_out_of_scope_functions");
+                out.put("functions_removed", r.removed().size());
             }
             case "widening" -> {
                 int pending = estimatePendingFunctions(checkout, live, updated);
@@ -1186,11 +1166,8 @@ public class CheckoutService {
                 // Apply the narrow half immediately, then mark STALE for the
                 // newly-included remainder — never auto-sweep.
                 if (live != null && !live.isClosed()) {
-                    ExclusionEvaluator evaluator = ExclusionEvaluator.of(live, updated);
-                    CheckoutTreeNarrower.NarrowResult nr =
-                            CheckoutTreeNarrower.narrow(checkout, live, evaluator);
-                    out.put("functions_removed", nr.functionsRemoved());
-                    out.put("modules_touched", nr.modulesTouched());
+                    out.put("functions_removed",
+                            TreeReconciler.reconcile(checkout, live, null).removed().size());
                 }
                 int pending = estimatePendingFunctions(checkout, live, updated);
                 checkout.setProgress(checkout.progress()

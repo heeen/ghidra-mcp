@@ -427,6 +427,21 @@ public final class CheckoutRegistry {
      * Tracks the job so {@link #cancelSweep} can flip its flag and
      * {@code stopProcess()} the in-flight decompile.
      */
+    /** Queue a sweep of {@code checkout}, unless one is already queued or running. */
+    public void requestSweep(Checkout checkout, ghidra.program.model.listing.Program program)
+            throws IOException {
+        SweepProgress.Phase phase = checkout.progress().phase();
+        if (phase == SweepProgress.Phase.QUEUED
+                || phase == SweepProgress.Phase.WAITING_FOR_ANALYSIS
+                || phase == SweepProgress.Phase.PARTITIONING
+                || phase == SweepProgress.Phase.DECOMPILING) {
+            return;
+        }
+        checkout.setProgress(checkout.progress().withPhase(SweepProgress.Phase.QUEUED));
+        CheckoutStatusMd.write(checkout, "dirty");
+        enqueueSweep(new SweepJob(checkout, program));
+    }
+
     public void enqueueSweep(SweepJob job) {
         Objects.requireNonNull(job, "job");
         activeJobs.put(job.checkoutId(), job);

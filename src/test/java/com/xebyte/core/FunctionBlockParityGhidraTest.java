@@ -159,7 +159,7 @@ public class FunctionBlockParityGhidraTest {
             Map<String, Object> parsed = FunctionBlock.parse(block);
             String body = String.valueOf(facts.get("decompiled_code"));
             String expected = FunctionBlock.render(facts, body, new FunctionBlock.Placement(
-                "c00", "address-band", 0.5, false, SweepJob.shortContentHash(body),
+                "c00", "address-band", 0.5, false,
                 java.time.Instant.parse(String.valueOf(parsed.get("dts"))), 1L,
                 SweepJob.functionResourceUri(program.getName(), func.getEntryPoint().toString(false))));
             assertEquals("block for " + func.getName() + " must equal the bundle's facts rendered",

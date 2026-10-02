@@ -267,6 +267,34 @@ client's own built-in tools, so the search costs no permission surface.
     only trees under the default root. Explicit roots are now remembered in the instance's
     Ghidra settings directory, listed first, and forgotten when their tree is gone or the
     checkout is deleted.
+  - **Sweep, reconcile and rebuild converge.** A tree that is `in_sync` is now exactly what
+    a fresh sweep writes, whichever route produced it. Before, the sweep and the reconciler
+    were two writers: the reconciler kept its own file layout (insert into the covering
+    file, split on overflow, rename on a new first function), its own thinner
+    `modules/index.md` ("full strategy log rewritten on next sweep") and module READMEs, and
+    a full reconcile of a tree swept before `addresses.tsv` existed rewrote all 339 blocks
+    and left the index missing. Now:
+    - `CompartmentPacker` is the one layout rule; the sweep packs as it decompiles, the
+      reconciler re-packs each touched compartment (every compartment on a full pass) from
+      its blocks. Neighbour header patches go through it too.
+    - The sweep keeps its grouping in `index/partitions.json`; `DerivedFiles` renders
+      `by-address.tsv`, `callgraph.tsv`, `modules/index.md`, every module README,
+      `README.md` and `AGENTS.md` from it and the rows, for every writer, and rewrites only
+      what changed.
+    - `// fp:` hashes the whole block (minus stamps and itself), so a full reconcile
+      rebuilds a block edited by hand or cut short; deleted files come back.
+    - Narrowing a checkout's exclusions is a full reconcile: out-of-scope functions leave,
+      and the scope counts are recomputed as the sweep counts them. The separate narrower,
+      `BlockSplicer.refresh` (no caller since the reconciler took over) and three other
+      copies of the packing and index-writing logic are gone.
+    - A full reconcile of a tree that predates `partitions.json` or `addresses.tsv` runs a
+      sweep and reports `sweep_queued`; adoption rewrites `checkout.json` for the tree's new
+      id.
+
+    A real-Ghidra test holds a sweep, a second sweep, a full reconcile of an in-sync tree
+    (0 files written), a repair after deletions and edits, two renames, and a narrowing,
+    to a fresh sweep, file for file. Live on the 339-function firmware all six routes,
+    plus adopting a copied tree, end with 0 differences.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

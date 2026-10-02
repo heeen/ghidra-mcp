@@ -510,6 +510,20 @@ queued or being spliced in — the answer to "can I trust a grep right now". `pe
 says what is queued. (Modification numbers are reported but are not the test: they also
 move for changes no block shows, and start over each time the program opens.)
 
+**Every route ends at the same tree.** A tree that is `in_sync` is byte for byte what a fresh
+sweep would write at that point, apart from the `dts`/`mod` stamps, the status files and
+the tree's own root and id, whether it got there by a sweep, by splices after edits, by a
+full reconcile (`decompile_checkout_refresh` with no addresses), by narrowing its exclusions,
+or by adopting a tree someone copied. One packer lays out every compartment's files and one
+renderer writes every index and README, from `index/by-address.tsv` and the grouping the
+sweep kept in `index/partitions.json`. A full reconcile also repairs: a deleted or
+hand-edited `.c` file, README, index or `AGENTS.md` comes back as the sweep wrote it (a block
+whose text no longer matches its `// fp:` is rebuilt). A tree swept before
+`partitions.json` and `addresses.tsv` existed cannot be reproduced without the sweep's own
+work, so a full reconcile of one runs a sweep instead and says so (`sweep_queued`).
+Re-partitioning is the one thing a reconcile does not do: functions added since the sweep
+join the compartment that contains their address; resweep to regroup.
+
 ### Measured sweep cost
 
 | Specimen | Functions | Time | Tree |
@@ -553,7 +567,7 @@ field. The header is one `// key: value` line per fact, so each greps on its own
 // xref: 08005010 UNCONDITIONAL_CALL led_on
 // jump: 08004014
 // decompile_error: timed out              (only when there is no C)
-// part / fp / dts / mod / uri / see       (where the block sits in the tree)
+// part / fp / dts / mod / uri / see       (where it sits; fp hashes the block itself)
 // ----
 void gpio_set(uint *port,ushort pins) { ... }
 ```
