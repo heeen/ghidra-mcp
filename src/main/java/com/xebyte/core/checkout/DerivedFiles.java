@@ -53,6 +53,8 @@ public final class DerivedFiles {
 
         writeIfChanged(checkout, CheckoutLayout.byAddressTsv(), byAddress(sorted));
         writeIfChanged(checkout, CheckoutLayout.callgraphTsv(), SweepJob.renderCallgraphTsv(ctx));
+        // Written by builds before the refs line carried the pool word; a fresh tree has none.
+        Files.deleteIfExists(checkout.root().path().resolve("index/addresses.tsv"));
         deleteEmptyModules(checkout, bySlug.keySet());
         if (meta == null) {
             return;
@@ -252,9 +254,6 @@ public final class DerivedFiles {
         sb.append("- `index/by-address.tsv` — complete address → file map "
                 + "(failed decompiles still appear); `ifp` column is a "
                 + "DB-cheap input fingerprint for reconcile without re-decompiling\n");
-        sb.append("- `index/addresses.tsv` — every address each function uses "
-                + "(data references, literal-pool values, memory read and written), "
-                + "for `grep 0x<address>`\n");
         sb.append("- `index/partitions.json` — how the sweep grouped the program\n");
         sb.append("- `STATUS.md` — trustworthiness without talking to Ghidra\n");
         return sb.toString();

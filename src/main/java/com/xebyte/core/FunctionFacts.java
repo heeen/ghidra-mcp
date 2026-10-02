@@ -643,9 +643,6 @@ public final class FunctionFacts {
         return results.isTimedOut() ? "timed out" : results.isCancelled() ? "cancelled" : "no output";
     }
 
-    /** Past this many, a function is a table walker and the list stops helping a reader. */
-    private static final int MAX_REFS = 200;
-
     /**
      * One address a function uses, and how it reaches it.
      *
@@ -718,17 +715,27 @@ public final class FunctionFacts {
         return new ArrayList<>(found);
     }
 
-    /** The distinct addresses of {@code refs}, sorted, as {@link CheckoutAddresses#display}, capped. */
+    /**
+     * The distinct addresses of {@code refs}, sorted, as {@link CheckoutAddresses#display}.
+     * An address the function reaches through a literal-pool word carries it after a
+     * {@code <}: {@code 0x40020000<0x08016e58} reads "0x40020000, loaded from 0x08016e58". Both
+     * halves grep, and the second answers which pool word to retype. Not capped: the list is
+     * the one place a register's own address appears.
+     */
     static List<String> refAddresses(List<AddressRef> refs, Program program) {
-        java.util.TreeSet<Address> sorted = new java.util.TreeSet<>();
+        java.util.TreeMap<Address, java.util.TreeSet<Address>> via = new java.util.TreeMap<>();
         for (AddressRef r : refs) {
-            sorted.add(r.address());
+            java.util.TreeSet<Address> words = via.computeIfAbsent(r.address(), a -> new java.util.TreeSet<>());
+            if (r.via() != null) {
+                words.add(r.via());
+            }
         }
-        List<String> out = new ArrayList<>();
-        for (Address a : sorted) {
-            if (out.size() >= MAX_REFS) break;
-            out.add(CheckoutAddresses.display(a, program));
-        }
+        List<String> out = new ArrayList<>(via.size());
+        via.forEach((a, words) -> {
+            StringBuilder sb = new StringBuilder(CheckoutAddresses.display(a, program));
+            words.forEach(w -> sb.append('<').append(CheckoutAddresses.display(w, program)));
+            out.add(sb.toString());
+        });
         return out;
     }
 

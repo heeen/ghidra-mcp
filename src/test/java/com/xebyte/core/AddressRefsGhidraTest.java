@@ -1,6 +1,5 @@
 package com.xebyte.core;
 
-import com.xebyte.core.checkout.AddressIndex;
 import com.xebyte.core.checkout.FunctionBlock;
 import ghidra.GhidraApplicationLayout;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
@@ -90,19 +89,13 @@ public class AddressRefsGhidraTest {
     }
 
     @Test
-    public void theFoldedStoreAddressIsARefAndAnIndexRow() {
-        FunctionBlock.Built built = block();
-
-        List<AddressIndex.Row> rows = built.addresses();
-        assertTrue(rows.toString(), rows.contains(
-            new AddressIndex.Row("0x00003000", "data", "", "FUN_00001000", "00001000")));
-        assertTrue("the pool word's value, through the word: " + rows, rows.contains(
-            new AddressIndex.Row("0x40003c00", "pointer", "0x00003000", "FUN_00001000", "00001000")));
-        assertTrue("the register itself, from the folded store: " + rows, rows.contains(
-            new AddressIndex.Row("0x40003c0c", "store", "", "FUN_00001000", "00001000")));
-
-        String refs = String.valueOf(FunctionBlock.parse(built.text()).get("refs"));
-        assertTrue("grep 0x40003c0c hits the block: " + refs, refs.contains("0x40003c0c"));
+    public void theRegisterAndThePoolValueAreRefsWithTheWordTheValueCameFrom() {
+        String refs = String.valueOf(FunctionBlock.parse(block().text()).get("refs"));
+        assertTrue("the register itself, from the folded store: " + refs,
+            (" " + refs + " ").contains(" 0x40003c0c "));
+        assertTrue("the base, with the pool word it was loaded from: " + refs,
+            refs.contains("0x40003c00<0x00003000"));
+        assertTrue("the pool word itself: " + refs, (" " + refs + " ").contains(" 0x00003000 "));
     }
 
     @Test
@@ -123,10 +116,10 @@ public class AddressRefsGhidraTest {
     }
 
     @Test
-    public void aWritablePoolWordDoesNotFoldSoThereIsNoStoreRow() throws Exception {
+    public void aWritablePoolWordDoesNotFoldSoTheRegisterIsNotARef() throws Exception {
         builder.withTransaction(() -> program.getMemory().getBlock(".rodata").setWrite(true));
-        List<AddressIndex.Row> rows = block().addresses();
-        assertFalse("a writable word can change at run time; the decompiler must not fold it: " + rows,
-            rows.stream().anyMatch(r -> r.kind().equals("store") && r.address().equals("0x40003c0c")));
+        String refs = String.valueOf(FunctionBlock.parse(block().text()).get("refs"));
+        assertFalse("a writable word can change at run time; the decompiler must not fold it: " + refs,
+            (" " + refs + " ").contains(" 0x40003c0c "));
     }
 }
