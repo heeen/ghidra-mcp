@@ -82,6 +82,54 @@ public final class DerivedFiles {
         return true;
     }
 
+    /**
+     * Write a compartment file unless it already says the same apart from the render stamps
+     * ({@code dts}, {@code mod}); true if written. A sweep over an unchanged program then
+     * touches nothing: no mtime churn for a watcher, no diff in a committed tree.
+     */
+    static boolean writeIfContentChanged(Checkout checkout, String relative, String content)
+            throws IOException {
+        Path abs = checkout.root().path().resolve(relative);
+        if (Files.isRegularFile(abs) && withoutStamps(Files.readString(abs, StandardCharsets.UTF_8))
+                .equals(withoutStamps(content))) {
+            return false;
+        }
+        checkout.root().writeFile(Path.of(relative), content);
+        return true;
+    }
+
+    private static String withoutStamps(String text) {
+        StringBuilder sb = new StringBuilder(text.length());
+        for (String line : text.split("\n", -1)) {
+            if (!line.startsWith("// dts: ") && !line.startsWith("// mod: ")) {
+                sb.append(line).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Delete compartment files that no row points at: what a previous sweep or layout left
+     * behind. The sweep updates a tree in place rather than wiping it first, so this is how
+     * it ends with nothing a fresh tree would not hold.
+     */
+    static void deleteUnreferenced(Checkout checkout, List<TreeFiles.IndexEntry> rows) throws IOException {
+        Set<String> wanted = new LinkedHashSet<>();
+        rows.forEach(r -> wanted.add(r.file()));
+        Path root = checkout.root().path();
+        Path modules = root.resolve("modules");
+        if (!Files.isDirectory(modules)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(modules)) {
+            for (Path p : walk.filter(f -> f.toString().endsWith(".c")).toList()) {
+                if (!wanted.contains(root.relativize(p).toString().replace('\\', '/'))) {
+                    Files.deleteIfExists(p);
+                }
+            }
+        }
+    }
+
     private static String byAddress(List<TreeFiles.IndexEntry> sorted) {
         StringBuilder sb = new StringBuilder(SweepJob.byAddressHeader());
         for (TreeFiles.IndexEntry e : sorted) {

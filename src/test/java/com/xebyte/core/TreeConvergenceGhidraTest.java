@@ -168,6 +168,57 @@ public class TreeConvergenceGhidraTest {
         assertSameTree("second sweep", swept("a", CheckoutConfig.defaults()), swept("b", CheckoutConfig.defaults()));
     }
 
+    /**
+     * Reported by the stealth session: content was stable, but a sweep over an unchanged
+     * program rewrote all 329 files to move their dts/mod stamps.
+     */
+    @Test
+    public void resweepingAnUnchangedProgramWritesNoFile() throws Exception {
+        Checkout a = swept("a", CheckoutConfig.defaults());
+        Map<String, java.nio.file.attribute.FileTime> before = mtimes(a);
+        Thread.sleep(1100);
+        new SweepJob(a, program).run();
+        Map<String, java.nio.file.attribute.FileTime> after = mtimes(a);
+        before.keySet().removeIf(k -> k.equals(CheckoutLayout.statusMd()) || k.equals(CheckoutLayout.checkoutJson()));
+        after.keySet().removeIf(k -> k.equals(CheckoutLayout.statusMd()) || k.equals(CheckoutLayout.checkoutJson()));
+        assertEquals(before, after);
+    }
+
+    private static Map<String, java.nio.file.attribute.FileTime> mtimes(Checkout c) throws IOException {
+        Map<String, java.nio.file.attribute.FileTime> out = new TreeMap<>();
+        try (Stream<Path> walk = Files.walk(c.root().path())) {
+            for (Path p : walk.filter(Files::isRegularFile).collect(Collectors.toList())) {
+                out.put(c.root().path().relativize(p).toString(), Files.getLastModifiedTime(p));
+            }
+        }
+        return out;
+    }
+
+    /** Found live: a refresh racing an adoption's reconcile left deleted files unrestored. */
+    @Test
+    public void aReconcileWaitsForAnotherWriterOfTheSameTree() throws Exception {
+        Checkout a = swept("a", CheckoutConfig.defaults());
+        Files.delete(a.root().path().resolve(CheckoutLayout.agentsMd()));
+        a.treeLock().lock();
+        Thread pass = new Thread(() -> {
+            try {
+                TreeReconciler.reconcile(a, program, null);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        try {
+            pass.start();
+            pass.join(500);
+            assertTrue("the reconcile must wait for the lock", pass.isAlive());
+            assertFalse(Files.exists(a.root().path().resolve(CheckoutLayout.agentsMd())));
+        } finally {
+            a.treeLock().unlock();
+        }
+        pass.join(30_000);
+        assertTrue(Files.exists(a.root().path().resolve(CheckoutLayout.agentsMd())));
+    }
+
     @Test
     public void aFullReconcileOfAnInSyncTreeChangesNothing() throws IOException {
         Checkout a = swept("a", CheckoutConfig.defaults());

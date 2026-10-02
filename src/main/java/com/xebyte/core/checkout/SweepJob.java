@@ -26,11 +26,8 @@ import ghidra.util.task.TaskMonitorAdapter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -114,6 +111,17 @@ public final class SweepJob implements Runnable {
 
     @Override
     public void run() {
+        // One writer at a time: a reconcile (refresh, narrowing, the dirty queue) waits for
+        // the sweep, and the sweep for a reconcile already under way.
+        checkout.treeLock().lock();
+        try {
+            runLocked();
+        } finally {
+            checkout.treeLock().unlock();
+        }
+    }
+
+    private void runLocked() {
         // Queued jobs cancelled before they ever ran — honour without touching the program.
         if (cancel.isCancelled()) {
             finishTerminal(SweepProgress.Phase.CANCELLED,
@@ -195,7 +203,6 @@ public final class SweepJob implements Runnable {
                             scope.removedByRule()),
                     "dirty");
 
-            wipePriorTree();
 
             localDecomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
             decomp = localDecomp;
@@ -296,6 +303,7 @@ public final class SweepJob implements Runnable {
                 entries.add(new TreeFiles.IndexEntry(r.addressHex(), r.name(), r.slug(),
                         r.file(), r.evidenceBacked(), r.ifp()));
             }
+            DerivedFiles.deleteUnreferenced(checkout, entries);
             DerivedFiles.writeAll(checkout, program, entries, meta, ctx);
 
             if (cancel.isCancelled()) {
@@ -727,43 +735,9 @@ public final class SweepJob implements Runnable {
         return System.nanoTime();
     }
 
-    private void wipePriorTree() throws IOException {
-        // Repartitioning moves compartment paths; leaving stale modules would
-        // make Grep lie. Indexes are rebuilt from scratch too.
-        deleteIfExists(checkout.root().path().resolve("modules"));
-        deleteIfExists(checkout.root().path().resolve("index"));
-        Path callgraph = checkout.root().path().resolve(CheckoutLayout.callgraphTsv());
-        Files.deleteIfExists(callgraph);
-        Path readme = checkout.root().path().resolve(CheckoutLayout.readmeMd());
-        Files.deleteIfExists(readme);
-    }
-
-    private static void deleteIfExists(Path dir) throws IOException {
-        if (!Files.exists(dir)) {
-            return;
-        }
-        Files.walkFileTree(dir, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
-                    throws IOException {
-                Files.deleteIfExists(file);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
-                if (exc != null) {
-                    throw exc;
-                }
-                Files.deleteIfExists(d);
-                return FileVisitResult.CONTINUE;
-            }
-        });
-    }
-
     private void writePacked(CompartmentPacker.PackedFile file) throws IOException {
         if (file != null) {
-            checkout.root().writeFile(Path.of(file.path()), file.body());
+            DerivedFiles.writeIfContentChanged(checkout, file.path(), file.body());
         }
     }
 

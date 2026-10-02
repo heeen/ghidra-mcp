@@ -464,7 +464,9 @@ public final class CheckoutRegistry {
 
     /** Called from {@link SweepJob} finally — only clears if still this job. */
     void clearActiveJob(String checkoutId, SweepJob job) {
-        activeJobs.remove(checkoutId, job);
+        if (activeJobs.remove(checkoutId, job)) {
+            dirtyQueue.resume(checkoutId);
+        }
     }
 
     /** Test / raw hook: enqueue arbitrary work on the sweep thread. */

@@ -291,6 +291,18 @@ client's own built-in tools, so the search costs no permission surface.
       sweep and reports `sweep_queued`; adoption rewrites `checkout.json` for the tree's new
       id.
 
+    - A sweep updates the tree in place: a file whose content is unchanged apart from the
+      `dts`/`mod` stamps is not rewritten, and files no row points at are deleted at the end
+      instead of the tree being wiped first (readers see the old tree, not an empty one,
+      while it runs). Measured on the stealth session's 2760-function tree: a resweep of an
+      unchanged program rewrote all 329 files; now 0 of 69 on the firmware.
+    - One writer per tree at a time (`Checkout.treeLock`, held by sweeps and reconciles): a
+      refresh racing the full reconcile an adoption queues left deleted files unrestored.
+    - The dirty queue no longer waits on the executor it shares with sweeps. A drain that
+      found a sweep queued waited for it, and the sweep waited for the drain's thread:
+      adopting a tree and then starting a sweep hung both forever. The drain now gives the
+      thread back and the sweep resumes the pending work when it ends.
+
     A real-Ghidra test holds a sweep, a second sweep, a full reconcile of an in-sync tree
     (0 files written), a repair after deletions and edits, two renames, and a narrowing,
     to a fresh sweep, file for file. Live on the 339-function firmware all six routes,

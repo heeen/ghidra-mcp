@@ -136,6 +136,14 @@ public final class DirtyQueue {
     }
 
     /** Any work at all for this checkout: queued addresses, names, a full pass, or one running. */
+    /** Re-arm a drain for work left pending while a sweep held the checkout. */
+    public synchronized void resume(String checkoutId) {
+        Bucket b = buckets.get(checkoutId);
+        if (b != null && (b.needsReconcile || !b.addresses.isEmpty() || !b.retiredNames.isEmpty())) {
+            arm(checkoutId, b);
+        }
+    }
+
     public synchronized boolean hasPending(String checkoutId) {
         Bucket b = buckets.get(checkoutId);
         return b != null && (b.needsReconcile || !b.addresses.isEmpty() || !b.retiredNames.isEmpty()
@@ -214,15 +222,19 @@ public final class DirtyQueue {
                     return;
                 }
 
-                // Sweep owns the decompile stream — queue behind it, never interleave.
+                // A sweep of this checkout is queued or running. Give the thread back: drains
+                // and sweeps share one executor, so waiting here kept a QUEUED sweep from ever
+                // starting and the two waited on each other forever (measured: an adoption's
+                // queued reconcile plus a decompile_checkout_run start). The sweep re-arms
+                // whatever is still pending when it ends (resume()).
                 if (sweepActive.test(checkoutId)) {
                     synchronized (this) {
                         Bucket b = buckets.get(checkoutId);
                         if (b != null) {
-                            b.deadlineMs = clock.get() + DEBOUNCE_MS;
+                            b.drainQueued = false;
                         }
                     }
-                    continue;
+                    return;
                 }
                 // Initial analysis creates thousands of functions; splice once it settles.
                 if (analyzing.test(program, checkoutId)) {
