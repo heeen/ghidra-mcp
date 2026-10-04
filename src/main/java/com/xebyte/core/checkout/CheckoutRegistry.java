@@ -8,14 +8,17 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -44,6 +47,10 @@ public final class CheckoutRegistry {
     private final ExecutorService sweepExecutor;
     private final DirtyQueue dirtyQueue;
     private volatile Function<Checkout, Program> programLookup;
+    private volatile Consumer<Program> adoptOnOpen;
+    private final Map<Program, Boolean> adoptChecked =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private final ExecutorService adoptExecutor;
 
     private CheckoutRegistry() {
         ThreadFactory factory = runnable -> {
@@ -53,6 +60,13 @@ public final class CheckoutRegistry {
             return t;
         };
         this.sweepExecutor = Executors.newSingleThreadExecutor(factory);
+        // Not the sweep executor: adoption would otherwise wait behind a sweep of another
+        // program for minutes, unobserved.
+        this.adoptExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread t = new Thread(runnable, "GhidraMCP-Checkout-Adopt");
+            t.setDaemon(true);
+            return t;
+        });
         this.dirtyQueue = new DirtyQueue(this);
     }
 
@@ -92,6 +106,44 @@ public final class CheckoutRegistry {
         }
     }
 
+    /**
+     * How a program's trees on disk are adopted when it opens. Set by {@code CheckoutService},
+     * which owns adoption; the first registration wins, as for the lookup.
+     */
+    public synchronized void setAdoptOnOpenIfAbsent(Consumer<Program> hook) {
+        if (adoptOnOpen == null) {
+            adoptOnOpen = hook;
+        }
+    }
+
+    /**
+     * A program was resolved. The first time this Program instance is seen, its trees on disk
+     * are adopted (off the caller's thread, which may hold the provider's locks); every time,
+     * the registered checkouts are observed. Before, a restart left every tree unregistered
+     * until an agent called {@code decompile_checkout_create} again, and edits made meanwhile
+     * never reached it.
+     */
+    public void programOpened(Program program) {
+        if (program == null || program.isClosed()) {
+            return;
+        }
+        Consumer<Program> hook = adoptOnOpen;
+        if (hook != null && adoptChecked.putIfAbsent(program, Boolean.TRUE) == null) {
+            adoptExecutor.execute(() -> {
+                if (program.isClosed()) {
+                    return;
+                }
+                try {
+                    hook.accept(program);
+                } catch (Exception e) {
+                    Msg.warn(this, "Adopting checkouts of " + program.getName() + " failed: "
+                            + e.getMessage(), e);
+                }
+            });
+        }
+        ensureObserver(program);
+    }
+
     Function<Checkout, Program> programLookup() {
         return programLookup;
     }
@@ -109,10 +161,12 @@ public final class CheckoutRegistry {
         if (program == null || program.isClosed()) {
             return;
         }
-        Checkout checkout = findCheckoutFor(program);
-        if (checkout == null) {
-            return;
+        for (Checkout checkout : checkoutsFor(program)) {
+            attach(checkout, program);
         }
+    }
+
+    private void attach(Checkout checkout, Program program) {
         String id = checkout.id();
         if (observers.containsKey(id)) {
             // Same checkout, possibly a different Program instance after
@@ -259,24 +313,24 @@ public final class CheckoutRegistry {
         }
     }
 
-    private Checkout findCheckoutFor(Program program) {
-        String domain = null;
+    /**
+     * Every checkout of this program. By domain path when the program has one: a name is
+     * not unique in a project ({@code D2Common.dll} sits in every version folder), and the
+     * first match alone left a second tree of the same program unobserved.
+     */
+    private List<Checkout> checkoutsFor(Program program) {
         DomainFile df = program.getDomainFile();
-        if (df != null) {
-            domain = df.getPathname();
-        }
+        String domain = df != null ? df.getPathname() : null;
         String name = program.getName();
+        List<Checkout> out = new ArrayList<>();
         synchronized (this) {
             for (Checkout c : byId.values()) {
-                if (domain != null && domain.equals(c.domainPath())) {
-                    return c;
-                }
-                if (name != null && name.equals(c.programName())) {
-                    return c;
+                if (domain != null ? domain.equals(c.domainPath()) : Objects.equals(name, c.programName())) {
+                    out.add(c);
                 }
             }
         }
-        return null;
+        return out;
     }
 
     /**
@@ -484,6 +538,8 @@ public final class CheckoutRegistry {
         activeJobs.clear();
         dirtyQueue.clearAll();
         programLookup = null;
+        adoptOnOpen = null;
+        adoptChecked.clear();
     }
 
     private static boolean basenameEquals(String selector, String pathOrName) {

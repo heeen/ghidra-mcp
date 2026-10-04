@@ -335,7 +335,22 @@ client's own built-in tools, so the search costs no permission surface.
   - **The partition log is written in a fixed order.** `index/partitions.json` and
     `modules/index.md` rendered the strategy log from `Map.of`, whose iteration order
     changes between JVM runs, so a tree swept before a restart differed from a fresh sweep
-    after it in those two files.
+    after it in those two files. Each strategy's entry is now stored status, reason, then
+    the rest by name, and a full reconcile rewrites an older tree's file into that order.
+  - **Trees are re-adopted when their program opens.** After every restart no checkout was
+    registered until an agent called `decompile_checkout_create` again, so edits made in the
+    meantime never reached the tree; every agent re-adopted by hand after each deploy. The
+    first time a program instance is resolved, its trees on disk are adopted (off the
+    request thread) and reconciled. Because the default root's parent is shared by every
+    server on a machine and two projects can both hold `/fw.bin`, `checkout.json` now records
+    `program_url` (repository URL when versioned, local project URL otherwise); a tree is
+    adopted only when it names the same program, and `create` refuses one that names
+    another. A tree from before the field is adopted only from a root this server created.
+    Also fixed on the way: only the first checkout of a program was observed (and a
+    same-named program elsewhere in the project could take its place), so a second tree of
+    the same program never received edits. Live: six trees of one program, unregistered
+    after a restart, were all adopted and in sync on open, a rename reached all six, and
+    each then equalled a fresh sweep.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

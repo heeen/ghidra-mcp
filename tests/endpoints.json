@@ -1075,7 +1075,7 @@
         "gui",
         "headless"
       ],
-      "description": "Create a decompilation checkout: a program's decompiled C materialised as a file tree you can Grep and Glob. Use this when you need corpus-wide search — 'which functions reference this string, constant or peripheral' — which is impractical one function at a time. Registers the checkout and writes checkout.json / STATUS.md; does NOT sweep (call decompile_checkout_run(action=start)). Adopts an existing tree at the root and reconciles it against the live program. Unrelated to Ghidra version-control checkouts (/server/version_control/*)."
+      "description": "Create a decompilation checkout: a program's decompiled C materialised as a file tree you can Grep and Glob. Use this when you need corpus-wide search — 'which functions reference this string, constant or peripheral' — which is impractical one function at a time. Registers the checkout and writes checkout.json / STATUS.md; does NOT sweep (call decompile_checkout_run(action=start)). Adopts an existing tree at the root and reconciles it against the live program; trees this server created are also adopted automatically when their program opens. Unrelated to Ghidra version-control checkouts (/server/version_control/*)."
     },
     {
       "path": "/decompile_checkout_delete",

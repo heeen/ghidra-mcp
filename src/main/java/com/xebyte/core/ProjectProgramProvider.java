@@ -711,9 +711,7 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
     }
 
     private static void maybeAttachCheckoutObserver(Program program) {
-        if (program != null && !program.isClosed()) {
-            CheckoutRegistry.getInstance().ensureObserver(program);
-        }
+        CheckoutRegistry.getInstance().programOpened(program);
     }
 
     private static void detachCheckoutObservers(Program program) {

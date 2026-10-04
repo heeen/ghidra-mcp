@@ -64,6 +64,22 @@ public final class Checkout {
         this.session = Session.of(program);
     }
 
+    private volatile String programUrl;
+
+    /**
+     * The program's project URL ({@code ghidra://host/repo/path} when versioned, the local
+     * project's URL otherwise), recorded in {@code checkout.json}. The domain path alone does
+     * not identify a program: two projects on one machine can both hold {@code /fw.bin}, and
+     * share the default root's parent.
+     */
+    public String programUrl() {
+        return programUrl;
+    }
+
+    public void setProgramUrl(String programUrl) {
+        this.programUrl = programUrl;
+    }
+
     public Checkout(CheckoutKey key, String programName, CheckoutConfig config, CheckoutRoot root) {
         this.key = Objects.requireNonNull(key, "key");
         this.programName = Objects.requireNonNull(programName, "programName");

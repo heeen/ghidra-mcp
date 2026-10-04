@@ -508,10 +508,22 @@ known to diverge from the program (`last_error` says why) — resweep.
 `decompile_checkout_status` reports `in_sync`: swept, not stale, and no change still
 queued or being spliced in — the answer to "can I trust a grep right now". `pending_dirty`
 says what is queued. (Modification numbers are reported but are not the test: they also
-move for changes no block shows, and start over each time the program opens.)
+move for changes no block shows, and start over each time the program opens. STATUS.md names
+the `session` the tree was built in, the program's `saved_time` and whether it
+`includes_unsaved_edits`.)
+
+**A tree outlives the server.** When a program opens, its trees on disk are adopted without
+a `create` call: registered, observed, and reconciled against the program as it opened (a
+tree from another session reports `previous_session: true`; edits lost with the old process
+are taken back out). A tree is the program's when its `checkout.json` names the same domain
+path and `program_url` (the repository URL for a versioned file, the local project's URL
+otherwise). A tree from before that field existed is adopted only from a root this server
+created; one under the default root, whose parent every server on the machine shares, waits
+for a `decompile_checkout_create` call, which stamps it. `create` refuses a tree that names
+another project's program.
 
 **Every route ends at the same tree.** A tree that is `in_sync` is byte for byte what a fresh
-sweep would write at that point, apart from the `dts`/`mod` stamps, the status files and
+sweep would write at that point, apart from the `dts` stamps, the status files and
 the tree's own root and id, whether it got there by a sweep, by splices after edits, by a
 full reconcile (`decompile_checkout_refresh` with no addresses), by narrowing its exclusions,
 or by adopting a tree someone copied. One packer lays out every compartment's files and one

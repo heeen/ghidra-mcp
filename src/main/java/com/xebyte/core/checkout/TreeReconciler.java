@@ -95,6 +95,11 @@ public final class TreeReconciler {
             return ReconcileResult.sweepQueued(System.currentTimeMillis() - started,
                     checkout.progress().splicedSinceSweep());
         }
+        if (addresses == null && meta != null) {
+            // Stored as this build writes it (a tree swept by an older build may order its
+            // strategy log differently); unchanged content is not rewritten.
+            meta.write(checkout);
+        }
 
         Path indexPath = checkout.root().path().resolve(CheckoutLayout.byAddressTsv());
         List<TreeFiles.IndexEntry> indexRows = Files.isRegularFile(indexPath)

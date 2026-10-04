@@ -20,8 +20,10 @@ import com.xebyte.core.partition.Partition;
 import com.xebyte.core.partition.PartitionCascade;
 import com.xebyte.core.partition.PartitionContext;
 import com.xebyte.core.partition.Partitioner;
+import ghidra.framework.model.DomainFile;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -57,6 +59,8 @@ import java.util.stream.Stream;
 public class CheckoutService {
 
     private static final int ADOPT_SCAN_CAP = 64;
+    /** One adoption at a time: a create call and the adopt-on-open scan may race for a tree. */
+    private static final Object ADOPT_LOCK = new Object();
     private static final String RESOURCE_URI_PREFIX = "ghidra://decompile-checkout/";
     private static final String POLL_PATH = "/decompile_checkout_status";
 
@@ -70,6 +74,7 @@ public class CheckoutService {
         // dropped every one. Every mode has a ProgramProvider, so derive it
         // here; the GUI's cache-aware lookup still wins via IfAbsent.
         CheckoutRegistry.getInstance().setProgramLookupIfAbsent(this::lookupViaProvider);
+        CheckoutRegistry.getInstance().setAdoptOnOpenIfAbsent(this::adoptOnOpen);
     }
 
     /**
@@ -147,7 +152,8 @@ public class CheckoutService {
             + "peripheral' — which is impractical one function at a time. Registers the "
             + "checkout and writes checkout.json / STATUS.md; does NOT sweep (call "
             + "decompile_checkout_run(action=start)). Adopts an existing tree at the root and "
-            + "reconciles it against the live program. "
+            + "reconciles it against the live program; trees this server created are also "
+            + "adopted automatically when their program opens. "
             + "Unrelated to Ghidra version-control checkouts (/server/version_control/*).",
         category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutCreate(
@@ -227,14 +233,23 @@ public class CheckoutService {
         }
 
         Path jsonPath = derivedRoot.resolve(CheckoutLayout.checkoutJson());
-        boolean adoptable = Files.isRegularFile(jsonPath);
 
         try {
-            if (adoptable) {
+            synchronized (ADOPT_LOCK) {
+                if (!Files.isRegularFile(jsonPath)) {
+                    return createFresh(program, domainPath, resolvedName, requested);
+                }
+                String treeUrl = stringField(JsonHelper.parseJson(
+                        Files.readString(jsonPath, StandardCharsets.UTF_8)), "program_url");
+                String url = programUrl(program);
+                if (treeUrl != null && url != null && !treeUrl.equals(url)) {
+                    return Response.err("the tree at " + derivedRoot + " is a checkout of "
+                            + treeUrl + ", not of " + url + " (same domain path, another "
+                            + "project); pass a different root");
+                }
                 return adoptExisting(program, domainPath, resolvedName, derivedRoot,
                         jsonPath, requested);
             }
-            return createFresh(program, domainPath, resolvedName, requested);
         } catch (IOException e) {
             return Response.err("checkout create failed: " + e.getMessage());
         } catch (IllegalArgumentException e) {
@@ -709,6 +724,7 @@ public class CheckoutService {
             throws IOException {
         Checkout checkout = CheckoutRegistry.getInstance()
                 .create(domainPath, programName, requested);
+        checkout.setProgramUrl(programUrl(program));
         writeCheckoutJson(checkout);
         // Nothing has been swept yet — "dirty" would mean a crash mid-sweep.
         CheckoutStatusMd.write(checkout, "empty");
@@ -747,6 +763,7 @@ public class CheckoutService {
             checkout = registry.create(domainPath, programName, requested);
             checkout.setConfig(loaded);
         }
+        checkout.setProgramUrl(programUrl(program));
 
         StatusFile statusFile = readStatusMd(derivedRoot);
         Long sweptAt = statusFile.sweptAtModificationNumber();
@@ -914,30 +931,96 @@ public class CheckoutService {
         return out;
     }
 
-    private List<Map<String, Object>> scanAdoptable(Set<String> knownRoots) {
-        List<Map<String, Object>> found = new ArrayList<>();
+    /**
+     * Directories that may hold a checkout: the roots a caller chose (the registry remembers
+     * them; first, so the cap can never crowd out a root someone named deliberately), then
+     * the default parent's children by name. At most {@link #ADOPT_SCAN_CAP}.
+     */
+    private static List<Path> candidateRoots() throws IOException {
+        List<Path> dirs = new ArrayList<>();
         Path parent = CheckoutRegistry.defaultParent();
-        try {
-            List<Path> dirs = new ArrayList<>();
-            if (Files.isDirectory(parent)) {
-                try (DirectoryStream<Path> stream = Files.newDirectoryStream(parent)) {
-                    for (Path entry : stream) {
-                        if (Files.isDirectory(entry)) {
-                            dirs.add(entry);
-                        }
+        if (Files.isDirectory(parent)) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(parent)) {
+                for (Path entry : stream) {
+                    if (Files.isDirectory(entry)) {
+                        dirs.add(entry);
                     }
                 }
             }
-            dirs.sort(Comparator.comparing(p -> p.getFileName().toString()));
-            // Trees at roots a caller chose live anywhere; the registry remembers them. First,
-            // so the scan cap can never crowd out a root someone named deliberately.
-            dirs.addAll(0, CheckoutRegistry.getInstance().knownRoots().list());
-            int scanned = 0;
-            for (Path dir : dirs) {
-                if (scanned >= ADOPT_SCAN_CAP) {
-                    break;
+        }
+        dirs.sort(Comparator.comparing(p -> p.getFileName().toString()));
+        dirs.addAll(0, CheckoutRegistry.getInstance().knownRoots().list());
+        return dirs.size() > ADOPT_SCAN_CAP ? dirs.subList(0, ADOPT_SCAN_CAP) : dirs;
+    }
+
+    private static Set<String> registeredRoots() {
+        Set<String> roots = new LinkedHashSet<>();
+        for (Checkout c : CheckoutRegistry.getInstance().all()) {
+            roots.add(c.root().path().toAbsolutePath().normalize().toString());
+        }
+        return roots;
+    }
+
+    /**
+     * Adopt every tree of this program found on disk, as {@code decompile_checkout_create}
+     * would: register it, observe the program, reconcile. Runs once per open (see
+     * {@link CheckoutRegistry#programOpened}). A tree is this program's when its
+     * {@code checkout.json} names the same domain path and program URL. A tree from before
+     * the URL was recorded is taken only from a root this instance created; one under the
+     * default parent, which every server on the machine shares, waits for a create call.
+     */
+    private void adoptOnOpen(Program program) {
+        String domainPath = domainPathOf(program);
+        String name = program.getName();
+        String url = programUrl(program);
+        Path defaultRoot = deriveRootPath(domainPath, name, CheckoutConfig.builder().build());
+        try {
+            Set<Path> known = new LinkedHashSet<>();
+            for (Path p : CheckoutRegistry.getInstance().knownRoots().list()) {
+                known.add(p.toAbsolutePath().normalize());
+            }
+            for (Path dir : candidateRoots()) {
+                Path abs = dir.toAbsolutePath().normalize();
+                Path json = abs.resolve(CheckoutLayout.checkoutJson());
+                if (!Files.isRegularFile(json)) {
+                    continue;
                 }
-                scanned++;
+                Map<String, Object> disk;
+                try {
+                    disk = JsonHelper.parseJson(Files.readString(json, StandardCharsets.UTF_8));
+                } catch (IOException | RuntimeException e) {
+                    continue;
+                }
+                if (!domainPath.equals(stringField(disk, "domain_path"))) {
+                    continue;
+                }
+                String treeUrl = stringField(disk, "program_url");
+                if (treeUrl != null ? !treeUrl.equals(url) : !known.contains(abs)) {
+                    continue;
+                }
+                CheckoutConfig requested = CheckoutConfig.builder()
+                        .rootPath(abs.equals(defaultRoot) ? null : abs.toString())
+                        .build();
+                synchronized (ADOPT_LOCK) {
+                    if (program.isClosed() || registeredRoots().contains(abs.toString())) {
+                        continue;
+                    }
+                    Response r = adoptExisting(program, domainPath, name, abs, json, requested);
+                    if (r instanceof Response.Ok) {
+                        Msg.info(this, "Adopted decompilation checkout of " + domainPath + " at "
+                                + abs + " on open");
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Msg.warn(this, "Scanning for checkouts of " + domainPath + " failed: " + e.getMessage());
+        }
+    }
+
+    private List<Map<String, Object>> scanAdoptable(Set<String> knownRoots) {
+        List<Map<String, Object>> found = new ArrayList<>();
+        try {
+            for (Path dir : candidateRoots()) {
                 String abs = dir.toAbsolutePath().normalize().toString();
                 if (knownRoots.contains(abs)) {
                     continue;
@@ -953,6 +1036,7 @@ public class CheckoutService {
                 row.put("checkout_id", stringField(disk, "checkout_id"));
                 row.put("program_name", stringField(disk, "program_name"));
                 row.put("domain_path", stringField(disk, "domain_path"));
+                row.put("program_url", stringField(disk, "program_url"));
                 row.put("files_on_disk", countFiles(dir));
                 StatusFile statusFile = readStatusMd(dir);
                 row.put("status_state", statusFile.state());
@@ -1020,6 +1104,24 @@ public class CheckoutService {
         return CheckoutKey.of(domainPath, CheckoutRegistry.defaultParent().toString());
     }
 
+    /**
+     * The program's identity beyond its domain path: the repository URL when it is versioned
+     * (the same on every machine and across restarts), else the local project's URL. Null
+     * for a program outside any project.
+     */
+    static String programUrl(Program program) {
+        DomainFile df = program.getDomainFile();
+        if (df == null) {
+            return null;
+        }
+        try {
+            java.net.URL url = df.isVersioned() ? df.getSharedProjectURL(null) : df.getLocalProjectURL(null);
+            return url != null ? url.toString() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     private static String domainPathOf(Program program) {
         if (program.getDomainFile() != null) {
             return program.getDomainFile().getPathname();
@@ -1032,6 +1134,9 @@ public class CheckoutService {
         payload.put("checkout_id", checkout.id());
         payload.put("domain_path", checkout.domainPath());
         payload.put("program_name", checkout.programName());
+        if (checkout.programUrl() != null) {
+            payload.put("program_url", checkout.programUrl());
+        }
         payload.putAll(configToMap(checkout.config()));
         String json = JsonHelper.toJson(payload) + "\n";
         checkout.root().writeFile(Path.of(CheckoutLayout.checkoutJson()), json);

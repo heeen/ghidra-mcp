@@ -1,6 +1,7 @@
 package com.xebyte.offline;
 
 import com.xebyte.core.checkout.ModuleOverrides;
+import com.xebyte.core.checkout.PartitionMeta;
 import com.xebyte.core.partition.AddressBandPartitioner;
 import com.xebyte.core.partition.Partition;
 import com.xebyte.core.partition.PartitionCascade;
@@ -138,11 +139,24 @@ public class ModuleOverridesTest {
         assertFalse(bandNames.contains("Pinned"));
         assertEquals(3, ctx.assignedCount());
 
-        // index/partitions.json renders this log; Map.of's per-JVM order made a tree swept
-        // before a restart differ from a fresh sweep after it.
+        // The partition tool reports this log as built; Map.of's order changed per JVM run.
         assertEquals(List.of("status", "expected_coverage", "reason", "partitions",
                 "functions_placed", "pool_before"),
                 List.copyOf(((java.util.Map<?, ?>) cascade.strategyLog().get("address-band")).keySet()));
+    }
+
+    @Test
+    public void aTreeStoresTheStrategyLogInOneOrderWhateverOrderItWasBuiltIn() {
+        // index/partitions.json and modules/index.md render it: a tree swept before a restart
+        // differed from a fresh sweep after it, and a reconcile kept whatever order it read.
+        java.util.Map<String, Object> scrambled = new java.util.LinkedHashMap<>();
+        scrambled.put("address-band", new java.util.LinkedHashMap<>(java.util.Map.of(
+                "pool_before", 12, "reason", "fallback", "functions_placed", 12, "status", "ran")));
+        PartitionMeta meta = new PartitionMeta(12, 12, 12, 0, java.util.Map.of(), scrambled, List.of());
+
+        assertEquals(List.of("status", "reason", "functions_placed", "pool_before"),
+                List.copyOf(((java.util.Map<?, ?>) meta.strategyLog().get("address-band")).keySet()));
+        assertEquals("12", ((java.util.Map<?, ?>) meta.strategyLog().get("address-band")).get("pool_before"));
     }
 
     @Test

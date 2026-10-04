@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * What a sweep decided about the program's grouping, kept as {@code index/partitions.json}:
@@ -35,6 +36,13 @@ public record PartitionMeta(
         Map<String, Object> strategyLog,
         List<Part> partitions) {
 
+    /** Strategy log entries are stored in {@link #canonical} order, however they were built. */
+    public PartitionMeta {
+        Map<String, Object> log = new LinkedHashMap<>();
+        strategyLog.forEach((k, v) -> log.put(k, stringify(v)));
+        strategyLog = log;
+    }
+
     /** One compartment's grouping. */
     public record Part(String slug, String method, double confidence, Map<String, String> evidence) {
     }
@@ -43,8 +51,6 @@ public record PartitionMeta(
             ExclusionEvaluator.ScopeStats scope, int functionsWithStrings) {
         Map<String, String> removed = new LinkedHashMap<>();
         scope.removedByRule().forEach((k, v) -> removed.put(k, String.valueOf(v)));
-        Map<String, Object> log = new LinkedHashMap<>();
-        cascade.strategyLog().forEach((k, v) -> log.put(k, stringify(v)));
         List<Part> parts = new ArrayList<>(partitions.size());
         for (Partition p : partitions) {
             Map<String, String> evidence = new LinkedHashMap<>();
@@ -52,16 +58,29 @@ public record PartitionMeta(
             parts.add(new Part(p.slug(), p.method(), p.confidence(), evidence));
         }
         return new PartitionMeta(scope.eligibleFunctions(), scope.functionsInScope(),
-                cascade.assignedFunctions(), functionsWithStrings, removed, log, parts);
+                cascade.assignedFunctions(), functionsWithStrings, removed, cascade.strategyLog(), parts);
     }
 
     private static Object stringify(Object v) {
-        if (v instanceof Map<?, ?> m) {
-            Map<String, String> out = new LinkedHashMap<>();
-            m.forEach((k, x) -> out.put(String.valueOf(k), String.valueOf(x)));
-            return out;
+        return v instanceof Map<?, ?> ? canonical(strings(v)) : String.valueOf(v);
+    }
+
+    /**
+     * One strategy's log entry in a fixed order: {@code status}, {@code reason}, then the rest
+     * by name. The order is written to {@code partitions.json} and {@code modules/index.md},
+     * and a tree must not depend on how its producer happened to order a map (a sweep's
+     * {@code Map.of} order changed from one JVM run to the next, and a reconcile keeps
+     * whatever it reads).
+     */
+    private static Map<String, String> canonical(Map<String, String> entry) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String first : List.of("status", "reason")) {
+            if (entry.containsKey(first)) {
+                out.put(first, entry.get(first));
+            }
         }
-        return String.valueOf(v);
+        new TreeMap<>(entry).forEach(out::putIfAbsent);
+        return out;
     }
 
     public Part part(String slug) {
@@ -109,15 +128,13 @@ public record PartitionMeta(
             parts.add(new Part(String.valueOf(p.get("slug")), String.valueOf(p.get("method")),
                     ((Number) p.get("confidence")).doubleValue(), strings(p.get("evidence"))));
         }
-        Map<String, Object> log = new LinkedHashMap<>();
-        ((Map<String, Object>) json.getOrDefault("strategy_log", Map.of())).forEach(
-                (k, v) -> log.put(k, v instanceof Map<?, ?> ? strings(v) : String.valueOf(v)));
         return new PartitionMeta(
                 JsonHelper.getInt(json.get("eligible_functions"), 0),
                 JsonHelper.getInt(json.get("functions_in_scope"), 0),
                 JsonHelper.getInt(json.get("assigned_functions"), 0),
                 JsonHelper.getInt(json.get("functions_with_strings"), 0),
-                strings(json.get("removed_by_rule")), log, parts);
+                strings(json.get("removed_by_rule")),
+                (Map<String, Object>) json.getOrDefault("strategy_log", Map.of()), parts);
     }
 
     @SuppressWarnings("unchecked")
