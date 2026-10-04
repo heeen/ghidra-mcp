@@ -140,7 +140,7 @@ public class FunctionBlockParityGhidraTest {
             String block;
             try {
                 block = FunctionBlock.build(func, pooled, 30, TaskMonitor.DUMMY, "c00",
-                    "address-band", 0.5, false, 1L, program.getName()).text();
+                    "address-band", 0.5, false, program.getName()).text();
             } finally {
                 pooled.dispose();
             }
@@ -160,7 +160,7 @@ public class FunctionBlockParityGhidraTest {
             String body = String.valueOf(facts.get("decompiled_code"));
             String expected = FunctionBlock.render(facts, body, new FunctionBlock.Placement(
                 "c00", "address-band", 0.5, false,
-                java.time.Instant.parse(String.valueOf(parsed.get("dts"))), 1L,
+                java.time.Instant.parse(String.valueOf(parsed.get("dts"))),
                 SweepJob.functionResourceUri(program.getName(), func.getEntryPoint().toString(false))));
             assertEquals("block for " + func.getName() + " must equal the bundle's facts rendered",
                 expected, block);
@@ -180,7 +180,7 @@ public class FunctionBlockParityGhidraTest {
         Map<String, Object> parsed;
         try {
             parsed = FunctionBlock.parse(FunctionBlock.build(caller, pooled, 30, TaskMonitor.DUMMY,
-                "c00", "address-band", 0.5, false, 1L, program.getName()).text());
+                "c00", "address-band", 0.5, false, program.getName()).text());
         } finally {
             pooled.dispose();
         }
@@ -199,7 +199,7 @@ public class FunctionBlockParityGhidraTest {
             FunctionFacts::configureDecompiler);
         try {
             Map<String, Object> c = FunctionBlock.parse(FunctionBlock.build(callee, again, 30,
-                TaskMonitor.DUMMY, "c00", "address-band", 0.5, false, 1L, program.getName()).text());
+                TaskMonitor.DUMMY, "c00", "address-band", 0.5, false, program.getName()).text());
             assertTrue(String.valueOf(c.get("callers")).startsWith("check_ready@"));
             assertTrue(String.valueOf(c.get("refs")), String.valueOf(c.get("refs")).contains("0x00001800"));
             assertTrue(c.containsKey("xref"));

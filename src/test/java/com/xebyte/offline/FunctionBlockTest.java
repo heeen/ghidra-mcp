@@ -51,7 +51,7 @@ public class FunctionBlockTest {
 
     private static FunctionBlock.Placement where() {
         return new FunctionBlock.Placement("m01", "mmio-page", 0.9, true,
-                Instant.parse("2026-10-01T00:00:00Z"), 7L, "ghidra://function/fw/08004000");
+                Instant.parse("2026-10-01T00:00:00Z"), "ghidra://function/fw/08004000");
     }
 
     @Test

@@ -50,9 +50,22 @@ public final class CheckoutStatusMd {
         sb.append("state: ").append(state).append('\n');
         sb.append("phase: ").append(p.phase().name().toLowerCase(Locale.ROOT)).append('\n');
         sb.append("checkout_id: ").append(checkout.id()).append('\n');
+        // Modification numbers start over on every open: they compare only within `session`.
+        // saved_time / file_version name the saved program the tree reflects across restarts.
+        Checkout.Session session = checkout.session();
+        if (session != null) {
+            sb.append("session: ").append(session.epoch()).append('\n');
+        }
         sb.append("swept_at_modification_number: ").append(orBlank(p.sweptAtModification())).append('\n');
         sb.append("reconciled_at_modification_number: ")
                 .append(orBlank(p.reconciledAtModification())).append('\n');
+        if (session != null) {
+            sb.append("saved_time: ").append(Instant.ofEpochMilli(session.savedTime())).append('\n');
+            if (session.fileVersion() != null) {
+                sb.append("file_version: ").append(session.fileVersion()).append('\n');
+            }
+            sb.append("includes_unsaved_edits: ").append(session.unsavedEdits()).append('\n');
+        }
         sb.append("functions_total: ").append(p.functionsTotal()).append('\n');
         sb.append("functions_done: ").append(p.functionsDone()).append('\n');
         sb.append("functions_failed: ").append(p.functionsFailed()).append('\n');

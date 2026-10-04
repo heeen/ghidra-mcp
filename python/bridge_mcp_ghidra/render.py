@@ -58,8 +58,8 @@ def _kv_line(bundle: dict) -> list[str]:
     if bundle.get("classification"):
         bits.append(f"classification: {bundle['classification']}")
     revision = bundle.get("revision") or {}
-    if revision.get("modification_number") is not None:
-        bits.append(f"modification_number: {revision['modification_number']}")
+    if revision.get("token"):
+        bits.append(f"revision: {revision['token']}")
     if bits:
         out.append(" · ".join(bits))
     extent = []
@@ -434,13 +434,8 @@ def _checkout_headline(payload: dict) -> str:
 
 
 def _checkout_freshness(payload: dict) -> str:
-    """Does the tree describe the program as it is now? The tree reflects
-    ``reconciled_at_modification_number`` (the sweep's, advanced by each splice); older
-    servers only report the sweep's."""
-    tree = payload.get("reconciled_at_modification_number")
-    if tree is None:
-        tree = payload.get("swept_at_modification_number")
-    live = payload.get("live_modification_number")
+    """Does the tree describe the program as it is now? ``in_sync`` answers it: swept, not
+    stale, nothing queued. Modification numbers cannot (they start over on every open)."""
     pending = payload.get("pending_dirty")
     if payload.get("phase") == "stale":
         return f"stale ({payload.get('last_error') or 'resweep needed'})"
@@ -449,12 +444,9 @@ def _checkout_freshness(payload: dict) -> str:
     if payload.get("in_sync") is True:
         spliced = payload.get("spliced_since_sweep") or 0
         return "fresh" + (f", {spliced} blocks spliced since sweep" if spliced else "")
-    if tree is None or live is None:
-        return "unknown"
-    if tree == live:
-        spliced = payload.get("spliced_since_sweep") or 0
-        return f"fresh (mod {live})" + (f", {spliced} blocks spliced since sweep" if spliced else "")
-    return f"behind (tree at {tree}, live {live})"
+    if payload.get("in_sync") is False:
+        return "not in sync"
+    return "unknown (program not open)"
 
 
 def _human_bytes(n) -> str:

@@ -139,11 +139,12 @@ class TestCheckoutMarkdown(unittest.TestCase):
             },
             "status_state": "clean",
             "swept_at_modification_number": 3,
+            "in_sync": True,
         })
         self.assertTrue(body.startswith("# Checkout co_7de33ad7 — synaWudfBioUsb.dll"))
         self.assertIn("complete · 3230/3230", body)
         self.assertIn("## Status", body)
-        self.assertIn("freshness: fresh (mod 3)", body)
+        self.assertIn("freshness: fresh", body)
         self.assertIn("## Configuration", body)
         self.assertIn("band size: 20", body)
         self.assertIn("max file bytes: 32768", body)
@@ -156,26 +157,27 @@ class TestCheckoutMarkdown(unittest.TestCase):
         self.assertLess(body.index("## Status"), body.index("## Configuration"))
         self.assertLess(body.index("## Configuration"), body.index("## How to read"))
 
-    def test_freshness_follows_the_tree_not_the_sweep(self):
-        """A spliced tree at the live modification number is fresh, and says it was spliced;
-        the sweep's own number lagging behind does not make it stale."""
+    def test_freshness_is_in_sync_not_modification_numbers(self):
+        """Modification numbers start over on every open, so freshness comes from in_sync
+        (swept, not stale, nothing queued) alone; numbers from another session never
+        decide it."""
         from bridge_mcp_ghidra.render import _checkout_freshness
         self.assertEqual(
-            _checkout_freshness({"swept_at_modification_number": 3,
+            _checkout_freshness({"in_sync": True, "spliced_since_sweep": 2,
                                  "reconciled_at_modification_number": 5,
-                                 "live_modification_number": 5, "spliced_since_sweep": 2}),
-            "fresh (mod 5), 2 blocks spliced since sweep")
+                                 "live_modification_number": 900}),
+            "fresh, 2 blocks spliced since sweep")
         self.assertEqual(
-            _checkout_freshness({"reconciled_at_modification_number": 5,
-                                 "live_modification_number": 6}),
-            "behind (tree at 5, live 6)")
+            _checkout_freshness({"in_sync": False, "reconciled_at_modification_number": 5,
+                                 "live_modification_number": 5}),
+            "not in sync")
         self.assertEqual(
-            _checkout_freshness({"reconciled_at_modification_number": 5,
-                                 "live_modification_number": 6, "pending_dirty": 3}),
+            _checkout_freshness({"in_sync": False, "pending_dirty": 3}),
             "catching up (3 pending)")
         self.assertEqual(
             _checkout_freshness({"phase": "stale", "last_error": "edits were discarded"}),
             "stale (edits were discarded)")
+        self.assertEqual(_checkout_freshness({}), "unknown (program not open)")
 
     def test_list_shape_renders_compact_table(self):
         body = checkout_markdown({

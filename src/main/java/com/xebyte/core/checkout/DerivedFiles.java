@@ -85,8 +85,8 @@ public final class DerivedFiles {
     }
 
     /**
-     * Write a compartment file unless it already says the same apart from the render stamps
-     * ({@code dts}, {@code mod}); true if written. A sweep over an unchanged program then
+     * Write a compartment file unless it already says the same apart from the render stamp
+     * ({@code dts}); true if written. A sweep over an unchanged program then
      * touches nothing: no mtime churn for a watcher, no diff in a committed tree.
      */
     static boolean writeIfContentChanged(Checkout checkout, String relative, String content)
@@ -103,7 +103,7 @@ public final class DerivedFiles {
     private static String withoutStamps(String text) {
         StringBuilder sb = new StringBuilder(text.length());
         for (String line : text.split("\n", -1)) {
-            if (!line.startsWith("// dts: ") && !line.startsWith("// mod: ")) {
+            if (!line.startsWith("// dts: ")) {
                 sb.append(line).append('\n');
             }
         }

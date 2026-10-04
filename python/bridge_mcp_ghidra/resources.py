@@ -231,9 +231,9 @@ async def function_index_resource(program: str) -> str:
 @mcp.resource(
     "ghidra://program/{program}/changes",
     name="Ghidra change token",
-    description="The program's modification counter plus what this session can expect in "
-                "the way of change notifications. Read this when a cached bundle might be "
-                "stale: compare it against the bundle's own revision.modification_number.",
+    description="The program's change token plus what this session can expect in the way "
+                "of change notifications. Read this when a cached bundle might be stale: "
+                "compare its token with the bundle's own revision.token.",
     mime_type=_JSON,
 )
 async def program_changes_resource(program: str) -> str:
@@ -242,9 +242,9 @@ async def program_changes_resource(program: str) -> str:
     Notifications can be lost (a transport with no stream open, a session that
     reconnected), and a stale read is worse than churn — an agent that re-reads
     pre-write code concludes its own write did not land. So the token is
-    published as well as polled: comparing it to a bundle's
-    ``revision.modification_number`` detects staleness without any notification
-    at all.
+    published as well as polled: comparing it to a bundle's ``revision.token``
+    detects staleness without any notification at all. The token, not the bare
+    modification number: that number starts over each time the program opens.
     """
     name = unquote(program)
     uri = f"ghidra://program/{quote(name, safe='')}/changes"
@@ -257,9 +257,9 @@ async def program_changes_resource(program: str) -> str:
     stateless = bool(getattr(mcp.settings, "stateless_http", False))
     payload["notifications"] = {
         "subscribe_supported": not stateless,
-        "staleness_check": "Re-read this resource and compare modification_number with "
-                           "the revision.modification_number in a cached function bundle; "
-                           "they diverge whenever the program was written to.",
+        "staleness_check": "Re-read this resource and compare token with the "
+                           "revision.token in a cached function bundle; they diverge "
+                           "whenever the program was written to, saved, or reopened.",
         "granularity": "Per program, not per function. It counts writes rather than "
                        "changed content, so re-setting an identical comment still moves it.",
         "caveats": [

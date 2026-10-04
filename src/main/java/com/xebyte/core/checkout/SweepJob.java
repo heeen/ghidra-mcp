@@ -256,7 +256,7 @@ public final class SweepJob implements Runnable {
                     }
 
                     boolean evidenceBacked = isEvidenceBacked(part, func, ctx);
-                    FunctionEmit emit = decompileOne(func, part, evidenceBacked, sweptMod, ctx);
+                    FunctionEmit emit = decompileOne(func, part, evidenceBacked, ctx);
                     String addrHex = CheckoutAddresses.of(func);
                     writePacked(packer.add(addrHex, emit.text()));
                     String relativeFile = packer.currentPath();
@@ -436,11 +436,11 @@ public final class SweepJob implements Runnable {
     // -------------------------------------------------------------------------
 
     private FunctionEmit decompileOne(
-            Function func, Partition part, boolean evidenceBacked, long modNumber,
+            Function func, Partition part, boolean evidenceBacked,
             PartitionContext ctx) {
         FunctionBlock.Built block = FunctionBlock.build(func, decomp,
                 checkout.config().decompileTimeoutSeconds(), cancel.monitor(), part.slug(),
-                part.method(), part.confidence(), evidenceBacked, modNumber, program.getName());
+                part.method(), part.confidence(), evidenceBacked, program.getName());
         return new FunctionEmit(block.text(), block.failed());
     }
 
@@ -810,6 +810,9 @@ public final class SweepJob implements Runnable {
         // failed or cancelled one leaves a partly rewritten tree that matches no
         // modification number.
         next = phase == SweepProgress.Phase.COMPLETE ? next.sweptAt(sweptAt) : next.sweptAt(null);
+        if (!program.isClosed()) {
+            checkout.noteSession(program);
+        }
         String state = CheckoutStatusMd.stateForPhase(phase);
         publish(next, state);
     }

@@ -38,6 +38,32 @@ public final class Checkout {
         return treeLock;
     }
 
+    /**
+     * The program state the tree's progress numbers belong to. Modification numbers start over
+     * on every open, so they compare only within one {@code epoch}
+     * ({@link com.xebyte.core.ProgramRevision}); {@code savedTime}/{@code fileVersion} name the
+     * saved program the tree reflects, and survive restarts.
+     */
+    public record Session(String epoch, long savedTime, Integer fileVersion, boolean unsavedEdits) {
+        public static Session of(ghidra.program.model.listing.Program program) {
+            return new Session(com.xebyte.core.ProgramRevision.epoch(program),
+                    com.xebyte.core.ProgramRevision.savedTime(program),
+                    com.xebyte.core.ProgramRevision.fileVersion(program),
+                    program.isChanged());
+        }
+    }
+
+    private volatile Session session;
+
+    public Session session() {
+        return session;
+    }
+
+    /** Record the program state the progress just written describes. */
+    public void noteSession(ghidra.program.model.listing.Program program) {
+        this.session = Session.of(program);
+    }
+
     public Checkout(CheckoutKey key, String programName, CheckoutConfig config, CheckoutRoot root) {
         this.key = Objects.requireNonNull(key, "key");
         this.programName = Objects.requireNonNull(programName, "programName");

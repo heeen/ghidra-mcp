@@ -146,8 +146,8 @@ public class CheckoutService {
             + "corpus-wide search — 'which functions reference this string, constant or "
             + "peripheral' — which is impractical one function at a time. Registers the "
             + "checkout and writes checkout.json / STATUS.md; does NOT sweep (call "
-            + "decompile_checkout_run(action=start)). Adopts an existing tree at the derived root, "
-            + "reconciling swept_at_modification_number against the live program. "
+            + "decompile_checkout_run(action=start)). Adopts an existing tree at the root and "
+            + "reconciles it against the live program. "
             + "Unrelated to Ghidra version-control checkouts (/server/version_control/*).",
         category = "decompile-checkout", access = ToolAccess.WRITE)
     public Response checkoutCreate(
@@ -766,6 +766,15 @@ public class CheckoutService {
             out.put("fresh", Boolean.TRUE.equals(out.get("in_sync")));
             return Response.ok(out);
         }
+        // The numbers on disk belong to the session that wrote them. From another open (any
+        // server restart) they say nothing about this program, so the tree is rebased onto
+        // this session at its current number; the full reconcile queued below then checks
+        // every block against the program as it is.
+        boolean sameSession = com.xebyte.core.ProgramRevision.epoch(program).equals(statusFile.fields().get("session"));
+        if (sweptAt != null && !sameSession) {
+            sweptAt = liveMod;
+            reconciledAt = liveMod;
+        }
         if (sweptAt != null && checkout.progress().sweptAtModification() == null) {
             checkout.setProgress(checkout.progress()
                     .withPhase(SweepProgress.Phase.COMPLETE)
@@ -773,6 +782,7 @@ public class CheckoutService {
                     .reconciledAt(reconciledAt,
                             statusFile.count("spliced_since_sweep"),
                             statusFile.count("structural_since_sweep")));
+            checkout.noteSession(program);
         }
 
         // A dirty STATUS.md means the previous writer did not finish (crash /
@@ -805,6 +815,7 @@ public class CheckoutService {
         out.put("files_on_disk", files);
         out.put("swept_at_modification_number", sweptAt);
         out.put("live_modification_number", liveMod);
+        out.put("previous_session", !sameSession);
         out.put("fresh", false);
         out.put("reconcile_queued", !stale && sweptAt != null);
         return Response.ok(out);
@@ -862,6 +873,21 @@ public class CheckoutService {
         out.put("structural_since_sweep", progress.structuralSinceSweep());
         out.put("swept_at_modification_number", progress.sweptAtModification());
         out.put("reconciled_at_modification_number", progress.reconciledAtModification());
+        Checkout.Session session = checkout.session();
+        if (session != null) {
+            Map<String, Object> s = new LinkedHashMap<>();
+            s.put("epoch", session.epoch());
+            s.put("saved_time", session.savedTime());
+            if (session.fileVersion() != null) {
+                s.put("file_version", session.fileVersion());
+            }
+            s.put("includes_unsaved_edits", session.unsavedEdits());
+            if (live != null) {
+                // The numbers above compare with the live program's only within one open.
+                s.put("current", session.epoch().equals(com.xebyte.core.ProgramRevision.epoch(live)));
+            }
+            out.put("session", s);
+        }
         DirtyQueue queue = CheckoutRegistry.getInstance().dirtyQueue();
         boolean pendingFull = queue.pendingNeedsReconcile(checkout.id());
         int pending = queue.pendingAddressCount(checkout.id());

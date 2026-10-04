@@ -1,5 +1,7 @@
 package com.xebyte.core.partition;
 
+import com.xebyte.core.JsonHelper;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -63,12 +65,12 @@ public final class PartitionCascade {
         for (Partitioner p : partitioners) {
             int poolBefore = ctx.size() - ctx.assignedCount();
             if (poolBefore == 0) {
-                log.put(p.name(), Map.of("status", "skipped", "reason", "nothing left unassigned"));
+                log.put(p.name(), JsonHelper.mapOf("status", "skipped", "reason", "nothing left unassigned"));
                 continue;
             }
             Applicability a = p.probe(ctx);
             if (!a.applicable()) {
-                log.put(p.name(), Map.of("status", "not_applicable", "reason", a.reason()));
+                log.put(p.name(), JsonHelper.mapOf("status", "not_applicable", "reason", a.reason()));
                 continue;
             }
             List<Partition> produced = p.partition(ctx);
@@ -87,7 +89,7 @@ public final class PartitionCascade {
                 placed += idx.size();
                 all.add(part);
             }
-            log.put(p.name(), Map.of(
+            log.put(p.name(), JsonHelper.mapOf(
                     "status", "ran",
                     "expected_coverage", a.expectedCoverage(),
                     "reason", a.reason(),

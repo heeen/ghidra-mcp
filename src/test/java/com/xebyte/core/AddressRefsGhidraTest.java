@@ -82,7 +82,7 @@ public class AddressRefsGhidraTest {
             FunctionFacts::configureDecompiler);
         try {
             return FunctionBlock.build(func, decomp, 30, TaskMonitor.DUMMY, "c00",
-                "address-band", 0.5, false, 1L, program.getName());
+                "address-band", 0.5, false, program.getName());
         } finally {
             decomp.dispose();
         }

@@ -140,8 +140,7 @@ public class BlockSplicerTest {
     @Test
     public void aRerenderThatOnlyMovesTheStampsIsNotAChange() {
         String block = TestBlocks.block("Callee", "00100100", "void Callee(void) {}\n");
-        String rerendered = block.replace("// mod: 1\n", "// mod: 97\n")
-                .replace("// dts: 2026-01-01T00:00:00Z", "// dts: 2026-10-02T09:00:00Z");
+        String rerendered = block.replace("// dts: 2026-01-01T00:00:00Z", "// dts: 2026-10-02T09:00:00Z");
         assertNotEquals(block, rerendered);
         assertTrue(BlockSplicer.sameBlock(block, rerendered));
         assertTrue("stamps are outside the fingerprint", FunctionBlock.intact(rerendered));
@@ -153,5 +152,14 @@ public class BlockSplicerTest {
         assertTrue(FunctionBlock.intact(block));
         assertFalse(FunctionBlock.intact(block.replace("void F(void) {}", "void F(void) { /* edit */ }")));
         assertFalse(FunctionBlock.intact(block.replace("// fn: F", "// fn: G")));
+    }
+
+    /** A block from a build that still stamped // mod: is rebuilt, so old trees converge. */
+    @Test
+    public void aBlockWithTheRetiredModStampIsNotIntact() {
+        String block = TestBlocks.block("F", "00100100", "void F(void) {}\n");
+        assertTrue(FunctionBlock.intact(block));
+        String legacy = block.replace("// dts: ", "// mod: 7\n// dts: ");
+        assertFalse(FunctionBlock.intact(legacy));
     }
 }

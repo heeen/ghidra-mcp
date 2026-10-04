@@ -127,7 +127,7 @@ public class OverlayAddressKeysGhidraTest {
             FunctionFacts::configureDecompiler);
         try {
             return FunctionBlock.build(f, decomp, 30, TaskMonitor.DUMMY, "c00", "address-band",
-                0.5, false, 1L, program.getName()).text();
+                0.5, false, program.getName()).text();
         } finally {
             decomp.dispose();
         }

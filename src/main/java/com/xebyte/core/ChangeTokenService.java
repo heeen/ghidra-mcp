@@ -8,15 +8,12 @@ import java.util.Map;
 /**
  * Cheap change token for out-of-band edits the bridge cannot see.
  *
- * <p>{@link Program#getModificationNumber()} advances on real DB changes
- * (rename, comment, struct edit, undo/redo, GUI writes, scripts) and never on a
- * read. It is not idempotent per <em>intent</em>, only per <em>write</em>:
- * renaming a function to the name it already has measured +0, but re-setting an
- * identical comment measured +1, so an unchanged body can still bump the token.
- * That direction is the safe one — it over-invalidates rather than serving stale
- * text. The bridge polls this and emits {@code resources/updated} for URIs it
- * already knows about, catching everything write-hook invalidation is blind to,
- * at program coarseness.
+ * <p>The token is {@link ProgramRevision#token}: the program file's saved time, an id for
+ * this open, and the modification number. The number alone advances on real DB changes and
+ * never on a read, but starts over each time the program is opened, so after a restart it
+ * could land on the value a client had cached and a stale resource would read as current.
+ * Compare the whole token. It over-invalidates rather than serving stale text: re-setting an
+ * identical comment moves it.
  *
  * @since 7.1.0
  */
@@ -29,10 +26,11 @@ public class ChangeTokenService {
     }
 
     @McpTool(path = "/get_change_token",
-        description = "Return program.getModificationNumber() — a cheap monotonic token that "
-            + "moves on real DB changes (rename, comment, struct edit, undo/redo, GUI writes, "
-            + "scripts) and never on a read. Used by the bridge to invalidate cached "
-            + "function resources after out-of-band edits.",
+        description = "Return the program's change token: '<saved time>:<open epoch>:<modification "
+            + "number>'. It moves on every DB change (rename, comment, struct edit, undo/redo, GUI "
+            + "writes, scripts), on a save, and on a reopen or server restart, and never on a read. "
+            + "Compare the whole token; the modification number alone starts over on every open. "
+            + "Used by the bridge to invalidate cached function resources after out-of-band edits.",
         category = "program", access = ToolAccess.READ_ONLY)
     public Response getChangeToken(
             @Param(value = "program", defaultValue = "",
@@ -43,7 +41,7 @@ public class ChangeTokenService {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("program", program.getName());
-        out.put("modification_number", program.getModificationNumber());
+        out.putAll(ProgramRevision.toMap(program));
         return Response.ok(out);
     }
 }

@@ -43,7 +43,7 @@ import static org.junit.Assume.assumeTrue;
 /**
  * Sweep, reconcile and rebuild converge: whichever path wrote a checkout, once it is in sync
  * it is the tree a fresh sweep at that point writes, byte for byte, apart from the render
- * stamps ({@code // dts:}, {@code // mod:}), the status files, and the tree's own root and
+ * stamp ({@code // dts:}), the status files, and the tree's own root and
  * id. Found broken live: a full reconcile of a tree swept before {@code addresses.tsv}
  * existed rewrote all 339 blocks and left the index missing, and the reconciler rendered its
  * own thinner {@code modules/index.md} and module READMEs.
@@ -134,7 +134,7 @@ public class TreeConvergenceGhidraTest {
                 String text = Files.readString(p, StandardCharsets.UTF_8)
                     .replace(root.toString(), "<root>").replace(c.id(), "<id>");
                 out.put(rel, text.lines()
-                    .filter(l -> !l.startsWith("// dts: ") && !l.startsWith("// mod: "))
+                    .filter(l -> !l.startsWith("// dts: "))
                     .collect(Collectors.joining("\n")));
             }
         }

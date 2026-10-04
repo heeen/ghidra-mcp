@@ -885,7 +885,7 @@ python -m tools.setup install-ghidra-deps --ghidra-path "C:\ghidra_12.1.3_PUBLIC
 - `delete_property_map` - Delete a user property map and all values it holds
 - `exit_ghidra` - Save and exit Ghidra
 - `get_address_spaces` - List all physical and overlay address spaces in the program (overlays include is_overlay flag and overlayed_space name)
-- `get_change_token` - Return program.getModificationNumber() — a cheap monotonic token that moves on real DB changes (rename, comment, struct edit, undo/redo, GUI writes, scripts) and never on a read
+- `get_change_token` - Return the program's change token: '<saved time>:<open epoch>:<modification number>'
 - `get_language_metadata` - Dump the program's language description: address spaces, registers, default symbols, endianness, pointer size (issue #192)
 - `get_metadata` - Get program metadata
 - `get_program_options` - Read all options in a program option group with types, current values, defaults, and descriptions

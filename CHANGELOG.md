@@ -272,7 +272,7 @@ client's own built-in tools, so the search costs no permission surface.
     when its `// fp:` (a hash of the C alone) matched, so a change only the header shows was
     computed and dropped: a function renamed a second time kept its intermediate name on
     every callee's `// xref:` lines, and a grep for the old name found false hits. Blocks
-    now compare whole, ignoring only the render stamps (`dts`, `mod`).
+    now compare whole, ignoring only the render stamp (`dts`).
   - **Status finds checkouts at custom roots after a restart.** The no-selector scan listed
     only trees under the default root. Explicit roots are now remembered in the instance's
     Ghidra settings directory, listed first, and forgotten when their tree is gone or the
@@ -302,7 +302,7 @@ client's own built-in tools, so the search costs no permission surface.
       been replaced underneath; on an intact tree that writes and decompiles nothing).
 
     - A sweep updates the tree in place: a file whose content is unchanged apart from the
-      `dts`/`mod` stamps is not rewritten, and files no row points at are deleted at the end
+      `dts` stamp is not rewritten, and files no row points at are deleted at the end
       instead of the tree being wiped first (readers see the old tree, not an empty one,
       while it runs). Measured on the stealth session's 2760-function tree: a resweep of an
       unchanged program rewrote all 329 files; now none on the firmware.
@@ -317,6 +317,25 @@ client's own built-in tools, so the search costs no permission surface.
     (0 files written), a repair after deletions and edits, two renames, and a narrowing,
     to a fresh sweep, file for file. Live on the 339-function firmware all six routes,
     plus adopting a copied tree, end with 0 differences.
+  - **A server restart no longer passes for "nothing changed".** `get_change_token` and
+    every checkout stamp used `Program.getModificationNumber()`, which restarts on every
+    open: after a restart the counter climbed back to the value cached before it, so the
+    bridge kept resources from the previous session and a re-adopted tree was judged in
+    sync against edits that had been lost with the old process. The token is now
+    `<saved file time>:<session epoch>:<counter>` (`ProgramRevision`), where the epoch is
+    random per open Program instance; compare it whole. `get_change_token` and the
+    `get_functions` revision also report `epoch`, `saved_time`, `file_version` (versioned
+    files) and `unsaved_changes`. Blocks lose their `// mod:` line, a counter that meant
+    nothing across sessions; a tree that still has one is rebuilt by its next reconcile.
+    STATUS.md and `decompile_checkout_status` name the session the tree was built in, the
+    saved time and whether it includes unsaved edits, and adopting a tree from another
+    session reports `previous_session: true` and reconciles it. Live, across a
+    `kill -9`: the counter was 3 on both sides, the token differed, and the re-adopt
+    took a rename lost with the old process back out of the callers' bodies.
+  - **The partition log is written in a fixed order.** `index/partitions.json` and
+    `modules/index.md` rendered the strategy log from `Map.of`, whose iteration order
+    changes between JVM runs, so a tree swept before a restart differed from a fresh sweep
+    after it in those two files.
   - Also fixed: `import_program(overwrite=true)` deleted the program it had just imported
     and kept the backup, while reporting success.
 

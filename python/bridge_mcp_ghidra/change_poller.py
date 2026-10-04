@@ -24,7 +24,7 @@ _QUIET_INTERVAL = 10.0
 _QUIET_AFTER_CYCLES = 4  # ~6s of no change before backing off
 
 _poll_task: asyncio.Task | None = None
-_last_tokens: dict[str, int] = {}
+_last_tokens: dict[str, str] = {}
 _last_checkout_revisions: dict[str, int] = {}
 _quiet_cycles = 0
 
@@ -127,7 +127,12 @@ async def _poll_loop() -> None:
         await asyncio.sleep(interval)
 
 
-async def _fetch_token(program: str) -> int | None:
+async def _fetch_token(program: str) -> str | None:
+    """The program's change token: saved time, open epoch and modification number.
+
+    Compared whole. The modification number alone starts over each time the program is
+    opened, so after a server restart it could equal the last value seen and a stale cache
+    would survive; the epoch makes every reopen a change."""
     try:
         raw = await state.run_blocking_ghidra_call(
             lambda: dispatch.raise_on_failure(
@@ -135,8 +140,8 @@ async def _fetch_token(program: str) -> int | None:
             )
         )
         payload = json.loads(raw)
-        if isinstance(payload, dict) and "modification_number" in payload:
-            return int(payload["modification_number"])
+        if isinstance(payload, dict) and payload.get("token"):
+            return str(payload["token"])
     except Exception as e:
         logger.debug("get_change_token(%s) failed: %s", program, e)
     return None

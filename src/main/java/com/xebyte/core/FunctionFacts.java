@@ -289,7 +289,7 @@ public final class FunctionFacts {
         }
 
         Map<String, Object> revision = new LinkedHashMap<>();
-        revision.put("modification_number", program.getModificationNumber());
+        revision.putAll(ProgramRevision.toMap(program));
         revision.put("decompiled", decompiled);
         out.put("revision", revision);
 

@@ -71,7 +71,7 @@ public final class BlockSplicer {
 
     /**
      * Whether two renderings of a block say the same thing: equal but for the lines that
-     * change on every render ({@code // dts:}, {@code // mod:}).
+     * change on every render ({@code // dts:}).
      *
      * <p>This used to compare {@code // fp:}, a hash of the decompiled C alone. Since the
      * header carries facts the C never prints (callers' names on {@code // xref:} lines,
@@ -86,7 +86,7 @@ public final class BlockSplicer {
     private static String withoutRenderStamps(String block) {
         StringBuilder sb = new StringBuilder(block.length());
         for (String line : block.split("\n", -1)) {
-            if (line.startsWith("// dts: ") || line.startsWith("// mod: ")) {
+            if (line.startsWith("// dts: ")) {
                 continue;
             }
             sb.append(line).append('\n');
@@ -97,7 +97,7 @@ public final class BlockSplicer {
     /**
      * Replace only the {@code // calls:} / {@code // callers:} lines. Inserts
      * them after {@code // fn:} when an older seven-line header lacks them —
-     * never touches the body or fp/dts/mod/uri/see.
+     * never touches the body or fp/dts/uri/see.
      */
     public static String patchNeighbourhoodLines(
             String block, String callsValue, String callersValue) {
@@ -267,11 +267,10 @@ public final class BlockSplicer {
             DecompInterface decomp,
             Function func,
             PartitionMeta part,
-            long modNumber,
             int timeoutSeconds,
             String programName) {
         return FunctionBlock.build(func, decomp, timeoutSeconds, TaskMonitor.DUMMY, part.slug(),
-                part.method(), part.confidence(), part.evidenceBacked(), modNumber, programName);
+                part.method(), part.confidence(), part.evidenceBacked(), programName);
     }
 
     // -------------------------------------------------------------------------

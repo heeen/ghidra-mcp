@@ -137,6 +137,12 @@ public class ModuleOverridesTest {
         assertTrue(bandNames.contains("BandTwo"));
         assertFalse(bandNames.contains("Pinned"));
         assertEquals(3, ctx.assignedCount());
+
+        // index/partitions.json renders this log; Map.of's per-JVM order made a tree swept
+        // before a restart differ from a fresh sweep after it.
+        assertEquals(List.of("status", "expected_coverage", "reason", "partitions",
+                "functions_placed", "pool_before"),
+                List.copyOf(((java.util.Map<?, ?>) cascade.strategyLog().get("address-band")).keySet()));
     }
 
     @Test

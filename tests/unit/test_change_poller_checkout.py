@@ -157,3 +157,28 @@ class TestCheckoutRevisionPolling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestChangeTokenSurvivesReopen(unittest.TestCase):
+    """The modification number starts over each time a program opens. After a server
+    restart it can land on the value the poller last saw; the token's epoch part makes
+    that a change, so cached function resources are invalidated."""
+
+    def test_the_token_is_compared_whole(self):
+        payloads = iter([
+            {"token": "1790000000000:aaaa:7", "modification_number": 7},
+            {"token": "1790000000000:bbbb:7", "modification_number": 7},
+        ])
+
+        async def fake_blocking(fn):
+            return json.dumps(next(payloads))
+
+        async def body():
+            with mock.patch.object(change_poller.state, "run_blocking_ghidra_call", side_effect=fake_blocking):
+                first = await change_poller._fetch_token("fw")
+                second = await change_poller._fetch_token("fw")
+            return first, second
+
+        first, second = _run(body())
+        self.assertEqual(first, "1790000000000:aaaa:7")
+        self.assertNotEqual(first, second, "same counter in a new open must still differ")

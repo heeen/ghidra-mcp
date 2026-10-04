@@ -35,7 +35,7 @@ public final class FunctionBlock {
 
     /** Where the block sits in the tree; not a fact about the function. */
     public record Placement(String partitionSlug, String method, double confidence,
-            boolean evidenceBacked, java.time.Instant dts, long modificationNumber, String uri) {
+            boolean evidenceBacked, java.time.Instant dts, String uri) {
     }
 
     /**
@@ -57,7 +57,7 @@ public final class FunctionBlock {
      */
     public static Built build(Function func, DecompInterface decomp, int timeoutSeconds,
             TaskMonitor monitor, String partitionSlug, String method, double confidence,
-            boolean evidenceBacked, long modificationNumber, String programName) {
+            boolean evidenceBacked, String programName) {
         Map<String, Object> facts = FunctionFacts.build(func.getProgram(), func, TREE_FIELDS, f -> {
             try {
                 return decomp.decompileFunction(f, timeoutSeconds, monitor);
@@ -72,7 +72,7 @@ public final class FunctionBlock {
                 : String.valueOf(facts.get("decompiled_code"));
         String addressHex = CheckoutAddresses.of(func);
         Placement where = new Placement(partitionSlug, method, confidence, evidenceBacked,
-                Instant.now(), modificationNumber,
+                Instant.now(),
                 SweepJob.functionResourceUri(programName, addressHex));
         return new Built(render(facts, body, where), failed);
     }
@@ -88,7 +88,7 @@ public final class FunctionBlock {
 
     /**
      * A short hash of the block as written, without the lines that change on every render
-     * ({@code dts}, {@code mod}) and without the {@code fp} line itself. A full reconcile
+     * ({@code dts}) and without the {@code fp} line itself. A full reconcile
      * rebuilds a block whose text no longer matches its {@code fp}: one edited by hand, cut
      * short, or patched without its fingerprint, which the program's inputs alone cannot
      * reveal.
@@ -96,7 +96,7 @@ public final class FunctionBlock {
     public static String fingerprint(String block) {
         StringBuilder sb = new StringBuilder(block.length());
         for (String line : block.split("\n", -1)) {
-            if (line.startsWith("// dts: ") || line.startsWith("// mod: ") || line.startsWith("// fp: ")) {
+            if (line.startsWith("// dts: ") || line.startsWith("// fp: ")) {
                 continue;
             }
             sb.append(line).append('\n');
@@ -120,11 +120,19 @@ public final class FunctionBlock {
         return sb.toString();
     }
 
-    /** Whether {@code block}'s text still matches its {@code fp} line. */
+    /**
+     * Whether {@code block}'s text still matches its {@code fp} line. A block that still
+     * carries a {@code // mod:} stamp was written by an earlier build (the modification number
+     * starts over on every open, so the stamp was dropped) and is rebuilt, so an old tree
+     * ends up as a fresh sweep writes it.
+     */
     public static boolean intact(String block) {
         for (String line : block.split("\n", -1)) {
             if (line.equals(HEADER_END)) {
                 break;
+            }
+            if (line.startsWith("// mod: ")) {
+                return false;
             }
             if (line.startsWith("// fp: ")) {
                 return line.substring("// fp: ".length()).strip().equals(fingerprint(block));
@@ -206,7 +214,6 @@ public final class FunctionBlock {
                 + " evidence_backed=" + where.evidenceBacked());
         sb.append("// fp: ").append(fp).append('\n');
         line(sb, "dts", where.dts());
-        line(sb, "mod", where.modificationNumber());
         line(sb, "uri", where.uri());
         line(sb, "see", "modules/" + where.partitionSlug() + "/README.md");
         sb.append(HEADER_END).append('\n');

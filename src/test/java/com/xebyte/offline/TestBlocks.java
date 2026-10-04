@@ -24,7 +24,7 @@ final class TestBlocks {
         facts.put("callees", neighbours(calls));
         facts.put("callers", neighbours(callers));
         return FunctionBlock.render(facts, body, new FunctionBlock.Placement("c05", "address-band",
-                0.50, false, Instant.parse("2026-01-01T00:00:00Z"), 1L,
+                0.50, false, Instant.parse("2026-01-01T00:00:00Z"),
                 SweepJob.functionResourceUri("x", addr)));
     }
 

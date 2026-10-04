@@ -161,7 +161,6 @@ public final class TreeReconciler {
             if (needsDecomp) {
                 decomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
             }
-            long mod = program.getModificationNumber();
             int timeout = checkout.config().decompileTimeoutSeconds();
 
             Set<String> touchedSlugs = new LinkedHashSet<>();
@@ -194,7 +193,7 @@ public final class TreeReconciler {
                 }
                 String existing = tree.block(row.file(), hex);
                 FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
-                        partitionOf(existing, row, meta), mod, timeout, program.getName());
+                        partitionOf(existing, row, meta), timeout, program.getName());
                 decompileCalls++;
                 working.put(hex, row.withIfp(InputFingerprint.of(func)).withName(func.getName()));
                 if (existing != null && BlockSplicer.sameBlock(existing, built.text())) {
@@ -222,7 +221,7 @@ public final class TreeReconciler {
                 FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
                         new BlockSplicer.PartitionMeta(placement.slug(), placement.method(),
                                 placement.confidence(), placement.evidenceBacked()),
-                        mod, timeout, program.getName());
+                        timeout, program.getName());
                 decompileCalls++;
                 working.put(hex, new TreeFiles.IndexEntry(hex, func.getName(),
                         placement.slug(), "", placement.evidenceBacked(), InputFingerprint.of(func)));
@@ -241,8 +240,7 @@ public final class TreeReconciler {
             if (addresses == null) {
                 working.values().forEach(r -> touchedSlugs.add(r.slug()));
             }
-            Repack repack = new Repack(checkout, program, meta, working, rebuilt, oldFile, tree,
-                    mod, timeout);
+            Repack repack = new Repack(checkout, program, meta, working, rebuilt, oldFile, tree, timeout);
             for (String slug : touchedSlugs) {
                 repack.compartment(slug, acc);
             }
@@ -282,6 +280,7 @@ public final class TreeReconciler {
                     .withLastError(null);
         }
         checkout.setProgress(after);
+        checkout.noteSession(program);
         CheckoutStatusMd.write(checkout, CheckoutStatusMd.settledState(checkout.progress()));
 
         return ReconcileResult.of(
@@ -701,14 +700,13 @@ public final class TreeReconciler {
         private final Map<String, String> rebuilt;
         private final Map<String, String> oldFile;
         private final TreeText tree;
-        private final long mod;
         private final int timeout;
         private DecompInterface decomp;
         int decompileCalls;
 
         Repack(Checkout checkout, Program program, PartitionMeta meta,
                 Map<String, TreeFiles.IndexEntry> working, Map<String, String> rebuilt,
-                Map<String, String> oldFile, TreeText tree, long mod, int timeout) {
+                Map<String, String> oldFile, TreeText tree, int timeout) {
             this.checkout = checkout;
             this.program = program;
             this.meta = meta;
@@ -716,7 +714,6 @@ public final class TreeReconciler {
             this.rebuilt = rebuilt;
             this.oldFile = oldFile;
             this.tree = tree;
-            this.mod = mod;
             this.timeout = timeout;
         }
 
@@ -779,7 +776,7 @@ public final class TreeReconciler {
                 decomp = ServiceUtils.createConfiguredDecompiler(program, FunctionFacts::configureDecompiler);
             }
             FunctionBlock.Built built = BlockSplicer.decompileBlock(decomp, func,
-                    partitionOf(damaged, row, meta), mod, timeout, program.getName());
+                    partitionOf(damaged, row, meta), timeout, program.getName());
             decompileCalls++;
             acc.replaced.add(key);
             return built.text();
