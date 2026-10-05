@@ -601,8 +601,7 @@ public final class ServiceUtils {
      *
      * <p>Exists so one endpoint can deviate without moving the default for the ten call
      * sites that share {@code decompileFunctionNoRetry}: {@code analyze_function_completeness}
-     * counts comment lines in this text and fun-doc's classifiers strip {@code /* … *}{@code /}
-     * out of it, so a change here is a change to a scoring input.
+     * counts comment lines in this text, so a change here is a change to a scoring input.
      */
     public static DecompInterface createConfiguredDecompiler(Program program,
             java.util.function.Consumer<DecompileOptions> tune) {

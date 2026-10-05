@@ -1909,7 +1909,7 @@ Map<String, Object> out = new LinkedHashMap<>();
                                + "address-space-agnostic.") String functionAddress,
             @Param(value = "variable_name", source = ParamSource.BODY, aliases = {"parameter_name"},
                    description = "Local or parameter to retype, named exactly as the decompiler shows it "
-                               + "(get_function_variables lists them). The literal value 'this' is "
+                               + "(get_functions fields=parameters,locals lists them). The literal value 'this' is "
                                + "special-cased and routes to set_function_this_type.") String variableName,
             @Param(value = "new_type", source = ParamSource.BODY,
                    description = "New data type, resolved recursively (pointer chains, array syntax such "
@@ -3833,7 +3833,7 @@ Map<String, Object> out = new LinkedHashMap<>();
 @Param(value = "variable_renames", source = ParamSource.BODY,
                    description = "JSON object mapping each variable's CURRENT decompiler name to its new "
                                + "name. Matching happens against the decompiler's high-level symbols, so "
-                               + "use the names get_function_variables and decompile_function report, not "
+                               + "use the names get_functions reports (parameters, locals, decompiled_code), not "
                                + "the raw listing's.") Map<String, String> variableRenames,
             
 @Param(value = "force_individual", source = ParamSource.BODY, defaultValue = "false",

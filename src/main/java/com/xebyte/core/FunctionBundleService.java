@@ -68,7 +68,7 @@ public class FunctionBundleService {
             + "(and call_context when enabled) pays that cost. Decompiled text renders EOL "
             + "comments (// style), so comments written with set_comment are visible in the "
             + "code. Replaces get_function_by_address, get_function_variables, "
-            + "get_function_xrefs, decompile_function, get_function_bundle, and the former "
+            + "get_function_xrefs, decompile_function, and the former "
             + "get_function_callers/callees/labels/signature tools. Completeness scoring is "
             + "NOT included — call analyze_function_completeness for that.",
         category = "function", access = ToolAccess.READ_ONLY)
