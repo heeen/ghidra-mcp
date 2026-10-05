@@ -1,6 +1,5 @@
 package com.xebyte.core;
 
-import com.xebyte.core.checkout.CheckoutAddresses;
 import ghidra.app.decompiler.ClangCommentToken;
 import ghidra.app.decompiler.ClangLine;
 import ghidra.app.decompiler.ClangToken;
@@ -141,7 +140,7 @@ public final class FunctionFacts {
         java.util.Collections.sort(sorted);
         List<String> out = new ArrayList<>(sorted.size());
         for (ghidra.program.model.address.Address a : sorted) {
-            out.add(CheckoutAddresses.of(a, program));
+            out.add(AddressKeys.of(a, program));
         }
         return out;
     }
@@ -190,13 +189,13 @@ public final class FunctionFacts {
             }
         }
         if (wantsField(fields, "entry_point")) {
-            out.put("entry_point", CheckoutAddresses.of(entry, program));
+            out.put("entry_point", AddressKeys.of(entry, program));
         }
         if (wantsField(fields, "body_start")) {
-            out.put("body_start", CheckoutAddresses.of(func.getBody().getMinAddress(), program));
+            out.put("body_start", AddressKeys.of(func.getBody().getMinAddress(), program));
         }
         if (wantsField(fields, "body_end")) {
-            out.put("body_end", CheckoutAddresses.of(func.getBody().getMaxAddress(), program));
+            out.put("body_end", AddressKeys.of(func.getBody().getMaxAddress(), program));
         }
 
         DecompileResults decomp = null;
@@ -471,7 +470,7 @@ public final class FunctionFacts {
             item.putAll(ServiceUtils.addressToJson(f.getEntryPoint(), program));
             // Qualified outside the default space, so an overlay caller cannot read as the
             // default-space function at the same offset.
-            item.put("address", CheckoutAddresses.of(f.getEntryPoint(), program));
+            item.put("address", AddressKeys.of(f.getEntryPoint(), program));
             out.add(item);
         }
         return out;
@@ -512,8 +511,8 @@ public final class FunctionFacts {
             for (Address site : entry.getValue()) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("caller", caller.getName());
-                item.put("caller_address", CheckoutAddresses.of(caller.getEntryPoint(), program));
-                item.put("site_address", CheckoutAddresses.of(site, program));
+                item.put("caller_address", AddressKeys.of(caller.getEntryPoint(), program));
+                item.put("site_address", AddressKeys.of(site, program));
                 int at = indexOfLineContaining(lines, site);
                 if (at >= 0) {
                     item.put("line_number", lines.get(at).getLineNumber());
@@ -592,7 +591,7 @@ public final class FunctionFacts {
             total++;
             if (out.size() >= MAX_XREFS) continue;
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("from", CheckoutAddresses.of(ref.getFromAddress(), program));
+            item.put("from", AddressKeys.of(ref.getFromAddress(), program));
             item.put("type", ref.getReferenceType().getName());
             Function containing = program.getFunctionManager()
                 .getFunctionContaining(ref.getFromAddress());
@@ -613,7 +612,7 @@ public final class FunctionFacts {
             total++;
             if (out.size() >= MAX_DISASM) continue;
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("address", CheckoutAddresses.of(instruction.getAddress(), program));
+            item.put("address", AddressKeys.of(instruction.getAddress(), program));
             item.put("mnemonic", instruction.getMnemonicString());
             List<String> operands = new ArrayList<>();
             for (int i = 0; i < instruction.getNumOperands(); i++) {
@@ -716,7 +715,7 @@ public final class FunctionFacts {
     }
 
     /**
-     * The distinct addresses of {@code refs}, sorted, as {@link CheckoutAddresses#display}.
+     * The distinct addresses of {@code refs}, sorted, as {@link AddressKeys#display}.
      * An address the function reaches through a literal-pool word carries it after a
      * {@code <}: {@code 0x40020000<0x08016e58} reads "0x40020000, loaded from 0x08016e58". Both
      * halves grep, and the second answers which pool word to retype. Not capped: the list is
@@ -732,8 +731,8 @@ public final class FunctionFacts {
         }
         List<String> out = new ArrayList<>(via.size());
         via.forEach((a, words) -> {
-            StringBuilder sb = new StringBuilder(CheckoutAddresses.display(a, program));
-            words.forEach(w -> sb.append('<').append(CheckoutAddresses.display(w, program)));
+            StringBuilder sb = new StringBuilder(AddressKeys.display(a, program));
+            words.forEach(w -> sb.append('<').append(AddressKeys.display(w, program)));
             out.add(sb.toString());
         });
         return out;

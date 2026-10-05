@@ -265,7 +265,7 @@ client's own built-in tools, so the search costs no permission surface.
     `space:hex` in block headers, both TSVs, file names (`OVL_00001000.c`), URIs and
     `get_functions` (entry, body, callers/callees, xrefs, call context, disassembly, refs).
     The default space stays bare, so a single-space program's tree is spelled exactly as
-    before (live: all 338 firmware rows unchanged). `CheckoutAddresses` is the one place
+    before (live: all 338 firmware rows unchanged). `AddressKeys` is the one place
     that formats, parses and compares them; it replaced `normalizeHex` and three copies of
     the address-to-function lookup.
   - **A header-only change reaches the tree.** The splicer judged a rebuilt block unchanged

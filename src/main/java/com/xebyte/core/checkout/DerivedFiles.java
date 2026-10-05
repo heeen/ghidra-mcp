@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 
@@ -44,8 +45,8 @@ public final class DerivedFiles {
     static void writeAll(Checkout checkout, Program program, List<TreeFiles.IndexEntry> rows,
             PartitionMeta meta, PartitionContext ctx) throws IOException {
         List<TreeFiles.IndexEntry> sorted = new ArrayList<>(rows);
-        sorted.sort((a, b) -> CheckoutAddresses.normalize(a.addressHex())
-                .compareTo(CheckoutAddresses.normalize(b.addressHex())));
+        sorted.sort((a, b) -> AddressKeys.normalize(a.addressHex())
+                .compareTo(AddressKeys.normalize(b.addressHex())));
         Map<String, List<TreeFiles.IndexEntry>> bySlug = new LinkedHashMap<>();
         for (TreeFiles.IndexEntry e : sorted) {
             bySlug.computeIfAbsent(e.slug(), s -> new ArrayList<>()).add(e);

@@ -1,7 +1,6 @@
 package com.xebyte.core;
 
 import com.xebyte.core.checkout.Checkout;
-import com.xebyte.core.checkout.CheckoutAddresses;
 import com.xebyte.core.checkout.CheckoutConfig;
 import com.xebyte.core.checkout.CheckoutKey;
 import com.xebyte.core.checkout.CheckoutLayout;
@@ -597,7 +596,7 @@ public class CheckoutService {
         if (!addrList.isEmpty()) {
             addrSet = new LinkedHashSet<>();
             for (String raw : addrList) {
-                addrSet.add(CheckoutAddresses.canonical(live, raw));
+                addrSet.add(AddressKeys.canonical(live, raw));
             }
         }
         try {
@@ -663,7 +662,7 @@ public class CheckoutService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", true);
         out.put("function", func.getName());
-        out.put("address", CheckoutAddresses.of(func));
+        out.put("address", AddressKeys.of(func));
         out.put("pinned", !unpin);
         out.put("module", unpin ? null : slug);
         out.put("map", ModuleOverrides.MAP_NAME);
@@ -1345,7 +1344,7 @@ public class CheckoutService {
                         evaluator.filterPartitions(cascade.partitions(), ctx.size());
                 for (Partition part : filtered.partitions()) {
                     for (Function func : part.members()) {
-                        String hex = CheckoutAddresses.of(func);
+                        String hex = AddressKeys.of(func);
                         if (!onDisk.contains(hex)) {
                             pending++;
                         }
@@ -1357,7 +1356,7 @@ public class CheckoutService {
                     if (!evaluator.isInScope(func, null)) {
                         continue;
                     }
-                    String hex = CheckoutAddresses.of(func);
+                    String hex = AddressKeys.of(func);
                     if (!onDisk.contains(hex)) {
                         pending++;
                     }
@@ -1383,7 +1382,7 @@ public class CheckoutService {
                 }
                 int tab = line.indexOf('\t');
                 if (tab > 0) {
-                    out.add(CheckoutAddresses.normalize(line.substring(0, tab)));
+                    out.add(AddressKeys.normalize(line.substring(0, tab)));
                 }
             }
             return out;

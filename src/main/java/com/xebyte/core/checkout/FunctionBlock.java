@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import com.xebyte.core.FunctionFacts;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.program.model.listing.Function;
@@ -70,7 +71,7 @@ public final class FunctionBlock {
         String body = failed
                 ? SweepJob.renderFailedBody(String.valueOf(facts.getOrDefault("decompile_error", "no output")))
                 : String.valueOf(facts.get("decompiled_code"));
-        String addressHex = CheckoutAddresses.of(func);
+        String addressHex = AddressKeys.of(func);
         Placement where = new Placement(partitionSlug, method, confidence, evidenceBacked,
                 Instant.now(),
                 SweepJob.functionResourceUri(programName, addressHex));

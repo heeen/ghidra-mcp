@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.partition.PartitionContext;
@@ -56,13 +57,13 @@ public final class BlockSplicer {
      * callers must fail that address rather than guess an offset.
      */
     public static String findBlock(String fileBody, String addressHex) {
-        String want = CheckoutAddresses.normalize(addressHex);
+        String want = AddressKeys.normalize(addressHex);
         if (want.isEmpty() || fileBody == null) {
             return null;
         }
         for (String chunk : TreeFiles.splitFunctionChunks(fileBody)) {
             String addr = TreeFiles.addressFromChunk(chunk);
-            if (addr != null && want.equals(CheckoutAddresses.normalize(addr))) {
+            if (addr != null && want.equals(AddressKeys.normalize(addr))) {
                 return chunk;
             }
         }
@@ -236,7 +237,7 @@ public final class BlockSplicer {
         PartitionContext.CallGraph cg = ctx.callGraph();
         List<Function> fns = ctx.functions();
         for (String hex : seeds) {
-            Function func = CheckoutAddresses.function(program, hex);
+            Function func = AddressKeys.function(program, hex);
             if (func == null) {
                 continue;
             }
@@ -257,7 +258,7 @@ public final class BlockSplicer {
         }
         for (int i : indices) {
             if (i >= 0 && i < fns.size()) {
-                out.add(CheckoutAddresses.of(fns.get(i)));
+                out.add(AddressKeys.of(fns.get(i)));
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.WriteTx;
@@ -257,7 +258,7 @@ public final class SweepJob implements Runnable {
 
                     boolean evidenceBacked = isEvidenceBacked(part, func, ctx);
                     FunctionEmit emit = decompileOne(func, part, evidenceBacked, ctx);
-                    String addrHex = CheckoutAddresses.of(func);
+                    String addrHex = AddressKeys.of(func);
                     writePacked(packer.add(addrHex, emit.text()));
                     String relativeFile = packer.currentPath();
 
@@ -754,10 +755,10 @@ public final class SweepJob implements Runnable {
     public static String renderCallgraphTsv(PartitionContext ctx) {
         StringBuilder sb = new StringBuilder("caller\tcallee\tcaller_name\tcallee_name\n");
         for (Function caller : ctx.functions()) {
-            String callerAddr = CheckoutAddresses.of(caller);
+            String callerAddr = AddressKeys.of(caller);
             for (Function callee : FunctionFacts.calleesOf(caller)) {
                 sb.append(callerAddr).append('\t')
-                        .append(CheckoutAddresses.of(callee)).append('\t')
+                        .append(AddressKeys.of(callee)).append('\t')
                         .append(caller.getName()).append('\t')
                         .append(callee.getName()).append('\n');
             }

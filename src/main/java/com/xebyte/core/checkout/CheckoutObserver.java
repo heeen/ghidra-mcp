@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectChangedEvent;
 import ghidra.framework.model.DomainObjectEvent;
@@ -238,25 +239,25 @@ public final class CheckoutObserver implements DomainObjectListener {
         if (rec instanceof FunctionChangeRecord fcr) {
             Function f = fcr.getFunction();
             if (f != null && f.getEntryPoint() != null) {
-                return CheckoutAddresses.of(f);
+                return AddressKeys.of(f);
             }
         }
         if (rec instanceof ProgramChangeRecord pcr) {
             Address start = pcr.getStart();
             if (start != null) {
-                return CheckoutAddresses.of(start, fm != null ? fm.getProgram() : null);
+                return AddressKeys.of(start, fm != null ? fm.getProgram() : null);
             }
             Object obj = pcr.getObject();
             if (obj instanceof Function f && f.getEntryPoint() != null) {
-                return CheckoutAddresses.of(f);
+                return AddressKeys.of(f);
             }
             Object neu = pcr.getNewValue();
             if (neu instanceof Function f && f.getEntryPoint() != null) {
-                return CheckoutAddresses.of(f);
+                return AddressKeys.of(f);
             }
             Object old = pcr.getOldValue();
             if (old instanceof Function f && f.getEntryPoint() != null) {
-                return CheckoutAddresses.of(f);
+                return AddressKeys.of(f);
             }
         }
         if (lookupOk && fm != null) {
@@ -264,7 +265,7 @@ public final class CheckoutObserver implements DomainObjectListener {
             if (start != null) {
                 Function f = fm.getFunctionContaining(start);
                 if (f != null && f.getEntryPoint() != null) {
-                    return CheckoutAddresses.of(f);
+                    return AddressKeys.of(f);
                 }
             }
         }
@@ -282,7 +283,7 @@ public final class CheckoutObserver implements DomainObjectListener {
             }
             for (Function caller : callers) {
                 if (caller != null && caller.getEntryPoint() != null) {
-                    dirty.add(CheckoutAddresses.of(caller));
+                    dirty.add(AddressKeys.of(caller));
                 }
             }
         } catch (Exception ignored) {
@@ -294,7 +295,7 @@ public final class CheckoutObserver implements DomainObjectListener {
         try {
             for (Function callee : func.getCalledFunctions(TaskMonitor.DUMMY)) {
                 if (callee != null && callee.getEntryPoint() != null && !callee.isExternal()) {
-                    dirty.add(CheckoutAddresses.of(callee));
+                    dirty.add(AddressKeys.of(callee));
                 }
             }
         } catch (Exception ignored) {
@@ -332,7 +333,7 @@ public final class CheckoutObserver implements DomainObjectListener {
         }
         Function f = fm.getFunctionContaining(at);
         if (f != null && f.getEntryPoint() != null) {
-            dirty.add(CheckoutAddresses.of(f));
+            dirty.add(AddressKeys.of(f));
         }
     }
 
@@ -349,7 +350,7 @@ public final class CheckoutObserver implements DomainObjectListener {
                 while (it.hasNext()) {
                     Function f = it.next();
                     if (f != null && f.getEntryPoint() != null) {
-                        dirty.add(CheckoutAddresses.of(f));
+                        dirty.add(AddressKeys.of(f));
                     }
                 }
                 return;

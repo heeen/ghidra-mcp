@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import com.xebyte.core.FunctionFacts;
 import com.xebyte.core.ServiceUtils;
 import com.xebyte.core.partition.PartitionContext;
@@ -107,7 +108,7 @@ public final class TreeReconciler {
                 : List.of();
         Map<String, TreeFiles.IndexEntry> indexByHex = new LinkedHashMap<>();
         for (TreeFiles.IndexEntry row : indexRows) {
-            indexByHex.put(CheckoutAddresses.normalize(row.addressHex()), row);
+            indexByHex.put(AddressKeys.normalize(row.addressHex()), row);
         }
 
         PartitionContext ctx = new PartitionContext(program);
@@ -116,7 +117,7 @@ public final class TreeReconciler {
         Map<String, Function> programByHex = new LinkedHashMap<>();
         for (Function f : ctx.functions()) {
             programByHex.put(
-                    CheckoutAddresses.of(f), f);
+                    AddressKeys.of(f), f);
         }
 
         WorkPlan plan = planWork(indexByHex, programByHex, addresses);
@@ -321,7 +322,7 @@ public final class TreeReconciler {
                         Files.readString(file, StandardCharsets.UTF_8))) {
                     String hex = TreeFiles.addressFromChunk(chunk);
                     if (hex != null && bodyMatches(chunk, any)) {
-                        found.add(CheckoutAddresses.normalize(hex));
+                        found.add(AddressKeys.normalize(hex));
                     }
                 }
             }
@@ -374,7 +375,7 @@ public final class TreeReconciler {
                 if (raw == null || raw.isBlank()) {
                     continue;
                 }
-                String hex = CheckoutAddresses.normalize(raw);
+                String hex = AddressKeys.normalize(raw);
                 boolean inTree = indexByHex.containsKey(hex);
                 boolean inProg = programByHex.containsKey(hex);
                 if (inTree && inProg) {
@@ -423,7 +424,7 @@ public final class TreeReconciler {
             }
             return new Placement(pinned.get(), ModuleOverrides.METHOD, conf, true);
         }
-        return placeByContainment(CheckoutAddresses.of(func), indexByHex);
+        return placeByContainment(AddressKeys.of(func), indexByHex);
     }
 
     /**
@@ -433,21 +434,21 @@ public final class TreeReconciler {
      */
     public static Placement placeByContainment(
             String addressHex, Map<String, TreeFiles.IndexEntry> indexByHex) {
-        String want = CheckoutAddresses.normalize(addressHex);
-        long addr = CheckoutAddresses.offset(want);
+        String want = AddressKeys.normalize(addressHex);
+        long addr = AddressKeys.offset(want);
         // Offsets compare only within one address space; an overlay function placed by a
         // default-space span would land beside code it has nothing to do with.
-        String space = CheckoutAddresses.space(want);
+        String space = AddressKeys.space(want);
         boolean anyInSpace = indexByHex.values().stream()
-                .anyMatch(r -> CheckoutAddresses.space(r.addressHex()).equals(space));
+                .anyMatch(r -> AddressKeys.space(r.addressHex()).equals(space));
 
         Map<String, long[]> spans = new LinkedHashMap<>();
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (TreeFiles.IndexEntry row : indexByHex.values()) {
-            if (anyInSpace && !CheckoutAddresses.space(row.addressHex()).equals(space)) {
+            if (anyInSpace && !AddressKeys.space(row.addressHex()).equals(space)) {
                 continue;
             }
-            long a = CheckoutAddresses.offset(row.addressHex());
+            long a = AddressKeys.offset(row.addressHex());
             long[] span = spans.get(row.slug());
             if (span == null) {
                 spans.put(row.slug(), new long[]{a, a});
@@ -519,7 +520,7 @@ public final class TreeReconciler {
         neighbours.removeAll(seeds);
         for (String hex : neighbours) {
             TreeFiles.IndexEntry row = working.get(hex);
-            Function func = CheckoutAddresses.function(program, hex);
+            Function func = AddressKeys.function(program, hex);
             if (row == null || func == null || rebuilt.containsKey(hex)) {
                 continue;
             }
@@ -681,13 +682,13 @@ public final class TreeReconciler {
                             Files.readString(abs, StandardCharsets.UTF_8))) {
                         String addr = TreeFiles.addressFromChunk(chunk);
                         if (addr != null) {
-                            blocks.put(CheckoutAddresses.normalize(addr), chunk);
+                            blocks.put(AddressKeys.normalize(addr), chunk);
                         }
                     }
                 }
                 byFile.put(file, blocks);
             }
-            return blocks.get(CheckoutAddresses.normalize(key));
+            return blocks.get(AddressKeys.normalize(key));
         }
 
     }
@@ -770,7 +771,7 @@ public final class TreeReconciler {
 
         /** Rebuild a block the files lost. */
         private String restore(String key, String damaged, Accumulators acc) throws IOException {
-            Function func = CheckoutAddresses.function(program, key);
+            Function func = AddressKeys.function(program, key);
             TreeFiles.IndexEntry row = working.get(key);
             if (func == null || row == null) {
                 acc.failed.add(key);
@@ -824,7 +825,7 @@ public final class TreeReconciler {
         ExclusionEvaluator.FilterResult kept = evaluator.filterPartitions(parts,
                 meta.eligibleFunctions());
         Set<String> keep = new java.util.HashSet<>();
-        kept.partitions().forEach(p -> p.members().forEach(f -> keep.add(CheckoutAddresses.of(f))));
+        kept.partitions().forEach(p -> p.members().forEach(f -> keep.add(AddressKeys.of(f))));
         Set<String> out = new LinkedHashSet<>();
         for (String k : index.keySet()) {
             if (program.containsKey(k) && !keep.contains(k)) {

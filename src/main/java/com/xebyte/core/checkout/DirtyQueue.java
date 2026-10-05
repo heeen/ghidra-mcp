@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
@@ -94,7 +95,7 @@ public final class DirtyQueue {
             if (raw == null || raw.isBlank()) {
                 continue;
             }
-            b.addresses.add(CheckoutAddresses.normalize(raw));
+            b.addresses.add(AddressKeys.normalize(raw));
             if (b.addresses.size() >= ADDRESS_BOUND) {
                 // Bound is a safety valve: splicing thousands of analysis
                 // births one-by-one is pathological. Fall back to full reconcile.

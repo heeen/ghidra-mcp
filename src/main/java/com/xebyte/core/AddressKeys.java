@@ -1,6 +1,5 @@
-package com.xebyte.core.checkout;
+package com.xebyte.core;
 
-import com.xebyte.core.ServiceUtils;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -8,20 +7,18 @@ import ghidra.program.model.listing.Program;
 import java.util.Locale;
 
 /**
- * How the checkout spells an address: bare lowercase hex in the program's default space,
- * {@code <space>:<hex>} in any other.
+ * How an address is spelled wherever it is a key or a value an agent reads: bare lowercase
+ * hex in the program's default space, {@code <space>:<hex>} in any other.
  *
  * <p>Bare hex alone collides as soon as a program has a second space: an overlay function at
- * {@code 0x1000} and the default-space function at {@code 0x1000} got one by-address row, one
- * file name and one block lookup, and a splice of either could overwrite the other. The
- * default space stays bare, so a tree of a single-space program, every tree swept so far, is
- * spelled exactly as before. {@link ServiceUtils#parseAddress} reads both forms, and
- * {@code get_functions} uses the same rule ({@link #of}), so a block, the bundle and a
- * {@code ghidra://function} URI agree.
+ * {@code 0x1000} and the default-space function at {@code 0x1000} are two functions with one
+ * spelling. The default space stays bare, so a single-space program reads exactly as plain
+ * hex. {@link ServiceUtils#parseAddress} reads both forms. {@code get_functions}, the
+ * decompilation checkout and {@code ghidra://function} URIs all use this rule, so they agree.
  */
-public final class CheckoutAddresses {
+public final class AddressKeys {
 
-    private CheckoutAddresses() {
+    private AddressKeys() {
     }
 
     /** {@code a}'s key in {@code program}; bare hex when there is no program to ask. */

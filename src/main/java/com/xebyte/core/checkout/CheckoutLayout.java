@@ -1,5 +1,6 @@
 package com.xebyte.core.checkout;
 
+import com.xebyte.core.AddressKeys;
 import java.util.Locale;
 
 /**
@@ -32,13 +33,13 @@ public final class CheckoutLayout {
     }
 
     /**
-     * The file name for a first function's tree key ({@link CheckoutAddresses}): the padded
+     * The file name for a first function's tree key ({@link AddressKeys}): the padded
      * offset, prefixed with the space outside the default one ({@code ovl1_00001000.c}) so
      * two functions at one offset in different spaces never share a file.
      */
     public static String compartmentFileName(String key, int pointerSizeBytes) {
-        String space = CheckoutAddresses.space(key);
-        String name = compartmentFileName(CheckoutAddresses.offset(key), pointerSizeBytes);
+        String space = AddressKeys.space(key);
+        String name = compartmentFileName(AddressKeys.offset(key), pointerSizeBytes);
         return space.isEmpty() ? name : sanitiseName(space) + "_" + name;
     }
 

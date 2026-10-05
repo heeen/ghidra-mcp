@@ -1,7 +1,7 @@
 package com.xebyte.core;
 
 import com.xebyte.core.checkout.BlockSplicer;
-import com.xebyte.core.checkout.CheckoutAddresses;
+import com.xebyte.core.AddressKeys;
 import com.xebyte.core.checkout.CheckoutLayout;
 import com.xebyte.core.checkout.TreeFiles;
 import com.xebyte.core.checkout.FunctionBlock;
@@ -92,12 +92,12 @@ public class OverlayAddressKeysGhidraTest {
 
     @Test
     public void theDefaultSpaceStaysBareAndTheOverlayIsQualified() {
-        assertEquals("00001000", CheckoutAddresses.of(base));
-        assertEquals("OVL:00001000", CheckoutAddresses.of(overlay));
-        assertSame(base, CheckoutAddresses.function(program, "00001000"));
-        assertSame(overlay, CheckoutAddresses.function(program, "OVL:00001000"));
+        assertEquals("00001000", AddressKeys.of(base));
+        assertEquals("OVL:00001000", AddressKeys.of(overlay));
+        assertSame(base, AddressKeys.function(program, "00001000"));
+        assertSame(overlay, AddressKeys.function(program, "OVL:00001000"));
         assertEquals("a caller's spelling of the default space becomes the bare key",
-            "00001000", CheckoutAddresses.canonical(program, "0x1000"));
+            "00001000", AddressKeys.canonical(program, "0x1000"));
     }
 
     @Test
