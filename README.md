@@ -440,7 +440,7 @@ uv run bridge-mcp-ghidra --transport sse --mcp-host 127.0.0.1 --mcp-port 8081
 | `--mcp-port` | — | Port for HTTP transports |
 | `--lazy` | (default) | Load only the default tool groups on connect, and let the model pull in the rest with `search_tools`/`load_tool_group`. |
 | `--no-lazy` | off | Load all tool groups immediately on connect. Needed only by MCP clients that ignore `tools/list_changed`; **rejected outright by the Gemini API** (see below). |
-| `--default-groups` | `listing,function,program` | Comma-separated groups loaded on connect under `--lazy`. |
+| `--default-groups` | the project's `tools.autoload` | This session's `tools.autoload`: a comma-separated list replaces the project's groups, `+group`/`-group` adjusts them. |
 
 #### Lazy tool loading is the default (issue #440)
 
@@ -471,17 +471,38 @@ export GHIDRA_MCP_LAZY=0                    # when you don't (Docker, uvx, some 
 `--lazy`/`--no-lazy` on the command line wins over it. Startup logs which mode
 is in effect.
 
+#### Which groups load: tool settings
+
+The groups a session starts with come from the connected project's settings
+(`get_settings prefix=tools`, changed with `set_setting`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tools.autoload` | `listing,function,program` | Groups every new session loads. `+group`/`-group` adjust the scope below; a plain list replaces it. |
+| `tools.restore_loaded` | `true` | Also load the groups the last session had loaded beyond `tools.autoload`. |
+| `tools.last_loaded` | empty | Those groups. The bridge keeps it current on this machine as groups are loaded and unloaded. |
+| `tools.require_program` | `false` | Strict program routing, below. |
+
+Set a value for everyone using the project with `set_setting(key, value,
+scope="project")`, or for this machine only with `scope="local"`. One bridge
+session can override any of them with its own environment
+(`GHIDRA_MCP_TOOLS_AUTOLOAD=+xref`, `GHIDRA_MCP_TOOLS_RESTORE_LOADED=0`, ...) or,
+for `tools.autoload`, with `--default-groups`.
+
 #### Strict program routing (multi-program safety)
 
-Set `GHIDRA_MCP_REQUIRE_PROGRAM_SELECTORS=1` to make the bridge refuse any program-scoped
+Turn on `tools.require_program` to make the bridge refuse any program-scoped
 call that omits a program selector, returning a clear error instead of letting the call
 ride the server's shared "current program" (the one `switch_program` and the
 active GUI tab move).
 
 ```bash
-export GHIDRA_MCP_REQUIRE_PROGRAM_SELECTORS=1
+export GHIDRA_MCP_TOOLS_REQUIRE_PROGRAM=1    # this session only
 uv run bridge-mcp-ghidra
 ```
+
+or `set_setting(key="tools.require_program", value="true", scope="project")` for
+every session on the project.
 
 Without this, a call that leaves `program=` out runs against whichever program
 is current, which is fine for a single-program workflow but a hazard once
@@ -566,7 +587,7 @@ Every tool above is a `GET`; none of them writes to the Ghidra database.
   `listing,function,program` groups, so they are registered even under `--lazy`.
   Of the additions above, only the `xref` ones fall outside: under `--lazy` you
   must either allow `load_tool_group` as well, or start the bridge with
-  `--default-groups listing,function,program,xref`.
+  `--default-groups +xref` (or set `tools.autoload` to `+xref` for the project).
 - **A narrow allowlist plus `--lazy` needs the group tools.** If you allowlist
   only leaf tools and run lazily, the agent has no way to load anything else.
   Either run eagerly (`--no-lazy`, the default) or add `search_tools`,

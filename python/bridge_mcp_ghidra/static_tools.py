@@ -12,6 +12,7 @@ from pydantic import Field
 from . import discovery
 from . import dispatch
 from . import registry
+from . import settings
 from . import state
 from . import transport
 from .config import (
@@ -58,7 +59,7 @@ def _connect_instance_sync(project: str) -> dict:
                 connected_project=match.get("project"),
             )
             try:
-                schema = registry._fetch_schema(connection=candidate)
+                schema, groups = registry.fetch_for_connect(candidate)
             except Exception as e:
                 return {
                     "error": f"Schema fetch failed: {e}",
@@ -71,7 +72,7 @@ def _connect_instance_sync(project: str) -> dict:
                     lambda: (
                         registry.register_tools_from_schema(
                             schema,
-                            groups=None if not state._lazy_mode else state._default_groups,
+                            groups=groups,
                         ),
                         state.set_connection_snapshot(
                             "uds",
@@ -132,7 +133,7 @@ def _connect_instance_sync(project: str) -> dict:
         connected_project=match.get("project") if match else None,
     )
     try:
-        schema = registry._fetch_schema(connection=candidate)
+        schema, groups = registry.fetch_for_connect(candidate)
     except Exception as e:
         available = [inst.get("project", "unknown") for inst in instances]
         return {
@@ -147,7 +148,7 @@ def _connect_instance_sync(project: str) -> dict:
             lambda: (
                 registry.register_tools_from_schema(
                     schema,
-                    groups=None if not state._lazy_mode else state._default_groups,
+                    groups=groups,
                 ),
                 state.set_connection_snapshot(
                     "tcp",
@@ -338,6 +339,7 @@ async def load_tool_group(
             sorted(all_groups),
             done_callback=_notify_if_changed,
         )
+        await state.run_in_worker(settings.record_loaded_groups)
         return json.dumps(
             {
                 "loaded": "all",
@@ -352,6 +354,8 @@ async def load_tool_group(
         group,
         done_callback=_notify_if_changed,
     )
+    if loaded_names:
+        await state.run_in_worker(settings.record_loaded_groups)
     if not loaded_names:
         available = sorted({td.get("category", "unknown") for td in state._full_schema})
         if group in state._loaded_groups:
@@ -409,6 +413,7 @@ async def unload_tool_group(
     )
     if removed == 0:
         return json.dumps({"message": f"Group '{group}' is not loaded or has no tools."})
+    await state.run_in_worker(settings.record_loaded_groups)
     return json.dumps(
         {
             "unloaded": group,
@@ -665,11 +670,11 @@ def _auto_connect() -> bool:
             )
             logger.info(f"Auto-connecting via UDS to {inst.get('project') or 'unknown'}")
             try:
-                schema = registry._fetch_schema(connection=candidate)
+                schema, groups = registry.fetch_for_connect(candidate)
                 with state._tool_registry_lock:
                     count = registry.register_tools_from_schema(
                         schema,
-                        groups=None if not state._lazy_mode else state._default_groups,
+                        groups=groups,
                     )
                     state.set_connection_snapshot(
                         "uds",
@@ -694,11 +699,11 @@ def _auto_connect() -> bool:
                 f"{inst.get('project') or 'unknown'} (UDS unavailable on this Python)"
             )
             try:
-                schema = registry._fetch_schema(connection=candidate)
+                schema, groups = registry.fetch_for_connect(candidate)
                 with state._tool_registry_lock:
                     count = registry.register_tools_from_schema(
                         schema,
-                        groups=None if not state._lazy_mode else state._default_groups,
+                        groups=groups,
                     )
                     state.set_connection_snapshot(
                         "tcp",
@@ -727,11 +732,11 @@ def _auto_connect() -> bool:
         return False
     try:
         candidate = state.build_connection_snapshot(mode="tcp", active_tcp=tcp_url)
-        schema = registry._fetch_schema(connection=candidate)
+        schema, groups = registry.fetch_for_connect(candidate)
         with state._tool_registry_lock:
             count = registry.register_tools_from_schema(
                 schema,
-                groups=None if not state._lazy_mode else state._default_groups,
+                groups=groups,
             )
             state.set_connection_snapshot(
                 "tcp",
