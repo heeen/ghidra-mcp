@@ -160,22 +160,32 @@ public class AnnotationScanner {
             }
             descriptors.set(i, new ToolDescriptor(existing.path(), existing.method(),
                 existing.description(), existing.category(), existing.categoryDescription(),
-                existing.access(), merged));
+                existing.access(), existing.internal(), merged));
             return;
         }
         descriptors.add(descriptor);
         descriptors.sort(Comparator.comparing(ToolDescriptor::path));
     }
 
-    /** Generate a JSON schema string describing all discovered tools. */
+    /**
+     * Generate a JSON schema string describing agent-visible tools.
+     * Internal endpoints stay registered as HTTP routes but are omitted here
+     * so the bridge never advertises them as MCP tools.
+     */
     public String generateSchema() {
         StringBuilder sb = new StringBuilder();
         sb.append("{\"tools\": [");
-        for (int i = 0; i < descriptors.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append(descriptors.get(i).toJson());
+        List<ToolDescriptor> visible = new ArrayList<>();
+        for (ToolDescriptor d : descriptors) {
+            if (!d.internal()) {
+                visible.add(d);
+            }
         }
-        sb.append("], \"count\": ").append(descriptors.size()).append("}");
+        for (int i = 0; i < visible.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(visible.get(i).toJson());
+        }
+        sb.append("], \"count\": ").append(visible.size()).append("}");
         return sb.toString();
     }
 
@@ -406,6 +416,12 @@ public class AnnotationScanner {
         return Response.ok(out);
     }
 
+    /**
+     * True if the caller asked for a dry run, whether "dry_run" arrived as a query
+     * param (?dry_run=true, what the Python bridge's registry.py synthesizes) or as
+     * a JSON body field (what a direct-HTTP caller sends when it follows this
+     * project's own "POST params go in the body" convention).
+     */
     /** A tool that takes {@code dry_run} itself implements its own preview. */
     private static boolean declaresParam(ParamBinding[] bindings, String name) {
         for (ParamBinding b : bindings) {
@@ -416,12 +432,6 @@ public class AnnotationScanner {
         return false;
     }
 
-    /**
-     * True if the caller asked for a dry run, whether "dry_run" arrived as a query
-     * param (?dry_run=true, what the Python bridge's registry.py synthesizes) or as
-     * a JSON body field (what a direct-HTTP caller sends when it follows this
-     * project's own "POST params go in the body" convention).
-     */
     private static boolean isDryRunRequested(Map<String, String> query, Map<String, Object> body) {
         if ("true".equalsIgnoreCase(query.get("dry_run"))) return true;
         Object raw = body != null ? body.get("dry_run") : null;
@@ -722,7 +732,7 @@ public class AnnotationScanner {
             ));
         }
         return new ToolDescriptor(tool.path(), tool.method(), tool.description(),
-            category, categoryDescription, tool.access(), params);
+            category, categoryDescription, tool.access(), tool.internal(), params);
     }
 
     private static String jsonType(Class<?> type, boolean fieldsJson) {
@@ -744,7 +754,7 @@ public class AnnotationScanner {
     /** Describes an MCP tool for schema generation. */
     public record ToolDescriptor(String path, String method, String description,
             String category, String categoryDescription, ToolAccess access,
-            List<ParamDescriptor> params) {
+            boolean internal, List<ParamDescriptor> params) {
 
         /** Serialize to JSON. */
         public String toJson() {
@@ -766,6 +776,9 @@ public class AnnotationScanner {
             if (access != null && access != ToolAccess.UNSPECIFIED) {
                 sb.append(", \"read_only\": ").append(access.isReadOnly());
                 sb.append(", \"destructive\": ").append(access.isDestructive());
+            }
+            if (internal) {
+                sb.append(", \"internal\": true");
             }
             sb.append(", \"params\": [");
             for (int i = 0; i < params.size(); i++) {

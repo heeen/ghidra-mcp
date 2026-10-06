@@ -141,6 +141,8 @@ keeps its own single-item call unchanged and gains the removed tool's job.
 | `debugger_step_into()` | `debugger_step` | `debugger_step(kind="into")` |
 | `debugger_step_over()` | `debugger_step` | `debugger_step(kind="over")` |
 | `debugger_step_out()` | `debugger_step` | `debugger_step(kind="out")` |
+| `decompile_checkout_start(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="start")` |
+| `decompile_checkout_stop(checkout)` | `decompile_checkout_run` | `decompile_checkout_run(checkout, action="stop")` |
 | `get_function_tags(function)` | `get_functions` | `get_functions(function, fields="tags")`; `tags` is a list of names, and is part of the default bundle |
 | `search_functions_by_tag(tag)` | `find_functions` | `find_functions(tag=...)`, or several names for any-of; every result also carries its `tags` |
 | `create_function_tag(name, comment)` | `add_function_tag` | `add_function_tag(function, tags=name, tag_comments={name: comment})`, or `apply_documentation(tags=..., tag_comments=...)`; attaching creates the definition |

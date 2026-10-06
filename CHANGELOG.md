@@ -6,17 +6,19 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**209 tools** — 205 served by the GUI plugin, 190 by the headless server, 186 by
-both. The advertised surface went from 272 → 251 in the first consolidation
-cycle, then 245 after `/list_shadowed_globals` and `/batch_get_comments`, 219
-after `/get_functions` replaced nine function readers, 215 after the listing,
-xref, tag, utility and GUI-cursor folds, 211 once both servers shared one set of
-program-operation names (`/load_program`, `/load_program_from_project`,
-`/project/info` and headless `/health` retired), 209 once version control and
-the CodeBrowser tools became shared services (`/server/version_control/checkin`
-and `/tool/launch_codebrowser` retired), 210 with `/set_memory_block`, and
-**209** once `/apply_documentation` replaced `/apply_function_documentation` and
-`/batch_apply_documentation`.
+**218 tools** — 214 served by the GUI plugin, 199 by the headless server, 195 by
+both. 217 are advertised as MCP tools; `/decompile_checkout_refresh` is an HTTP
+route only the bridge calls. The advertised surface went from 272 → 251 in the
+first consolidation cycle, then 245 after `/list_shadowed_globals` and
+`/batch_get_comments`, 219 after `/get_functions` replaced nine function
+readers, 215 after the listing, xref, tag, utility and GUI-cursor folds, 211
+once both servers shared one set of program-operation names (`/load_program`,
+`/load_program_from_project`, `/project/info` and headless `/health` retired),
+209 once version control and the CodeBrowser tools became shared services
+(`/server/version_control/checkin` and `/tool/launch_codebrowser` retired), 210
+with `/set_memory_block`, 209 once `/apply_documentation` replaced
+`/apply_function_documentation` and `/batch_apply_documentation`, and **218**
+with the decompilation checkout, `/partition_program` and `/find_type_users`.
 
 > **Scope note.** Entries describing `fun-doc/` and `scripts/fid/` were
 > removed from this section on 2026-09-18. Both moved to the `d2-game-exe`
@@ -25,6 +27,53 @@ and `/tool/launch_codebrowser` retired), 210 with `/set_memory_block`, and
 > and the entries that remain naming fun-doc are ones where its move-out is
 > the *cause* of a change here (`uv.lock`'s stale dependency group, the
 > release workflows' dangling paths, the benchmark fixture that left with it).
+
+### Added — decompilation checkout, `/partition_program`, `/find_type_users`
+
+- **Decompilation checkout.** A program's decompiled C as a file tree an agent searches
+  with its own Grep, Read and Glob, so "which functions touch this MMIO page" is one search
+  instead of one tool call per function. `decompile_checkout_create` registers a tree
+  without sweeping it; `decompile_checkout_run(action=start|stop)` runs the sweep, which
+  returns in milliseconds; `decompile_checkout_status` (read-only, so usable in plan mode)
+  and `STATUS.md` on disk report progress; `decompile_checkout_configure`,
+  `decompile_checkout_pin_module` and `decompile_checkout_delete` manage it.
+  `/decompile_checkout_refresh` is an internal route: it stays callable over HTTP but is
+  left out of `/mcp/schema` (`@McpTool(internal = true)`), and the published "MCP tools"
+  count excludes it.
+  - **Each function block carries what `get_functions` returns for it**, one greppable
+    `// key: value` header line per fact (signature, classification, body range, tags,
+    plate and its issues, calls and callers, parameters, locals, labels, comments, xrefs,
+    jump targets) and `// refs:`, every data address the function uses, including
+    literal-pool values and registers reached as base + offset, so `grep 0x40003c0c`
+    finds a register however the C prints it. A real-Ghidra test holds a swept block equal
+    to a fresh `get_functions` result field for field. Each block's `// uri:` line names
+    the function's `ghidra://function/...` resource, which the bridge serves from the next
+    change on.
+  - **It stays current.** An observer turns program events into dirty functions (a rename
+    dirties every function that references the symbol, and the old name is searched for in
+    bodies to catch calls through a register or literal pool); a queue splices rebuilt
+    blocks, and undo, redo or a storm of changes triggers a full reconcile. A sweep, a
+    reconcile and a repair converge: a test holds every route to a fresh sweep, file for
+    file. Measured: a callee used 72 times updated everywhere in 1.4 s.
+  - **Its status is honest.** `clean`, `spliced` (kept current since the sweep), `stale`
+    (with the reason) and `in_sync`; `close_program(save=false)` marks it stale and the next
+    open reconciles the discarded edits out. A memory-map change (such as
+    `/set_memory_block`) marks it stale, because only a resweep fixes that.
+  - **It survives a restart.** Stamps compare the program's saved time and a per-open
+    session epoch, not the modification counter that restarts at every open; trees are
+    re-adopted and reconciled when their program first opens, matched by `program_url`
+    so two projects holding `/fw.bin` never share one.
+  - **Exclusions** keep library code out: `tag:` (function tags, FID), `partition:` (a
+    whole compartment) and `range:` (works on stripped binaries). Narrowing deletes the
+    excluded files immediately so Grep cannot lie. Measured full sweeps: a 677-function
+    ARM firmware in 4 s, a 3,230-function driver in 18–28 s, `ls` (25,231) in 669 s.
+- **`/partition_program`** groups functions into compartments before anything is
+  decompiled, by qualified names in strings, MMIO page sets, literal locality and address
+  bands, and reports each partition's rule and evidence. On a Windows driver the two
+  library compartments, 42% of the binary, were identifiable from their strings alone.
+  Read-only; it does not write Ghidra's Program Tree.
+- **`/find_type_users`** lists the functions whose decompilation references a data type,
+  or one field of it.
 
 ### Changed — `apply_documentation` replaces both documentation writers
 

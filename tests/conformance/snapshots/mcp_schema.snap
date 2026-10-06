@@ -1,5 +1,5 @@
 {
-  "count": 205,
+  "count": 213,
   "tools": [
     {
       "category": "function",
@@ -2400,6 +2400,276 @@
       "read_only": true
     },
     {
+      "category": "decompile-checkout",
+      "description": "Change a checkout's configuration: exclusions (tag: / partition: / range:), enabled strategies, band size, max file bytes, throttle. Exclusions are how you keep library code out of the tree — on a driver DLL, excluding two CRT compartments took it from 3,230 functions to 2,036. Classifies the change and acts on it: narrowing deletes now-out-of-scope bodies immediately (leaving them would be a lie a Grep would still hit); widening marks STALE with pending_functions; repartitioning sets requires_full_resweep. Never starts a sweep.",
+      "destructive": false,
+      "method": "POST",
+      "params": [
+        {
+          "description": "Checkout id, program name, or domain path.",
+          "name": "checkout",
+          "required": true,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Ignored for now — root is identity; changing it needs a new checkout.",
+          "name": "root",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Comma-separated partition strategies. Omit to leave unchanged.",
+          "name": "strategies",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Address-band width. Omit to leave unchanged.",
+          "name": "band_size",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "Read-budget bytes per .c file. Omit to leave unchanged. Changing this repartitions file paths.",
+          "name": "max_file_bytes",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "CSV of exclusion specs. Omit to leave unchanged.",
+          "name": "exclusions",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "CSV of include-only specs. Omit to leave unchanged.",
+          "name": "include_only",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Interactive yield 0..90. Omit to leave unchanged.",
+          "name": "throttle_percent",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "Disassemble at entries without instructions before sweep. Omit to leave unchanged.",
+          "name": "disassemble_missing",
+          "required": false,
+          "source": "body",
+          "type": "boolean"
+        }
+      ],
+      "path": "/decompile_checkout_configure",
+      "read_only": false
+    },
+    {
+      "category": "decompile-checkout",
+      "description": "Create a decompilation checkout: a program's decompiled C materialised as a file tree you can Grep and Glob. Use this when you need corpus-wide search — 'which functions reference this string, constant or peripheral' — which is impractical one function at a time. Registers the checkout and writes checkout.json / STATUS.md; does NOT sweep (call decompile_checkout_run(action=start)). Adopts an existing tree at the derived root, reconciling swept_at_modification_number against the live program. Unrelated to Ghidra version-control checkouts (/server/version_control/*).",
+      "destructive": false,
+      "method": "POST",
+      "params": [
+        {
+          "default": "",
+          "description": "Target program name (omit for the active program).",
+          "name": "program",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Absolute checkout root. Omit for the default under java.io.tmpdir/ghidra-mcp-checkout/.",
+          "name": "root",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Comma-separated partition strategies. Empty = full cascade.",
+          "name": "strategies",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "20",
+          "description": "Address-band width when bands apply.",
+          "name": "band_size",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "32768",
+          "description": "Read-budget bytes per .c file inside a compartment (floored at 4096). Changing this repartitions file paths.",
+          "name": "max_file_bytes",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "CSV of tag:/partition:/range: exclusion specs.",
+          "name": "exclusions",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "CSV of tag:/partition:/range: include-only specs.",
+          "name": "include_only",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "10",
+          "description": "Interactive yield 0..90 after each decompiled function.",
+          "name": "throttle_percent",
+          "required": false,
+          "source": "body",
+          "type": "integer"
+        },
+        {
+          "default": "true",
+          "description": "Before partitioning, disassemble at function entries with no instruction yet (typical for PE .pdata imports).",
+          "name": "disassemble_missing",
+          "required": false,
+          "source": "body",
+          "type": "boolean"
+        }
+      ],
+      "path": "/decompile_checkout_create",
+      "read_only": false
+    },
+    {
+      "category": "decompile-checkout",
+      "description": "Deregister a checkout; with delete_files=true also remove its on-disk tree (containment-checked). The program itself is untouched — this only removes generated files.",
+      "destructive": true,
+      "method": "POST",
+      "params": [
+        {
+          "description": "Checkout id, program name, or domain path.",
+          "name": "checkout",
+          "required": true,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "false",
+          "description": "When true, delete the checkout tree from disk.",
+          "name": "delete_files",
+          "required": false,
+          "source": "body",
+          "type": "boolean"
+        }
+      ],
+      "path": "/decompile_checkout_delete",
+      "read_only": false
+    },
+    {
+      "category": "decompile-checkout",
+      "description": "Pin a function to a checkout compartment forever. Use this when you have learned the real module boundary — e.g. after reading evidence that a function belongs with driver code despite the cascade placing it in an address band — and you want that placement to stick across resweeps, checkout delete/recreate, and every other tool. Stored as a program property map (CheckoutModule) at the function entry, not in checkout config. Empty module string unpins. Does not rewrite the tree by itself — the next sweep (or reconcile) honours the pin ahead of the whole partitioner cascade.",
+      "destructive": false,
+      "method": "POST",
+      "params": [
+        {
+          "aliases": [
+            "address",
+            "name",
+            "function_address",
+            "function_name"
+          ],
+          "description": "Function name or entry address to pin.",
+          "name": "function",
+          "param_type": "function_ref",
+          "required": true,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Compartment slug to pin to. Empty string removes the pin.",
+          "name": "module",
+          "required": false,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Target program name (omit for the active program).",
+          "name": "program",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        }
+      ],
+      "path": "/decompile_checkout_pin_module",
+      "read_only": false
+    },
+    {
+      "category": "decompile-checkout",
+      "description": "Start or stop the sweep that fills a checkout's tree. action=start enqueues it (then poll decompile_checkout_status): returns in milliseconds with phase queued and the resource URI. Sweeps run one at a time JVM-wide and yield to auto-analysis and to interactive requests. Measured: ~4 s for a 700-function firmware, ~28 s for a 3,200-function driver DLL, ~11 min for a 25,000-function static binary. action=stop cancels a queued or running sweep and is idempotent: stopping an idle or complete checkout is success, not an error. The partial tree is left in place and STATUS.md records state: cancelled, so whatever was already written stays safe to Grep.",
+      "destructive": false,
+      "method": "POST",
+      "params": [
+        {
+          "description": "Checkout id, program name, or domain path.",
+          "name": "checkout",
+          "required": true,
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "description": "start (enqueue the sweep) or stop (cancel it).",
+          "name": "action",
+          "required": true,
+          "source": "body",
+          "type": "string"
+        }
+      ],
+      "path": "/decompile_checkout_run",
+      "read_only": false
+    },
+    {
+      "category": "decompile-checkout",
+      "description": "Status, config and root path of a decompilation checkout — poll this after decompile_checkout_run(action=start), then Grep the reported root. READ_ONLY, so it is safe to call while planning. Reports phase, progress, and freshness against the live program. Never errors when the program is closed or the root is missing — reports program:\"closed\" / root_present:false instead, because that is exactly when you are asking. With no selector, lists every checkout plus adoptable trees found on disk.",
+      "destructive": false,
+      "method": "GET",
+      "params": [
+        {
+          "default": "",
+          "description": "Checkout id, program name, or domain path. Omit to list all + scan for adoptable on-disk checkouts.",
+          "name": "checkout",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        }
+      ],
+      "path": "/decompile_checkout_status",
+      "read_only": true
+    },
+    {
       "category": "program",
       "category_description": "Program management, script execution, memory read, bookmarks, save",
       "description": "Delete a bookmark. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.",
@@ -3438,6 +3708,55 @@
         }
       ],
       "path": "/find_similar_functions_fuzzy",
+      "read_only": true
+    },
+    {
+      "category": "datatype",
+      "description": "Functions whose decompilation references a data type (or one of its fields). Used by resource invalidation after struct/enum edits so only the affected function URIs are refreshed. Runs off the EDT with a hard timeout; a timeout returns the partial set with timed_out=true rather than failing.",
+      "destructive": false,
+      "method": "GET",
+      "params": [
+        {
+          "aliases": [
+            "name",
+            "data_type",
+            "datatype"
+          ],
+          "description": "Data type name (resolved across all categories).",
+          "name": "type_name",
+          "required": true,
+          "source": "query",
+          "type": "string"
+        },
+        {
+          "aliases": [
+            "field_name"
+          ],
+          "default": "",
+          "description": "Optional field name. When set, only references to that field are returned (FieldMatcher).",
+          "name": "field",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        },
+        {
+          "default": "10",
+          "description": "Hard timeout for the finder (1–60). Default 10.",
+          "name": "timeout_seconds",
+          "required": false,
+          "source": "query",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "Target program name (omit for the active program).",
+          "name": "program",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        }
+      ],
+      "path": "/find_type_users",
       "read_only": true
     },
     {
@@ -5304,6 +5623,48 @@
       "read_only": false
     },
     {
+      "category": "analysis",
+      "description": "Group a program's functions into compartments so you can decide which regions to ignore before reading any of them — on a driver DLL the two library compartments were 42% of the binary and identifiable from their referenced strings alone. Uses a cascade of structural strategies (class names in log strings, peripheral register pages, linker literal locality, address banding); each reports whether it applied and why, and every partition carries the evidence that formed it. Slugs are machine-generated and assert nothing about content. Read-only: reports the partitioning, does not write the Program Tree. Runs off the EDT; costs one pass over every instruction.",
+      "destructive": false,
+      "method": "GET",
+      "params": [
+        {
+          "default": "20",
+          "description": "Functions per file for the address-band fallback.",
+          "name": "band_size",
+          "required": false,
+          "source": "query",
+          "type": "integer"
+        },
+        {
+          "default": "1",
+          "description": "Omit partitions smaller than this from the response.",
+          "name": "min_size",
+          "required": false,
+          "source": "query",
+          "type": "integer"
+        },
+        {
+          "default": "",
+          "description": "Comma-separated subset of strategy names to run (qualified-name, mmio-page, literal-locality, address-band). Omit to run the full cascade.",
+          "name": "strategies",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "Target program name (omit for the active program).",
+          "name": "program",
+          "required": false,
+          "source": "query",
+          "type": "string"
+        }
+      ],
+      "path": "/partition_program",
+      "read_only": true
+    },
+    {
       "category": "system",
       "description": "Temporarily enable, disable, or query scoped automation prompt handling",
       "destructive": false,
@@ -6885,7 +7246,7 @@
     {
       "category": "program",
       "category_description": "Program management, script execution, memory read, bookmarks, save",
-      "description": "Change an existing memory block's permissions or volatility. The one that matters most: firmware loaders often mark the flash block writable, and the decompiler then treats every literal-pool load as a variable (iVar2 = DAT_08016e58) instead of folding it into the constant it holds; marking flash read-only lets peripheral and RAM addresses show as constants or their labels.",
+      "description": "Change an existing memory block's permissions or volatility. The one that matters most: firmware loaders often mark the flash block writable, and the decompiler then treats every literal-pool load as a variable (iVar2 = DAT_08016e58) instead of folding it into the constant it holds; marking flash read-only lets peripheral and RAM addresses show as constants or their labels. Every function may decompile differently afterwards, so decompilation checkouts are marked stale (resweep).",
       "destructive": false,
       "method": "POST",
       "params": [

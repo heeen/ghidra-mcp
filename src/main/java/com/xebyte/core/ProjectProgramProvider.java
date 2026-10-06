@@ -1,5 +1,7 @@
 package com.xebyte.core;
 
+import com.xebyte.core.checkout.Checkout;
+import com.xebyte.core.checkout.CheckoutRegistry;
 import ghidra.framework.model.DomainFile;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.model.Project;
@@ -79,6 +81,8 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
     protected ProjectProgramProvider(Object consumer, boolean okToUpgrade) {
         this.consumer = consumer != null ? consumer : this;
         this.okToUpgrade = okToUpgrade;
+        // DirtyQueue re-resolves Programs through us; an observer must never hold one.
+        CheckoutRegistry.getInstance().setProgramLookup(this::lookupForCheckout);
     }
 
     private static int resolveMaxCachedPrograms() {
@@ -352,6 +356,7 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
         }
         cachePut(key, program);
         onOpened(program);
+        maybeAttachCheckoutObserver(program);
         Msg.info(this, "Opened program from project: " + key);
         return program;
     }
@@ -452,6 +457,7 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
             if (save) {
                 ProgramSaves.saveIfChanged(program, monitor);
             }
+            detachCheckoutObservers(program);
             program.release(consumer);
             onReleased(program);
             Msg.info(this, "Released program: " + key);
@@ -685,6 +691,32 @@ public abstract class ProjectProgramProvider implements ProgramProvider {
                 return null;
             }
         }
+        maybeAttachCheckoutObserver(resolved);
         return resolved;
+    }
+
+    // ------------------------------------------------------ checkout observers
+
+    /** Domain path first (version-safe), then name -- the order CheckoutService polls in. */
+    private Program lookupForCheckout(Checkout checkout) {
+        if (checkout == null) {
+            return null;
+        }
+        try {
+            Program byPath = resolve(checkout.domainPath());
+            return byPath != null ? byPath : resolve(checkout.programName());
+        } catch (AmbiguousProgramException e) {
+            return null;
+        }
+    }
+
+    private static void maybeAttachCheckoutObserver(Program program) {
+        CheckoutRegistry.getInstance().programOpened(program);
+    }
+
+    private static void detachCheckoutObservers(Program program) {
+        if (program != null) {
+            CheckoutRegistry.getInstance().detachObservers(program);
+        }
     }
 }
