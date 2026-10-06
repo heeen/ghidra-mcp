@@ -22,6 +22,17 @@ public class ProgramScriptServiceValidationTest extends TestCase {
         scripts = new ProgramScriptService(ServiceFactory.stubProvider(), ts);
     }
 
+    /** The program scope's settings live in this group; only set_setting may change them. */
+    public void testProgramOptionToolsRefuseTheSettingsGroup() {
+        for (Response r : new Response[] {
+                scripts.setProgramOption("GhidraMCP", "scripts.allow", "true", "", ""),
+                scripts.setProgramOption("GhidraMCP.x", "y", "z", "", ""),
+                scripts.removeProgramOption("GhidraMCP", "scripts.allow", "")}) {
+            assertTrue(r instanceof Response.Err);
+            assertTrue(((Response.Err) r).message().contains("set_setting"));
+        }
+    }
+
     public void testCloseProgramRequiresName() {
         Response r = scripts.closeProgram("", true);
         assertTrue(r instanceof Response.Err);

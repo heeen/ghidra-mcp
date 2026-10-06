@@ -1,5 +1,6 @@
 package com.xebyte.core;
 
+import com.xebyte.core.settings.ProjectStores;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.options.OptionType;
@@ -39,6 +40,10 @@ import java.util.concurrent.atomic.AtomicReference;
 @McpToolGroup(value = "program", description = "Program management, script execution, memory read, bookmarks, save")
 public class ProgramScriptService {
 
+    private static final String SETTINGS_OPTIONS_REFUSAL = "Option group '" + ProjectStores.OPTIONS_NAME
+        + "' holds GhidraMCP settings; change them with set_setting.";
+    private static final String SETTINGS_ARCHIVE_REFUSAL = ProjectStores.ARCHIVE_PATH
+        + " holds the project's GhidraMCP settings; change them with set_setting.";
     private static final int MAX_SCRIPT_TIMEOUT_SECONDS = 1800;
 
     private final ProgramProvider programProvider;
@@ -336,6 +341,9 @@ public class ProgramScriptService {
             @Param(value = "program", defaultValue = "",
                    description = "Target program name (omit to use the active program — always specify "
                                + "when multiple programs are open)") String programName) {
+        if (ProjectStores.isSettingsOptions(group)) {
+            return Response.err(SETTINGS_OPTIONS_REFUSAL);
+        }
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
@@ -424,6 +432,9 @@ public class ProgramScriptService {
             @Param(value = "program", defaultValue = "",
                    description = "Target program name (omit to use the active program — always specify "
                                + "when multiple programs are open)") String programName) {
+        if (ProjectStores.isSettingsOptions(group)) {
+            return Response.err(SETTINGS_OPTIONS_REFUSAL);
+        }
         ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
         if (pe.hasError()) return pe.error();
         Program program = pe.program();
@@ -1598,6 +1609,9 @@ public class ProgramScriptService {
         ghidra.framework.model.DomainFile[] files = targetFolder.getFiles();
         List<Map<String, Object>> fileList = new ArrayList<>();
         for (ghidra.framework.model.DomainFile file : files) {
+            if (ProjectStores.isSettingsArchive(file)) {
+                continue;
+            }
             // With version-control state, so a checkout that still holds uncommitted work
             // (modified_since_checkout) can be told from an idle one without reading icons
             // in the Ghidra GUI. This is what the GUI's /server/repository/files reported.
@@ -1663,6 +1677,9 @@ public class ProgramScriptService {
         if (!SecurityConfig.getInstance().isPathInProjectScope(filePath)) {
             return Response.err("Access denied: path is outside the configured project scope.");
         }
+        if (ProjectStores.ARCHIVE_PATH.equals(filePath.trim())) {
+            return Response.err(SETTINGS_ARCHIVE_REFUSAL);
+        }
 
         try {
             ghidra.framework.model.DomainFile domainFile = project.getProjectData().getFile(filePath);
@@ -1718,6 +1735,9 @@ public class ProgramScriptService {
         if (!SecurityConfig.getInstance().isPathInProjectScope(filePath)
                 || !SecurityConfig.getInstance().isPathInProjectScope(destFolder)) {
             return Response.err("Access denied: path is outside the configured project scope.");
+        }
+        if (ProjectStores.ARCHIVE_PATH.equals(filePath.trim())) {
+            return Response.err(SETTINGS_ARCHIVE_REFUSAL);
         }
 
         try {
