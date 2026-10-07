@@ -8,7 +8,7 @@ MCP bridge on `:8081` for MCP clients.
 > `SecurityConfig.requireAuthForNonLoopbackBind` **refuses a non-loopback bind
 > without this token**, so an unset token is not a weaker deployment — it is a
 > container that starts and dies. The API exposes file import, project mutation
-> and — if `GHIDRA_MCP_ALLOW_SCRIPTS=1` — arbitrary code, so that refusal is
+> and — if `GHIDRA_MCP_SCRIPTS_ALLOW=1` — arbitrary code, so that refusal is
 > the right default.
 >
 > ```bash

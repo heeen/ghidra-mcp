@@ -6,8 +6,8 @@ Complete version history for the Ghidra MCP Server project.
 
 ## v7.0.0 (unreleased) — major: tool consolidation, JSON response contract, MCP conformance suite, an offline test tier, and a release gate that can actually block
 
-**219 tools** — 215 served by the GUI plugin, 200 by the headless server, 196 by
-both. 218 are advertised as MCP tools; `/decompile_checkout_refresh` is an HTTP
+**221 tools** — 217 served by the GUI plugin, 202 by the headless server, 198 by
+both. 220 are advertised as MCP tools; `/decompile_checkout_refresh` is an HTTP
 route only the bridge calls. The advertised surface went from 272 → 251 in the
 first consolidation cycle, then 245 after `/list_shadowed_globals` and
 `/batch_get_comments`, 219 after `/get_functions` replaced nine function
@@ -18,8 +18,8 @@ once both servers shared one set of program-operation names (`/load_program`,
 (`/server/version_control/checkin` and `/tool/launch_codebrowser` retired), 210
 with `/set_memory_block`, 209 once `/apply_documentation` replaced
 `/apply_function_documentation` and `/batch_apply_documentation`, 218 with the
-decompilation checkout, `/partition_program` and `/find_type_users`, and **219**
-with `/get_change_token`.
+decompilation checkout, `/partition_program` and `/find_type_users`, 219 with
+`/get_change_token`, and **221** with `/get_settings` and `/set_setting`.
 
 > **Scope note.** Entries describing `fun-doc/` and `scripts/fid/` were
 > removed from this section on 2026-09-18. Both moved to the `d2-game-exe`
@@ -28,6 +28,44 @@ with `/get_change_token`.
 > and the entries that remain naming fun-doc are ones where its move-out is
 > the *cause* of a change here (`uv.lock`'s stale dependency group, the
 > release workflows' dangling paths, the benchmark fixture that left with it).
+
+### Added — settings: one registry, scoped values, `get_settings` / `set_setting`
+
+Configuration was a scatter of environment variables, Tool Options and a JSON file, with no way
+for an agent to see what was in force or for a project to carry its own defaults. Settings are
+now dotted keys declared once (type, default, the scopes they may be set at, who may write them,
+how scopes combine) and resolved through default < server < project < local < program < session
+< call.
+
+- **Where values live.** *server*: the server's environment, `GHIDRA_MCP_` plus the key
+  upper-cased with dots as underscores. *project*: options on a `/.ghidra-mcp` data-type archive
+  in the project, created on first write; on a shared project it is versioned, and each write
+  checks it out and back in, so every instance of the repository reads it (measured live with
+  two servers on one throwaway repository). *local*: a properties file in the project's `.rep`
+  directory, never shared. *program*: the program's `GhidraMCP` options. Not Ghidra's project
+  saveable data for *local*: a headless project never saves it (`DefaultProject.save()` returns
+  without a ToolManager).
+- **`get_settings`** lists every key with its value, the scope it came from and the scopes that
+  also hold one; secrets show only whether they are set. **`set_setting`** writes or unsets one
+  scope.
+- **Guardrails only tighten.** `scripts.allow`, `files.root` and `project.folder_scope` are set
+  by the operator; a project or local value can make them stricter and takes effect without a
+  restart, and a write or unset that would loosen one is refused. Refusals state the guardrail
+  and never how to lift it (the script refusals used to say "Set GHIDRA_MCP_ALLOW_SCRIPTS=1").
+  `set_program_option` / `remove_program_option` refuse the `GhidraMCP` group, and `delete_file`
+  / `move_file` refuse the archive, which `list_project_files` does not show.
+- **Tool groups come from settings.** On connect the bridge loads `tools.autoload`, plus
+  `tools.last_loaded` (the groups the last session loaded beyond it) when `tools.restore_loaded`
+  is on, and records `tools.last_loaded` on this machine after every `load_tool_group` /
+  `unload_tool_group`. `tools.require_program` is strict program routing. A session overrides
+  any of them with its own environment, or `--default-groups` for `tools.autoload`; unknown
+  group names are warned about with the valid list.
+- **Breaking:** `GHIDRA_MCP_ALLOW_SCRIPTS` is now `GHIDRA_MCP_SCRIPTS_ALLOW`,
+  `GHIDRA_MCP_FILE_ROOT` is `GHIDRA_MCP_FILES_ROOT`, `GHIDRA_MCP_PROJECT_FOLDER` is
+  `GHIDRA_MCP_PROJECT_FOLDER_SCOPE`, and the bridge's `GHIDRA_MCP_REQUIRE_PROGRAM_SELECTORS` is
+  `GHIDRA_MCP_TOOLS_REQUIRE_PROGRAM`. No aliases, and no silent fallback either: an unset
+  `files.root` or `project.folder_scope` means unconfined, so a server whose environment still
+  sets an old guardrail name refuses to start and names the new one.
 
 ### Added — function resources and `/get_change_token`
 
